@@ -478,28 +478,300 @@ const SocialOSUI = (() => {
   }
 
   // ── Approvals screen ──────────────────────────────────────────────────
+  // BUILD_PLAN §5 screen map: Approvals has Post / Engagement / Growth
+  // tabs. Growth is Phase 4 (not built here). §12 approval queue priority
+  // order + batch rules (likes batchable, replies/strategic individual).
 
   /**
-   * Render the approvals list.
-   * @param {ScheduledPost[]} posts
+   * Render the full Approvals screen: tab bar + active tab's content.
+   * @param {{
+   *   tab: 'posts'|'engagement',
+   *   posts: ScheduledPost[],
+   *   engagement: {likes: EngagementAction[], replies: EngagementAction[], strategic: EngagementAction[]},
+   *   engagementSubTab: 'likes'|'replies'|'strategic'
+   * }} data
    */
-  function renderApprovals(posts) {
+  function renderApprovals(data) {
     const container = $('approvals-content');
     if (!container) return;
 
+    const engagementCount = data.engagement
+      ? data.engagement.likes.length + data.engagement.replies.length + data.engagement.strategic.length
+      : 0;
+
+    let html = `
+      <div class="tab-bar">
+        <button class="tab-btn ${data.tab === 'posts' ? 'active' : ''}" data-action="approvals-tab" data-tab="posts">
+          Posts ${data.posts.length ? `<span class="tab-count">${data.posts.length}</span>` : ''}
+        </button>
+        <button class="tab-btn ${data.tab === 'engagement' ? 'active' : ''}" data-action="approvals-tab" data-tab="engagement">
+          Engagement ${engagementCount ? `<span class="tab-count">${engagementCount}</span>` : ''}
+        </button>
+      </div>`;
+
+    html += data.tab === 'engagement'
+      ? renderEngagementTabContent(data.engagement, data.engagementSubTab)
+      : renderPostsTabContent(data.posts);
+
+    container.innerHTML = html;
+  }
+
+  /**
+   * @param {ScheduledPost[]} posts
+   * @returns {string}
+   */
+  function renderPostsTabContent(posts) {
     if (!posts.length) {
-      container.innerHTML = `
+      return `
         <div class="empty-state">
           <h2>All caught up</h2>
           <p class="text-secondary">No posts waiting for approval.</p>
         </div>`;
-      return;
     }
 
-    container.innerHTML = `
-      <h2 class="screen-title">Post Approvals</h2>
+    return `
       <div class="approval-list">
         ${posts.map(post => renderApprovalCard(post)).join('')}
+      </div>`;
+  }
+
+  /**
+   * @param {{likes: EngagementAction[], replies: EngagementAction[], strategic: EngagementAction[]}} engagement
+   * @param {'likes'|'replies'|'strategic'} subTab
+   * @returns {string}
+   */
+  function renderEngagementTabContent(engagement, subTab) {
+    const counts = {
+      likes: engagement.likes.length,
+      replies: engagement.replies.length,
+      strategic: engagement.strategic.length
+    };
+
+    let html = `
+      <div class="engagement-toolbar">
+        <button class="btn btn-secondary btn-sm" data-action="show-add-comment">+ Paste a comment</button>
+        <button class="btn btn-secondary btn-sm" data-action="show-add-like">+ Paste a post</button>
+        <button class="btn btn-accent btn-sm" data-action="run-strategic-suggestions">Suggest comments</button>
+      </div>
+      <div class="subtab-bar">
+        <button class="subtab-btn ${subTab === 'likes' ? 'active' : ''}" data-action="engagement-subtab" data-sub="likes">Likes (${counts.likes})</button>
+        <button class="subtab-btn ${subTab === 'replies' ? 'active' : ''}" data-action="engagement-subtab" data-sub="replies">Replies (${counts.replies})</button>
+        <button class="subtab-btn ${subTab === 'strategic' ? 'active' : ''}" data-action="engagement-subtab" data-sub="strategic">Strategic (${counts.strategic})</button>
+      </div>`;
+
+    if (subTab === 'likes') {
+      html += counts.likes ? `
+        <div class="engagement-toolbar">
+          <button class="btn btn-primary btn-sm" data-action="approve-all-likes">Approve All (within daily limit)</button>
+        </div>
+        <div class="approval-list">${engagement.likes.map(renderLikeCard).join('')}</div>
+      ` : `<div class="empty-state"><h3>No likes queued</h3><p class="text-secondary">Paste a post URL/snippet above — items scoring above 0.7 join this queue.</p></div>`;
+    } else if (subTab === 'replies') {
+      html += counts.replies
+        ? `<div class="approval-list">${engagement.replies.map(renderReplyCard).join('')}</div>`
+        : `<div class="empty-state"><h3>No comments to reply to</h3><p class="text-secondary">Paste a comment above to get a categorized, drafted reply.</p></div>`;
+    } else {
+      html += counts.strategic
+        ? `<div class="approval-list">${engagement.strategic.map(renderStrategicCard).join('')}</div>`
+        : `<div class="empty-state"><h3>No strategic comments suggested yet</h3><p class="text-secondary">Queue some posts in Likes, then tap "Suggest comments".</p></div>`;
+    }
+
+    return html;
+  }
+
+  const ENGAGEMENT_CATEGORY_LABELS = {
+    question: 'Question',
+    compliment: 'Compliment',
+    disagreement: 'Disagreement',
+    spam: 'Spam',
+    opportunity: 'Opportunity',
+    peer: 'Peer'
+  };
+
+  /**
+   * @param {EngagementAction} action
+   * @returns {string}
+   */
+  function renderLikeCard(action) {
+    return `
+      <div class="card engagement-card" data-action-id="${action.id}">
+        <div class="card-header">
+          <span class="platform-badge" style="background:${PLATFORM_COLORS[action.platform]}">${PLATFORM_ICONS[action.platform]}</span>
+          <span>${action.platform.charAt(0).toUpperCase() + action.platform.slice(1)}</span>
+          <span class="rating-badge rating-high" style="margin-left:auto">score ${action.relevance_score.toFixed(2)}</span>
+        </div>
+        <p class="post-text">${escapeHtml(SocialOSUtils.truncate(action.target.post_snippet, 220))}</p>
+        ${action.ai_reasoning ? `<p class="text-secondary" style="font-size:0.8rem">${escapeHtml(action.ai_reasoning)}</p>` : ''}
+        ${action.status === 'approved' ? `
+          <div class="card-actions">
+            <span class="status-pill status-active">Approved</span>
+            <button class="btn btn-success btn-sm" data-action="complete-engagement" data-id="${action.id}">Mark Done</button>
+          </div>
+        ` : `
+          <div class="card-actions">
+            <button class="btn btn-danger btn-sm" data-action="skip-engagement" data-id="${action.id}">Skip</button>
+            <button class="btn btn-success btn-sm" data-action="approve-engagement" data-id="${action.id}">Approve</button>
+          </div>
+        `}
+      </div>`;
+  }
+
+  /**
+   * @param {EngagementAction} action
+   * @returns {string}
+   */
+  function renderReplyCard(action) {
+    const altText = action.draft_alternatives?.[0] || '';
+    return `
+      <div class="card engagement-card" data-action-id="${action.id}">
+        <div class="card-header">
+          <span class="platform-badge" style="background:${PLATFORM_COLORS[action.platform]}">${PLATFORM_ICONS[action.platform]}</span>
+          <span>${action.platform.charAt(0).toUpperCase() + action.platform.slice(1)}</span>
+          ${action.category ? `<span class="tag">${ENGAGEMENT_CATEGORY_LABELS[action.category] || action.category}</span>` : ''}
+          ${action.priority === 'high' ? `<span class="rating-badge rating-high" style="margin-left:auto">High priority</span>` : ''}
+        </div>
+        <div class="detail-section">
+          <h4>Their comment</h4>
+          <p class="text-secondary">${escapeHtml(action.target.post_snippet ? `on: ${SocialOSUtils.truncate(action.target.post_snippet, 100)}` : '')}</p>
+        </div>
+        ${action.draft_text ? `
+          <div class="detail-section">
+            <h4>Drafted reply</h4>
+            <p class="post-text">${escapeHtml(action.draft_text)}</p>
+          </div>
+          ${altText ? `
+            <div class="detail-section">
+              <h4>Alternative</h4>
+              <p class="post-text text-secondary">${escapeHtml(altText)}</p>
+            </div>
+          ` : ''}
+        ` : `<p class="text-secondary">Flagged as spam — no reply drafted.</p>`}
+        ${action.status === 'approved' ? `
+          <div class="card-actions">
+            <button class="btn btn-secondary btn-sm" data-action="copy-engagement-text" data-id="${action.id}">Copy</button>
+            <button class="btn btn-success btn-sm" data-action="complete-engagement" data-id="${action.id}">Mark Done</button>
+          </div>
+        ` : `
+          <div class="card-actions">
+            <button class="btn btn-danger btn-sm" data-action="skip-engagement" data-id="${action.id}">Skip</button>
+            <button class="btn btn-success btn-sm" data-action="approve-engagement" data-id="${action.id}">Approve</button>
+          </div>
+        `}
+      </div>`;
+  }
+
+  /**
+   * @param {EngagementAction} action
+   * @returns {string}
+   */
+  function renderStrategicCard(action) {
+    const altText = action.draft_alternatives?.[0] || '';
+    return `
+      <div class="card engagement-card" data-action-id="${action.id}">
+        <div class="card-header">
+          <span class="platform-badge" style="background:${PLATFORM_COLORS[action.platform]}">${PLATFORM_ICONS[action.platform]}</span>
+          <span>${action.platform.charAt(0).toUpperCase() + action.platform.slice(1)}</span>
+          <span class="rating-badge rating-high" style="margin-left:auto">score ${action.relevance_score.toFixed(2)}</span>
+        </div>
+        <div class="detail-section">
+          <h4>Their post</h4>
+          <p class="text-secondary">${escapeHtml(SocialOSUtils.truncate(action.target.post_snippet, 150))}</p>
+        </div>
+        <div class="detail-section">
+          <h4>Suggested comment</h4>
+          <p class="post-text">${escapeHtml(action.draft_text)}</p>
+        </div>
+        ${altText ? `
+          <div class="detail-section">
+            <h4>Alternative</h4>
+            <p class="post-text text-secondary">${escapeHtml(altText)}</p>
+          </div>
+        ` : ''}
+        ${action.status === 'approved' ? `
+          <div class="card-actions">
+            <button class="btn btn-secondary btn-sm" data-action="copy-engagement-text" data-id="${action.id}">Copy</button>
+            <button class="btn btn-success btn-sm" data-action="complete-engagement" data-id="${action.id}">Mark Done</button>
+          </div>
+        ` : `
+          <div class="card-actions">
+            <button class="btn btn-danger btn-sm" data-action="skip-engagement" data-id="${action.id}">Skip</button>
+            <button class="btn btn-success btn-sm" data-action="approve-engagement" data-id="${action.id}">Approve</button>
+          </div>
+        `}
+      </div>`;
+  }
+
+  /**
+   * Paste-a-comment form (comment_monitor() manual entry point, §7 Phase 3).
+   */
+  function renderAddCommentForm() {
+    const container = $('approvals-content');
+    if (!container) return;
+
+    container.innerHTML = `
+      <div class="add-content-view">
+        <button class="btn btn-secondary btn-sm" data-action="back-to-engagement">&#8592; Back</button>
+        <h2>Paste a Comment</h2>
+        <p class="text-secondary">Paste a comment left on one of your posts. It's scrubbed before AI sees it, then categorized and drafted a reply.</p>
+        <div class="form-group">
+          <label for="ec-platform">Platform</label>
+          <select id="ec-platform" class="input">
+            <option value="linkedin">LinkedIn</option>
+            <option value="facebook">Facebook</option>
+            <option value="instagram">Instagram</option>
+            <option value="reddit">Reddit</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label for="ec-comment">Comment text</label>
+          <textarea id="ec-comment" class="input textarea" rows="4" placeholder="Paste the comment here..."></textarea>
+        </div>
+        <div class="form-group">
+          <label for="ec-post-summary">Post summary (optional)</label>
+          <textarea id="ec-post-summary" class="input textarea" rows="2" placeholder="What was your post about?"></textarea>
+        </div>
+        <div class="form-group">
+          <label for="ec-commenter-title">Commenter's title (optional)</label>
+          <input type="text" id="ec-commenter-title" class="input" placeholder="e.g. Technical Recruiter at...">
+        </div>
+        <button class="btn btn-primary" data-action="submit-comment" style="width:100%;margin-top:16px">
+          Categorize &amp; Draft Reply
+        </button>
+      </div>`;
+  }
+
+  /**
+   * Paste-a-post form (engagement_like_queue() manual entry point, §7 Phase 3).
+   */
+  function renderAddLikeForm() {
+    const container = $('approvals-content');
+    if (!container) return;
+
+    container.innerHTML = `
+      <div class="add-content-view">
+        <button class="btn btn-secondary btn-sm" data-action="back-to-engagement">&#8592; Back</button>
+        <h2>Paste a Post</h2>
+        <p class="text-secondary">Paste a post's URL and text/snippet. AI scores its relevance — scores above 0.7 join the like queue.</p>
+        <div class="form-group">
+          <label for="el-platform">Platform</label>
+          <select id="el-platform" class="input">
+            <option value="linkedin">LinkedIn</option>
+            <option value="facebook">Facebook</option>
+            <option value="instagram">Instagram</option>
+            <option value="reddit">Reddit</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label for="el-url">Post URL (optional)</label>
+          <input type="text" id="el-url" class="input" placeholder="https://...">
+        </div>
+        <div class="form-group">
+          <label for="el-snippet">Post text / snippet</label>
+          <textarea id="el-snippet" class="input textarea" rows="4" placeholder="Paste the post text here..."></textarea>
+        </div>
+        <button class="btn btn-primary" data-action="submit-like" style="width:100%;margin-top:16px">
+          Score &amp; Queue
+        </button>
       </div>`;
   }
 
@@ -579,10 +851,14 @@ const SocialOSUI = (() => {
   // ── Clipboard publish ─────────────────────────────────────────────────
 
   /**
-   * Show the clipboard publish flow.
+   * Show the publish flow: for a connected LinkedIn post, offers a direct
+   * "Publish Now" action (BUILD_PLAN §7 Phase 5, synchronous approve-time
+   * publish only — see js/linkedin.js) alongside the clipboard fallback that
+   * every platform still has, unconditionally.
    * @param {ScheduledPost} post
+   * @param {boolean} [linkedinReady] - true when post.platform === 'linkedin' and it's currently connected
    */
-  function renderPublishFlow(post) {
+  function renderPublishFlow(post, linkedinReady) {
     const container = $('approvals-content');
     if (!container) return;
 
@@ -599,7 +875,14 @@ const SocialOSUI = (() => {
 
         <div class="post-preview-box">${escapeHtml(activeText)}</div>
 
-        <button class="btn btn-primary btn-lg" data-action="copy-to-clipboard" data-id="${post.id}" style="width:100%;margin:16px 0">
+        ${linkedinReady ? `
+          <button class="btn btn-accent btn-lg" data-action="publish-linkedin-now" data-id="${post.id}" style="width:100%;margin:16px 0 8px">
+            Publish Now via LinkedIn
+          </button>
+          <p class="text-secondary" style="margin:0 0 8px;font-size:13px">Posts directly to your LinkedIn profile — no copy-paste needed. Or, copy it yourself below:</p>
+        ` : ''}
+
+        <button class="btn btn-primary btn-lg" data-action="copy-to-clipboard" data-id="${post.id}" style="width:100%;margin:${linkedinReady ? '0' : '16px'} 0 16px">
           Copy to Clipboard
         </button>
 
@@ -840,10 +1123,14 @@ const SocialOSUI = (() => {
    * @param {AppSettings} settings
    * @param {UserProfile|null} profile
    * @param {boolean} googleConnected
+   * @param {{connected: boolean, needsReconnect: boolean, handle: string|null}} [linkedinStatus]
    */
-  function renderSettings(settings, profile, googleConnected) {
+  function renderSettings(settings, profile, googleConnected, linkedinStatus) {
     const container = $('settings-content');
     if (!container) return;
+
+    const li = settings.platform_connections?.linkedin || {};
+    const liStatus = linkedinStatus || { connected: false, needsReconnect: false, handle: null };
 
     container.innerHTML = `
       <h2 class="screen-title">Settings</h2>
@@ -871,6 +1158,46 @@ const SocialOSUI = (() => {
             <input type="password" id="set-google-client-secret" class="input" value="${settings.google_oauth?.client_secret || ''}">
           </div>
           <button class="btn btn-accent btn-sm" data-action="connect-google-settings">Connect Google</button>
+        `}
+      </div>
+
+      <div class="settings-section">
+        <h3>LinkedIn <span class="text-secondary" style="font-weight:400">(Phase 5 — direct posting)</span></h3>
+        <div class="connection-status ${liStatus.connected ? 'connected' : 'disconnected'}">
+          ${liStatus.connected
+            ? `Connected${liStatus.handle ? ' as ' + escapeHtml(liStatus.handle) : ''}`
+            : liStatus.needsReconnect ? 'Token expired — reconnect' : 'Not connected'}
+        </div>
+        <p class="text-secondary" style="margin:8px 0">
+          LinkedIn access tokens last 60 days and don't silently refresh on a
+          standard app — you'll tap Reconnect when this expires. Setup steps:
+          docs/API_KEYS_SETUP.md §4.
+        </p>
+        ${liStatus.connected ? `
+          <button class="btn btn-danger btn-sm" data-action="disconnect-linkedin">Disconnect</button>
+        ` : `
+          <div class="form-group">
+            <label for="set-linkedin-client-id">LinkedIn Client ID</label>
+            <input type="text" id="set-linkedin-client-id" class="input" value="${li.client_id || ''}">
+          </div>
+          <div class="form-group">
+            <label for="set-linkedin-client-secret">LinkedIn Client Secret</label>
+            <input type="password" id="set-linkedin-client-secret" class="input" value="${li.client_secret || ''}">
+          </div>
+          <div class="form-group">
+            <label for="set-linkedin-relay-url">CORS Relay Function URL</label>
+            <input type="text" id="set-linkedin-relay-url" class="input"
+                   placeholder="https://<project-ref>.supabase.co/functions/v1/linkedin-relay"
+                   value="${li.relay_url || ''}">
+            <p class="text-secondary" style="margin-top:4px;font-size:12px">
+              LinkedIn's API doesn't allow direct browser calls (no CORS).
+              Deploy the relay function from docs/ROADMAP.md §2 (LinkedIn relay) first,
+              then paste its URL here.
+            </p>
+          </div>
+          <button class="btn btn-accent btn-sm" data-action="connect-linkedin">
+            ${liStatus.needsReconnect ? 'Reconnect LinkedIn' : 'Connect LinkedIn'}
+          </button>
         `}
       </div>
 
@@ -1170,6 +1497,8 @@ const SocialOSUI = (() => {
     renderDashboard,
     renderApprovals,
     renderApprovalCard,
+    renderAddCommentForm,
+    renderAddLikeForm,
     renderPostEdit,
     renderPublishFlow,
     renderLibrary,

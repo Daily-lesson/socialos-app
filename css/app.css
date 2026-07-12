@@ -687,7 +687,8 @@ select.input {
   gap: var(--space-md);
 }
 
-.approval-card .post-text {
+.approval-card .post-text,
+.engagement-card .post-text {
   font-family: var(--font-mono);
   font-size: 0.8125rem;
   line-height: 1.6;
@@ -725,6 +726,64 @@ select.input {
   background: var(--accent);
   border-color: var(--accent);
   color: #fff;
+}
+
+/* ── Approvals tabs / Engagement (Phase 3) ───────────────────────────── */
+
+.tab-bar,
+.subtab-bar {
+  display: flex;
+  gap: var(--space-sm);
+  margin-bottom: var(--space-md);
+  overflow-x: auto;
+}
+
+.tab-btn,
+.subtab-btn {
+  flex: 1;
+  white-space: nowrap;
+  padding: 10px 14px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--bg-border);
+  background: var(--bg-surface);
+  color: var(--text-secondary);
+  font-family: var(--font-body);
+  font-weight: 600;
+  font-size: 0.85rem;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.subtab-btn {
+  font-size: 0.78rem;
+  padding: 8px 12px;
+}
+
+.tab-btn.active,
+.subtab-btn.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+.tab-count {
+  display: inline-block;
+  margin-left: 4px;
+  padding: 0 6px;
+  border-radius: var(--radius-full);
+  background: rgba(255, 255, 255, 0.18);
+  font-size: 0.72rem;
+}
+
+.engagement-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-sm);
+  margin-bottom: var(--space-md);
+}
+
+.engagement-card .card-header {
+  flex-wrap: wrap;
 }
 
 .card-actions .btn-success {

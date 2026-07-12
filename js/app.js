@@ -17,7 +17,9 @@ const SocialOS = (() => {
     currentScreen: 'onboarding',
     onboardingStep: 1,
     onboardingData: {},
-    calendarFocusDate: null
+    calendarFocusDate: null,
+    approvalsTab: 'posts',
+    engagementSubTab: 'likes'
   };
 
   // ── Router ────────────────────────────────────────────────────────────
@@ -104,7 +106,13 @@ const SocialOS = (() => {
 
   async function renderApprovals() {
     const posts = await SocialOSDB.getPendingPosts();
-    SocialOSUI.renderApprovals(posts);
+    const engagement = await SocialOSEngagement.getQueues();
+    SocialOSUI.renderApprovals({
+      tab: state.approvalsTab,
+      posts,
+      engagement,
+      engagementSubTab: state.engagementSubTab
+    });
   }
 
   async function renderLibrary() {
@@ -121,12 +129,14 @@ const SocialOS = (() => {
     const settings = await SocialOSDB.getOrCreateSettings();
     const profile = await SocialOSDB.getProfile();
     const googleConnected = await SocialOSGoogle.isConnected();
-    SocialOSUI.renderSettings(settings, profile, googleConnected);
+    const linkedinStatus = await SocialOSLinkedIn.getConnectionStatus();
+    SocialOSUI.renderSettings(settings, profile, googleConnected, linkedinStatus);
   }
 
   async function updateBadge() {
     const pending = await SocialOSDB.getPendingPosts();
-    SocialOSUI.updateApprovalBadge(pending.length);
+    const engagementPending = await SocialOSEngagement.pendingCount();
+    SocialOSUI.updateApprovalBadge(pending.length + engagementPending);
   }
 
   // ── Onboarding logic ──────────────────────────────────────────────────
@@ -581,6 +591,35 @@ const SocialOS = (() => {
           );
           break;
 
+        // ── LinkedIn connect (Phase 5, BUILD_PLAN §7) ──────────────────
+        case 'connect-linkedin': {
+          const clientId = /** @type {HTMLInputElement} */ (SocialOSUI.$('set-linkedin-client-id'))?.value?.trim();
+          const clientSecret = /** @type {HTMLInputElement} */ (SocialOSUI.$('set-linkedin-client-secret'))?.value?.trim();
+          const relayUrl = /** @type {HTMLInputElement} */ (SocialOSUI.$('set-linkedin-relay-url'))?.value?.trim();
+          if (!clientId || !clientSecret) { SocialOSUI.toast('Enter LinkedIn Client ID and Secret first.', 'warning'); break; }
+          if (!relayUrl) { SocialOSUI.toast('Enter the CORS relay URL first — see docs/ROADMAP.md §2 (LinkedIn relay).', 'warning'); break; }
+          const settings = await SocialOSDB.getOrCreateSettings();
+          settings.platform_connections.linkedin.client_id = clientId;
+          settings.platform_connections.linkedin.client_secret = clientSecret;
+          settings.platform_connections.linkedin.relay_url = relayUrl;
+          await SocialOSDB.saveSettings(settings);
+          await SocialOSLinkedIn.startAuthFlow(clientId);
+          break;
+        }
+
+        case 'disconnect-linkedin':
+          SocialOSUI.confirm(
+            'Disconnect LinkedIn',
+            'This will remove LinkedIn access. You can reconnect anytime.',
+            'Disconnect',
+            async () => {
+              await SocialOSLinkedIn.disconnect();
+              SocialOSUI.toast('LinkedIn disconnected.', 'info');
+              await renderSettings();
+            }
+          );
+          break;
+
         // ── Settings saves ─────────────────────────────
         case 'save-proxy-settings': {
           const settings = await SocialOSDB.getOrCreateSettings();
@@ -825,7 +864,33 @@ const SocialOS = (() => {
           post.status = 'approved';
           post.approved_at = SocialOSUtils.now();
           await SocialOSDB.put(SocialOSDB.STORES.posts, post);
-          SocialOSUI.renderPublishFlow(post);
+          const linkedinReady = post.platform === 'linkedin' && await SocialOSLinkedIn.isConnected();
+          SocialOSUI.renderPublishFlow(post, linkedinReady);
+          break;
+        }
+
+        case 'publish-linkedin-now': {
+          if (!id) break;
+          const post = await SocialOSDB.get(SocialOSDB.STORES.posts, id);
+          if (!post) break;
+
+          SocialOSUI.toast('Publishing to LinkedIn…', 'info');
+          try {
+            await SocialOSLinkedIn.linkedinPublish(post);
+
+            const content = await SocialOSDB.get(SocialOSDB.STORES.content, post.content_id);
+            if (content) {
+              content.status = 'posted';
+              content.last_used = SocialOSUtils.now();
+              content.post_history.push(post.id);
+              await SocialOSDB.put(SocialOSDB.STORES.content, content);
+            }
+
+            SocialOSUI.toast('Published to LinkedIn!', 'success');
+            await renderApprovals();
+          } catch (err) {
+            SocialOSUI.toast(`LinkedIn publish failed: ${err.message}`, 'error');
+          }
           break;
         }
 
@@ -899,6 +964,166 @@ const SocialOS = (() => {
         case 'review-post': {
           if (!id) break;
           navigate('approvals');
+          break;
+        }
+
+        // ── Engagement Approvals (Phase 3, BUILD_PLAN §7/§12) ──────────
+        case 'approvals-tab': {
+          const tab = actionEl.dataset?.tab;
+          if (tab) state.approvalsTab = tab;
+          await renderApprovals();
+          break;
+        }
+
+        case 'engagement-subtab': {
+          const sub = actionEl.dataset?.sub;
+          if (sub) state.engagementSubTab = sub;
+          await renderApprovals();
+          break;
+        }
+
+        case 'back-to-engagement':
+          state.approvalsTab = 'engagement';
+          await renderApprovals();
+          break;
+
+        case 'show-add-comment':
+          SocialOSUI.renderAddCommentForm();
+          break;
+
+        case 'show-add-like':
+          SocialOSUI.renderAddLikeForm();
+          break;
+
+        case 'submit-comment': {
+          const platform = /** @type {HTMLSelectElement} */ (SocialOSUI.$('ec-platform'))?.value || 'linkedin';
+          const commentText = /** @type {HTMLTextAreaElement} */ (SocialOSUI.$('ec-comment'))?.value?.trim();
+          const postSummary = /** @type {HTMLTextAreaElement} */ (SocialOSUI.$('ec-post-summary'))?.value?.trim();
+          const commenterTitle = /** @type {HTMLInputElement} */ (SocialOSUI.$('ec-commenter-title'))?.value?.trim();
+
+          if (!commentText) { SocialOSUI.toast('Paste the comment text first.', 'warning'); break; }
+
+          SocialOSUI.loading(true, 'Scrubbing, categorizing, and drafting reply...');
+          try {
+            await SocialOSEngagement.submitComment({
+              platform: /** @type {any} */ (platform),
+              comment_text: commentText,
+              post_summary: postSummary,
+              commenter_title: commenterTitle
+            });
+            SocialOSUI.toast('Reply drafted!', 'success');
+            state.approvalsTab = 'engagement';
+            state.engagementSubTab = 'replies';
+            await renderApprovals();
+          } catch (err) {
+            SocialOSUI.toast(`Error: ${err.message}`, 'error');
+          }
+          SocialOSUI.loading(false);
+          break;
+        }
+
+        case 'submit-like': {
+          const platform = /** @type {HTMLSelectElement} */ (SocialOSUI.$('el-platform'))?.value || 'linkedin';
+          const url = /** @type {HTMLInputElement} */ (SocialOSUI.$('el-url'))?.value?.trim();
+          const snippet = /** @type {HTMLTextAreaElement} */ (SocialOSUI.$('el-snippet'))?.value?.trim();
+
+          if (!snippet) { SocialOSUI.toast('Paste the post text/snippet first.', 'warning'); break; }
+
+          SocialOSUI.loading(true, 'Scrubbing and scoring relevance...');
+          try {
+            const result = await SocialOSEngagement.submitLikeCandidate({
+              platform: /** @type {any} */ (platform),
+              post_url: url,
+              post_snippet: snippet
+            });
+            if (result.queued) {
+              SocialOSUI.toast(`Queued! Relevance ${result.score.toFixed(2)}.`, 'success');
+              state.approvalsTab = 'engagement';
+              state.engagementSubTab = 'likes';
+              await renderApprovals();
+            } else {
+              SocialOSUI.toast(`Not queued — relevance ${result.score.toFixed(2)} (needs > 0.7).`, 'info');
+              await renderApprovals();
+            }
+          } catch (err) {
+            SocialOSUI.toast(`Error: ${err.message}`, 'error');
+          }
+          SocialOSUI.loading(false);
+          break;
+        }
+
+        case 'run-strategic-suggestions': {
+          SocialOSUI.loading(true, 'Drafting strategic comments from the like queue...');
+          try {
+            const created = await SocialOSEngagement.generateStrategicSuggestions();
+            SocialOSUI.toast(created.length
+              ? `Drafted ${created.length} strategic comment${created.length > 1 ? 's' : ''}!`
+              : 'No new candidates in the like queue — paste some posts first.', created.length ? 'success' : 'info');
+            state.approvalsTab = 'engagement';
+            state.engagementSubTab = 'strategic';
+            await renderApprovals();
+          } catch (err) {
+            SocialOSUI.toast(`Error: ${err.message}`, 'error');
+          }
+          SocialOSUI.loading(false);
+          break;
+        }
+
+        case 'approve-engagement': {
+          if (!id) break;
+          const result = await SocialOSEngagement.approveEngagement(id);
+          if (!result.ok) {
+            SocialOSUI.toast(result.reason || 'Could not approve.', 'warning');
+          }
+          await renderApprovals();
+          break;
+        }
+
+        case 'skip-engagement': {
+          if (!id) break;
+          await SocialOSEngagement.skipEngagement(id);
+          await renderApprovals();
+          break;
+        }
+
+        case 'complete-engagement': {
+          if (!id) break;
+          await SocialOSEngagement.completeEngagement(id);
+          SocialOSUI.toast('Marked done.', 'success');
+          await renderApprovals();
+          break;
+        }
+
+        case 'approve-all-likes': {
+          const result = await SocialOSEngagement.approveAllLikes();
+          SocialOSUI.toast(
+            result.skippedForLimit
+              ? `Approved ${result.approved}; ${result.skippedForLimit} held back (daily limit).`
+              : `Approved ${result.approved} like${result.approved === 1 ? '' : 's'}.`,
+            'success'
+          );
+          await renderApprovals();
+          break;
+        }
+
+        case 'copy-engagement-text': {
+          if (!id) break;
+          const action = await SocialOSDB.get(SocialOSDB.STORES.engagement, id);
+          if (!action?.draft_text) break;
+          try {
+            await navigator.clipboard.writeText(action.draft_text);
+            SocialOSUI.toast('Copied to clipboard!', 'success');
+          } catch {
+            const ta = document.createElement('textarea');
+            ta.value = action.draft_text;
+            ta.style.position = 'fixed';
+            ta.style.left = '-9999px';
+            document.body.appendChild(ta);
+            ta.select();
+            document.execCommand('copy');
+            document.body.removeChild(ta);
+            SocialOSUI.toast('Copied to clipboard!', 'success');
+          }
           break;
         }
 
@@ -1086,10 +1311,16 @@ const SocialOS = (() => {
     // Open database
     await SocialOSDB.open();
 
-    // Check for OAuth callback
+    // Check for OAuth callback — Google and LinkedIn are disambiguated by
+    // which flow's sessionStorage keys are present (see js/linkedin.js
+    // handleCallback() note), so trying both in sequence is safe.
     const oauthHandled = await SocialOSGoogle.handleCallback();
     if (oauthHandled) {
       SocialOSUI.toast('Google connected!', 'success');
+    }
+    const linkedinOauthHandled = await SocialOSLinkedIn.handleCallback();
+    if (linkedinOauthHandled) {
+      SocialOSUI.toast('LinkedIn connected!', 'success');
     }
 
     // Restore onboarding state if returning from OAuth redirect

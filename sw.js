@@ -5,7 +5,7 @@
  * Paths are relative so the app works from a subpath (e.g. GitHub Pages).
  */
 
-const CACHE_NAME = 'socialos-v4'; // v4: Phase 2 Photos Picker (google.js/ai.js/ui.js/app.js/CSP updates)
+const CACHE_NAME = 'socialos-v5'; // v5: Phase 3 Engagement Engine + Phase 5 LinkedIn direct posting (engagement.js, linkedin.js added)
 const SHELL_ASSETS = [
   './',
   './index.html',
@@ -13,7 +13,9 @@ const SHELL_ASSETS = [
   './js/app.js',
   './js/ai.js',
   './js/db.js',
+  './js/engagement.js',
   './js/google.js',
+  './js/linkedin.js',
   './js/pm.js',
   './js/ui.js',
   './js/utils.js',

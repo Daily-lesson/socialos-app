@@ -452,6 +452,163 @@ Return JSON only:
     }
   }
 
+  // ── Engagement Engine (Phase 3, BUILD_PLAN §7/§10/§11) ─────────────────
+  // Orchestration + persistence lives in js/engagement.js. Everything here
+  // is a raw Claude call using the exact prompt shapes from §11, plus the
+  // platform tone/length rules from §10. Callers MUST scrub user-pasted
+  // text (SocialOSUtils.scrub) before it reaches any function below —
+  // these functions do not scrub for you.
+
+  /** Platform reply length/tone rules — §10 + §11 "Comment Reply Prompt" */
+  const PLATFORM_REPLY_RULES = {
+    linkedin: '2–4 sentences, professional and thoughtful',
+    facebook: '1–3 sentences, conversational and warm',
+    instagram: '1–2 sentences, casual, optional emoji (max 1-2)',
+    reddit: 'can be longer than other platforms, peer-to-peer technical tone, markdown formatting welcome'
+  };
+
+  /**
+   * comment_monitor() categorization step (§7 Phase 3).
+   * Categorizes an already-scrubbed comment and flags high priority
+   * (recruiter/opportunity/influential account).
+   * @param {string} scrubbedCommentText
+   * @param {{platform: string, postSummary?: string, commenterTitle?: string}} context
+   * @returns {Promise<{category: 'question'|'compliment'|'disagreement'|'spam'|'opportunity'|'peer', is_high_priority: boolean, reasoning: string}>}
+   */
+  async function categorizeComment(scrubbedCommentText, context) {
+    const prompt = `Categorize this comment on a ${context.platform} post.
+
+${context.postSummary ? `Original post summary: ${context.postSummary}\n` : ''}Comment: ${scrubbedCommentText}
+${context.commenterTitle ? `Commenter title: ${context.commenterTitle}\n` : ''}
+Categories: question, compliment, disagreement, spam, opportunity, peer
+- "opportunity" = recruiter outreach, job opportunity, business/collaboration inquiry
+- "spam" = bot-like, irrelevant, promotional junk
+- High priority = recruiters, job opportunities, or clearly influential accounts
+
+Return JSON only — no explanation:
+{
+  "category": "question|compliment|disagreement|spam|opportunity|peer",
+  "is_high_priority": true/false,
+  "reasoning": "one sentence"
+}`;
+
+    const result = await callClaude(
+      'You are a comment triage assistant for a professional social media manager. Return only valid JSON.',
+      prompt,
+      400
+    );
+
+    try {
+      return JSON.parse(result);
+    } catch {
+      const jsonMatch = result.match(/\{[\s\S]*\}/);
+      if (jsonMatch) return JSON.parse(jsonMatch[0]);
+      return { category: 'peer', is_high_priority: false, reasoning: 'Could not categorize — defaulting to peer.' };
+    }
+  }
+
+  /**
+   * reply_draft(comment) — §7/§11 "Comment Reply Prompt", exact template.
+   * @param {{platform: string, commentText: string, category: string, postSummary?: string, commenterTitle?: string}} input - commentText must already be scrubbed
+   * @returns {Promise<{reply: string, alternative: string}>}
+   */
+  async function draftReply(input) {
+    const systemPrompt = await buildSystemPrompt(input.platform);
+    const lengthRule = PLATFORM_REPLY_RULES[input.platform] || PLATFORM_REPLY_RULES.linkedin;
+
+    const promptFor = () => `Draft a reply to this comment on a ${input.platform} post.
+
+Original post summary: ${input.postSummary || '(not provided)'}
+Comment: ${input.commentText}
+Comment category: ${input.category}
+Commenter profile: ${input.commenterTitle || '(unknown)'}
+
+Requirements:
+- Platform tone: ${input.platform} tone per user profile above
+- Length: ${lengthRule}
+- Never start with "Great question!" or similar
+- Sound genuine and specific, not templated
+- If comment is a question: answer it clearly and concisely
+- If comment is a compliment: acknowledge warmly and add one sentence of insight
+- If comment is a disagreement: respond thoughtfully, acknowledge their point, share your perspective
+- If comment is an opportunity (recruiter etc): respond professionally and open the door to further conversation
+
+Return ONLY the reply text.`;
+
+    const reply = await callClaude(systemPrompt, promptFor(), 500);
+    const alternative = await callClaude(systemPrompt, promptFor() + '\n\nWrite a different reply than a typical first attempt — same requirements, different phrasing/angle.', 500);
+
+    return { reply: reply.trim(), alternative: alternative.trim() };
+  }
+
+  /**
+   * engagement_like_queue() scoring step (§7 Phase 3 — manual paste, no live feed).
+   * Scores relevance 0–1 of a pasted post for the like queue.
+   * @param {{platform: string, postSnippet: string}} input - postSnippet must already be scrubbed
+   * @returns {Promise<{score: number, reason: string}>}
+   */
+  async function scoreLikeRelevance(input) {
+    const profile = await SocialOSDB.getProfile();
+    const prompt = `Score how relevant this ${input.platform} post is for a ${profile?.title || 'robotics systems integrator'} to like/engage with.
+
+Post snippet: ${input.postSnippet}
+
+Scoring criteria:
+- Directly relevant to robotics, autonomous systems, manufacturing, drones, IoT, or the user's expertise: high (0.7-1.0)
+- Adjacent tech/engineering content: medium (0.4-0.69)
+- Unrelated content: low (0-0.39)
+
+Return JSON only — no explanation:
+{ "score": 0.0-1.0, "reason": "one sentence" }`;
+
+    const result = await callClaude(
+      'You are an engagement scoring assistant. Return only valid JSON.',
+      prompt,
+      300
+    );
+
+    try {
+      const parsed = JSON.parse(result);
+      return { score: Math.max(0, Math.min(1, Number(parsed.score) || 0)), reason: parsed.reason || '' };
+    } catch {
+      const jsonMatch = result.match(/\{[\s\S]*\}/);
+      if (jsonMatch) {
+        const parsed = JSON.parse(jsonMatch[0]);
+        return { score: Math.max(0, Math.min(1, Number(parsed.score) || 0)), reason: parsed.reason || '' };
+      }
+      return { score: 0, reason: 'Could not score — defaulting to 0.' };
+    }
+  }
+
+  /**
+   * strategic_comment_suggestions() drafting step (§7 Phase 3).
+   * Comment rules: min 2 sentences, must reference real experience,
+   * no "Great post!" generics, adds value/insight.
+   * @param {{platform: string, postSnippet: string}} input - postSnippet must already be scrubbed
+   * @returns {Promise<{comment: string, alternative: string}>}
+   */
+  async function draftStrategicComment(input) {
+    const systemPrompt = await buildSystemPrompt(input.platform);
+
+    const promptFor = () => `Write a strategic comment on this ${input.platform} post, from the user's professional perspective.
+
+Post snippet: ${input.postSnippet}
+
+Requirements:
+- Minimum 2 sentences
+- Must reference the user's real experience/expertise (from the profile above) — be specific, not generic
+- Never write "Great post!" or any equivalent generic opener
+- Adds genuine value or insight to the conversation, not just praise
+- Platform tone: ${input.platform} conventions (see §10 — e.g. no hashtags on Reddit, professional on LinkedIn)
+
+Return ONLY the comment text.`;
+
+    const comment = await callClaude(systemPrompt, promptFor(), 400);
+    const alternative = await callClaude(systemPrompt, promptFor() + '\n\nWrite a different comment than a typical first attempt — same requirements, different angle or example.', 400);
+
+    return { comment: comment.trim(), alternative: alternative.trim() };
+  }
+
   // ── Public API ────────────────────────────────────────────────────────
 
   return {
@@ -463,6 +620,11 @@ Return JSON only:
     analysePhoto,
     scrubCheck,
     extractHashtags,
+    categorizeComment,
+    draftReply,
+    scoreLikeRelevance,
+    draftStrategicComment,
+    PLATFORM_REPLY_RULES,
     MODEL
   };
 })();

@@ -96,6 +96,7 @@
  * @property {string|null} approved_at
  * @property {string|null} completed_at
  * @property {string} created_at
+ * @property {'question'|'compliment'|'disagreement'|'spam'|'opportunity'|'peer'|null} [category] - Phase 3 (js/engagement.js): comment_monitor() categorization. Optional/additive — not in the original §4.4 shape, harmless for IndexedDB (schemaless per record) and old records without it.
  */
 
 /**
@@ -174,12 +175,29 @@
  */
 
 /**
+ * Platform connection record (§4.7). LinkedIn (Phase 5) extends the base
+ * shape with OAuth fields mirroring `google_oauth` above — see js/linkedin.js.
+ * Other platforms (facebook/instagram/reddit) stay on the base shape until
+ * their own Phase 5 work happens (BUILD_PLAN §7 / docs/ROADMAP.md §5).
+ * @typedef {Object} PlatformConnection
+ * @property {boolean} connected
+ * @property {string|null} handle
+ * @property {string|null} access_token
+ * @property {string|null} [refresh_token] - LinkedIn: only present for Marketing Developer Platform apps; standard "Share on LinkedIn" apps get none (§API_KEYS_SETUP §4).
+ * @property {string|null} [expires_at] - ISO8601
+ * @property {string|null} [client_id]
+ * @property {string|null} [client_secret]
+ * @property {string|null} [member_urn] - LinkedIn only: `urn:li:person:{id}`, the `author` field required by /v2/ugcPosts.
+ * @property {string|null} [relay_url] - LinkedIn only: the CORS relay Edge Function URL (see docs/ROADMAP.md §2 (LinkedIn relay)). LinkedIn's OAuth + REST endpoints don't set CORS headers, so browser calls must go through a relay.
+ */
+
+/**
  * 4.7 — Settings
  * @typedef {Object} AppSettings
  * @property {string} proxy_url
  * @property {string} proxy_secret
  * @property {{access_token: string|null, refresh_token: string|null, expires_at: string|null, scopes: string[], client_id: string|null, client_secret: string|null}} google_oauth
- * @property {Object<string, {connected: boolean, handle: string|null, access_token: string|null}>} platform_connections
+ * @property {Object<string, PlatformConnection>} platform_connections
  * @property {{approval_reminder_hours_before: number, engagement_batch_time: string, quiet_hours_start: string, quiet_hours_end: string}} notification_preferences
  * @property {Object<string, number>} posting_limits
  * @property {{remove_client_names: boolean, remove_facility_locations: boolean, remove_proprietary_specs: boolean, remove_financial_data: boolean, custom_blocked_terms: string[]}} content_scrubbing
@@ -377,7 +395,19 @@ const SocialOSDB = (() => {
         client_secret: null
       },
       platform_connections: {
-        linkedin:  { connected: false, handle: null, access_token: null },
+        // Phase 5 (LinkedIn only, see docs/ROADMAP.md §5): extended
+        // with OAuth fields mirroring google_oauth. Populated by js/linkedin.js.
+        linkedin: {
+          connected: false,
+          handle: null,
+          access_token: null,
+          refresh_token: null,
+          expires_at: null,
+          client_id: null,
+          client_secret: null,
+          member_urn: null,
+          relay_url: null
+        },
         facebook:  { connected: false, handle: null, access_token: null },
         instagram: { connected: false, handle: null, access_token: null },
         reddit:    { connected: false, handle: null, access_token: null }
