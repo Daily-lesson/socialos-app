@@ -294,28 +294,12 @@ const SocialOSUI = (() => {
 
       case 9:
         html += `
-          <h2>Connect your AI proxy</h2>
-          <p class="onboarding-desc">SocialOS uses a Cloudflare Worker to securely communicate with Claude AI. Your API key stays on the server — never in the browser.</p>
-          <div class="form-group">
-            <label for="ob-proxy-url">Proxy URL</label>
-            <input type="url" id="ob-proxy-url" class="input" placeholder="https://socialos-proxy.your-subdomain.workers.dev" value="${data.proxy_url || ''}">
-          </div>
-          <div class="form-group">
-            <label for="ob-proxy-secret">Proxy Secret</label>
-            <input type="password" id="ob-proxy-secret" class="input" placeholder="Your SOCIALOS_SECRET value" value="${data.proxy_secret || ''}">
-          </div>
-          <button class="btn btn-secondary" data-action="test-proxy" style="margin-top:8px">
-            Test Connection
-          </button>
-          <div id="proxy-test-result" class="test-result"></div>
+          <h2>AI engine</h2>
+          <p class="onboarding-desc">Nothing to set up — SocialOS's AI is built in and ready. Your writing is drafted by Claude through a secure managed connection; no API key or configuration needed.</p>
           <div class="info-box" style="margin-top:16px">
-            <strong>Setup guide:</strong><br>
-            1. Install Wrangler CLI: <code>npm install -g wrangler</code><br>
-            2. Create worker: <code>wrangler init socialos-proxy</code><br>
-            3. Copy <code>api/worker.js</code> into the project<br>
-            4. Add secrets: <code>wrangler secret put ANTHROPIC_API_KEY</code><br>
-            5. Add secret: <code>wrangler secret put SOCIALOS_SECRET</code><br>
-            6. Deploy: <code>wrangler deploy</code>
+            <strong>✓ Included free.</strong> Post drafting, photo analysis, and
+            engagement suggestions all work out of the box. Advanced tiers
+            (higher volume, premium models) will be offered later.
           </div>`;
         break;
 
@@ -355,12 +339,7 @@ const SocialOSUI = (() => {
             <div class="summary-item"><span class="check">&#10003;</span> Profile configured</div>
             <div class="summary-item"><span class="check">&#10003;</span> Goals & audience defined</div>
             <div class="summary-item"><span class="check">&#10003;</span> Tone preferences set</div>
-            <div class="summary-item">
-              <span class="check ${data.proxy_url ? '' : 'pending'}">
-                ${data.proxy_url ? '&#10003;' : '&#9675;'}
-              </span>
-              AI proxy ${data.proxy_url ? 'connected' : 'not yet connected'}
-            </div>
+            <div class="summary-item"><span class="check">&#10003;</span> AI engine ready (built in)</div>
             <div class="summary-item">
               <span class="check ${data.google_connected ? '' : 'pending'}">
                 ${data.google_connected ? '&#10003;' : '&#9675;'}
@@ -870,20 +849,9 @@ const SocialOSUI = (() => {
       <h2 class="screen-title">Settings</h2>
 
       <div class="settings-section">
-        <h3>AI Proxy</h3>
-        <div class="form-group">
-          <label for="set-proxy-url">Proxy URL</label>
-          <input type="url" id="set-proxy-url" class="input" value="${settings.proxy_url || ''}" placeholder="https://socialos-proxy.your-subdomain.workers.dev">
-        </div>
-        <div class="form-group">
-          <label for="set-proxy-secret">Proxy Secret</label>
-          <input type="password" id="set-proxy-secret" class="input" value="${settings.proxy_secret || ''}">
-        </div>
-        <div class="btn-row">
-          <button class="btn btn-secondary btn-sm" data-action="test-proxy-settings">Test Connection</button>
-          <button class="btn btn-primary btn-sm" data-action="save-proxy-settings">Save</button>
-        </div>
-        <div id="settings-proxy-result" class="test-result"></div>
+        <h3>AI Engine</h3>
+        <div class="connection-status connected">Connected — managed (free tier)</div>
+        <p class="text-secondary" style="margin-top:8px">The AI is built in and needs no setup. Advanced tiers will appear here later.</p>
       </div>
 
       <div class="settings-section">

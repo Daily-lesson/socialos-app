@@ -358,10 +358,15 @@ const SocialOSDB = (() => {
     return settings;
   }
 
+  // AI proxy is baked in so the user is never asked to configure it — the
+  // free tier "just works". The proxy authorizes this app by its Origin
+  // (GitHub Pages), so no secret is needed or shipped in this public code.
+  const DEFAULT_PROXY_URL = 'https://qjnvihdrzeyzkjbmzmyf.supabase.co/functions/v1/socialos-proxy';
+
   /** @returns {AppSettings} */
   function defaultSettings() {
     return {
-      proxy_url: '',
+      proxy_url: DEFAULT_PROXY_URL,
       proxy_secret: '',
       google_oauth: {
         access_token: null,

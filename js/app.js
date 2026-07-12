@@ -176,13 +176,7 @@ const SocialOS = (() => {
         }
         break;
       }
-      case 9: {
-        const url = /** @type {HTMLInputElement} */ (SocialOSUI.$('ob-proxy-url'));
-        const secret = /** @type {HTMLInputElement} */ (SocialOSUI.$('ob-proxy-secret'));
-        if (url) d.proxy_url = url.value.trim();
-        if (secret) d.proxy_secret = secret.value.trim();
-        break;
-      }
+      // Step 9 (AI engine) has nothing to collect — the proxy is baked in.
       case 10: {
         const clientId = /** @type {HTMLInputElement} */ (SocialOSUI.$('ob-google-client-id'));
         const clientSecret = /** @type {HTMLInputElement} */ (SocialOSUI.$('ob-google-client-secret'));
