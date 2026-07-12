@@ -13,12 +13,13 @@
        progress widths via style attributes. Scripts stay locked to 'self'.
        No api.anthropic.com — all Claude calls MUST go through the Supabase
        Edge Function proxy (*.supabase.co), never directly.
-       No www.linkedin.com/api.linkedin.com either (Phase 5, js/linkedin.js) —
-       deliberately absent. Those endpoints don't set CORS headers for
-       browser callers anyway (see docs/ROADMAP.md §2 (LinkedIn relay)), so every
-       LinkedIn call is relayed through a Supabase Edge Function
-       (*.supabase.co, already allowed below); this CSP is what makes it
-       impossible for a bug to accidentally call LinkedIn directly instead.
+       No www.linkedin.com/api.linkedin.com/www.reddit.com/oauth.reddit.com
+       either (Phase 5, js/linkedin.js + js/reddit.js) — deliberately absent.
+       None of those endpoints set CORS headers for browser callers anyway
+       (see docs/ROADMAP.md §2), so every LinkedIn/Reddit call is relayed
+       through one shared Supabase Edge Function (*.supabase.co, already
+       allowed below); this CSP is what makes it impossible for a bug to
+       accidentally call either platform directly instead.
        The OAuth *authorize* redirect is a top-level navigation
        (window.location.href), not a fetch, so it isn't governed by
        connect-src at all — same as Google's flow. -->
@@ -137,6 +138,7 @@
   <script src="js/ai.js"></script>
   <script src="js/google.js"></script>
   <script src="js/linkedin.js"></script>
+  <script src="js/reddit.js"></script>
   <script src="js/pm.js"></script>
   <script src="js/engagement.js"></script>
   <script src="js/ui.js"></script>

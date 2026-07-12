@@ -315,9 +315,10 @@ const SocialOSUI = (() => {
             <label for="ob-google-client-secret">Google OAuth Client Secret</label>
             <input type="password" id="ob-google-client-secret" class="input" placeholder="GOCSPX-..." value="${data.google_client_secret || ''}">
           </div>
-          <button class="btn btn-accent" data-action="connect-google" style="margin-top:8px">
-            Connect Google Account
-          </button>
+          <a href="#" class="btn btn-google" data-action="connect-google" style="margin-top:8px;display:inline-flex;align-items:center;justify-content:center;gap:8px;text-decoration:none">
+            <svg width="18" height="18" viewBox="0 0 24 24"><path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/><path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/><path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"/><path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/></svg>
+            <span>Sign in with Google</span>
+          </a>
           <div id="google-connect-result" class="test-result"></div>
           <p class="text-secondary" style="margin-top:12px">Or skip this for now and connect later in Settings.</p>
           <div class="info-box" style="margin-top:16px">
@@ -851,14 +852,15 @@ const SocialOSUI = (() => {
   // ── Clipboard publish ─────────────────────────────────────────────────
 
   /**
-   * Show the publish flow: for a connected LinkedIn post, offers a direct
-   * "Publish Now" action (BUILD_PLAN §7 Phase 5, synchronous approve-time
-   * publish only — see js/linkedin.js) alongside the clipboard fallback that
-   * every platform still has, unconditionally.
+   * Show the publish flow: for a connected LinkedIn or Reddit post, offers a
+   * direct "Publish Now" action (BUILD_PLAN §7 Phase 5, synchronous
+   * approve-time publish only — see js/linkedin.js / js/reddit.js) alongside
+   * the clipboard fallback that every platform still has, unconditionally.
    * @param {ScheduledPost} post
    * @param {boolean} [linkedinReady] - true when post.platform === 'linkedin' and it's currently connected
+   * @param {boolean} [redditReady] - true when post.platform === 'reddit' and it's currently connected
    */
-  function renderPublishFlow(post, linkedinReady) {
+  function renderPublishFlow(post, linkedinReady, redditReady) {
     const container = $('approvals-content');
     if (!container) return;
 
@@ -881,8 +883,14 @@ const SocialOSUI = (() => {
           </button>
           <p class="text-secondary" style="margin:0 0 8px;font-size:13px">Posts directly to your LinkedIn profile — no copy-paste needed. Or, copy it yourself below:</p>
         ` : ''}
+        ${redditReady ? `
+          <button class="btn btn-accent btn-lg" data-action="publish-reddit-now" data-id="${post.id}" style="width:100%;margin:16px 0 8px">
+            Publish Now via Reddit
+          </button>
+          <p class="text-secondary" style="margin:0 0 8px;font-size:13px">Posts directly to r/${escapeHtml((post.draft?.platform_metadata?.subreddit || '').replace(/^\/?r\//i, '')) || '...'} — no copy-paste needed. Or, copy it yourself below:</p>
+        ` : ''}
 
-        <button class="btn btn-primary btn-lg" data-action="copy-to-clipboard" data-id="${post.id}" style="width:100%;margin:${linkedinReady ? '0' : '16px'} 0 16px">
+        <button class="btn btn-primary btn-lg" data-action="copy-to-clipboard" data-id="${post.id}" style="width:100%;margin:${(linkedinReady || redditReady) ? '0' : '16px'} 0 16px">
           Copy to Clipboard
         </button>
 
@@ -1124,13 +1132,16 @@ const SocialOSUI = (() => {
    * @param {UserProfile|null} profile
    * @param {boolean} googleConnected
    * @param {{connected: boolean, needsReconnect: boolean, handle: string|null}} [linkedinStatus]
+   * @param {{connected: boolean, needsReconnect: boolean, handle: string|null}} [redditStatus]
    */
-  function renderSettings(settings, profile, googleConnected, linkedinStatus) {
+  function renderSettings(settings, profile, googleConnected, linkedinStatus, redditStatus) {
     const container = $('settings-content');
     if (!container) return;
 
     const li = settings.platform_connections?.linkedin || {};
     const liStatus = linkedinStatus || { connected: false, needsReconnect: false, handle: null };
+    const rd = settings.platform_connections?.reddit || {};
+    const rdStatus = redditStatus || { connected: false, needsReconnect: false, handle: null };
 
     container.innerHTML = `
       <h2 class="screen-title">Settings</h2>
@@ -1157,8 +1168,29 @@ const SocialOSUI = (() => {
             <label for="set-google-client-secret">Google OAuth Client Secret</label>
             <input type="password" id="set-google-client-secret" class="input" value="${settings.google_oauth?.client_secret || ''}">
           </div>
-          <button class="btn btn-accent btn-sm" data-action="connect-google-settings">Connect Google</button>
+          <a href="#" class="btn btn-google" data-action="connect-google-settings" style="display:inline-flex;align-items:center;justify-content:center;gap:8px;text-decoration:none">
+            <svg width="18" height="18" viewBox="0 0 24 24"><path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/><path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/><path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"/><path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/></svg>
+            <span>Sign in with Google</span>
+          </a>
         `}
+      </div>
+
+      <div class="settings-section">
+        <h3>Platform Connections <span class="text-secondary" style="font-weight:400">(CORS Relay)</span></h3>
+        <p class="text-secondary" style="margin:0 0 8px">
+          LinkedIn and Reddit's APIs don't allow direct browser calls (no CORS) —
+          every call to either platform is relayed through one shared,
+          stateless Supabase Edge Function. Deploy it once
+          (docs/ROADMAP.md §2 — "social-relay") and paste its URL below; both
+          the LinkedIn and Reddit sections underneath reuse it.
+        </p>
+        <div class="form-group">
+          <label for="set-social-relay-url">CORS Relay Function URL</label>
+          <input type="text" id="set-social-relay-url" class="input"
+                 placeholder="https://<project-ref>.supabase.co/functions/v1/social-relay"
+                 value="${settings.social_relay_url || ''}">
+        </div>
+        <button class="btn btn-primary btn-sm" data-action="save-relay-url">Save Relay URL</button>
       </div>
 
       <div class="settings-section">
@@ -1184,19 +1216,41 @@ const SocialOSUI = (() => {
             <label for="set-linkedin-client-secret">LinkedIn Client Secret</label>
             <input type="password" id="set-linkedin-client-secret" class="input" value="${li.client_secret || ''}">
           </div>
-          <div class="form-group">
-            <label for="set-linkedin-relay-url">CORS Relay Function URL</label>
-            <input type="text" id="set-linkedin-relay-url" class="input"
-                   placeholder="https://<project-ref>.supabase.co/functions/v1/linkedin-relay"
-                   value="${li.relay_url || ''}">
-            <p class="text-secondary" style="margin-top:4px;font-size:12px">
-              LinkedIn's API doesn't allow direct browser calls (no CORS).
-              Deploy the relay function from docs/ROADMAP.md §2 (LinkedIn relay) first,
-              then paste its URL here.
-            </p>
-          </div>
+          <p class="text-secondary" style="margin:4px 0 8px;font-size:12px">
+            Uses the shared CORS Relay URL above — set that first if you haven't.
+          </p>
           <button class="btn btn-accent btn-sm" data-action="connect-linkedin">
             ${liStatus.needsReconnect ? 'Reconnect LinkedIn' : 'Connect LinkedIn'}
+          </button>
+        `}
+      </div>
+
+      <div class="settings-section">
+        <h3>Reddit <span class="text-secondary" style="font-weight:400">(Phase 5 — direct posting)</span></h3>
+        <div class="connection-status ${rdStatus.connected ? 'connected' : 'disconnected'}">
+          ${rdStatus.connected
+            ? `Connected${rdStatus.handle ? ' as u/' + escapeHtml(rdStatus.handle) : ''}`
+            : rdStatus.needsReconnect ? 'Token expired — reconnect' : 'Not connected'}
+        </div>
+        <p class="text-secondary" style="margin:8px 0">
+          Reddit access tokens last 1 hour but refresh silently in the
+          background (unlike LinkedIn) as long as you stay connected. Setup
+          steps: docs/API_KEYS_SETUP.md §4.
+        </p>
+        ${rdStatus.connected ? `
+          <button class="btn btn-danger btn-sm" data-action="disconnect-reddit">Disconnect</button>
+        ` : `
+          <div class="form-group">
+            <label for="set-reddit-client-id">Reddit Client ID</label>
+            <input type="text" id="set-reddit-client-id" class="input" value="${rd.client_id || ''}">
+            <p class="text-secondary" style="margin-top:4px;font-size:12px">
+              Register an "installed app" at reddit.com/prefs/apps — this app
+              type gets no client secret (none needed here), unlike LinkedIn.
+              Uses the shared CORS Relay URL above.
+            </p>
+          </div>
+          <button class="btn btn-accent btn-sm" data-action="connect-reddit">
+            ${rdStatus.needsReconnect ? 'Reconnect Reddit' : 'Connect Reddit'}
           </button>
         `}
       </div>

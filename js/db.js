@@ -175,20 +175,20 @@
  */
 
 /**
- * Platform connection record (§4.7). LinkedIn (Phase 5) extends the base
- * shape with OAuth fields mirroring `google_oauth` above — see js/linkedin.js.
- * Other platforms (facebook/instagram/reddit) stay on the base shape until
- * their own Phase 5 work happens (BUILD_PLAN §7 / docs/ROADMAP.md §5).
+ * Platform connection record (§4.7). LinkedIn and Reddit (both Phase 5)
+ * extend the base shape with OAuth fields mirroring `google_oauth` above —
+ * see js/linkedin.js and js/reddit.js. Facebook/instagram stay on the base
+ * shape until their own Phase 5 work happens (BUILD_PLAN §7 / docs/ROADMAP.md §5).
  * @typedef {Object} PlatformConnection
  * @property {boolean} connected
  * @property {string|null} handle
  * @property {string|null} access_token
- * @property {string|null} [refresh_token] - LinkedIn: only present for Marketing Developer Platform apps; standard "Share on LinkedIn" apps get none (§API_KEYS_SETUP §4).
+ * @property {string|null} [refresh_token] - LinkedIn: only present for Marketing Developer Platform apps; standard "Share on LinkedIn" apps get none (§API_KEYS_SETUP §4). Reddit: present whenever `duration=permanent` was requested (the default here) — Reddit issues refresh tokens to installed apps too, unlike LinkedIn.
  * @property {string|null} [expires_at] - ISO8601
  * @property {string|null} [client_id]
- * @property {string|null} [client_secret]
+ * @property {string|null} [client_secret] - LinkedIn only. Reddit's "installed app" type is a public client and is issued no secret — see js/reddit.js file header.
  * @property {string|null} [member_urn] - LinkedIn only: `urn:li:person:{id}`, the `author` field required by /v2/ugcPosts.
- * @property {string|null} [relay_url] - LinkedIn only: the CORS relay Edge Function URL (see docs/ROADMAP.md §2 (LinkedIn relay)). LinkedIn's OAuth + REST endpoints don't set CORS headers, so browser calls must go through a relay.
+ * @property {string|null} [relay_url] - Legacy/deprecated per-connection CORS relay URL field (originally LinkedIn-only). Superseded by the shared top-level `social_relay_url` (see below) once the relay was generalized for Reddit too — kept only so pre-existing saved settings still resolve; new connects should populate `social_relay_url` instead.
  */
 
 /**
@@ -198,6 +198,7 @@
  * @property {string} proxy_secret
  * @property {{access_token: string|null, refresh_token: string|null, expires_at: string|null, scopes: string[], client_id: string|null, client_secret: string|null}} google_oauth
  * @property {Object<string, PlatformConnection>} platform_connections
+ * @property {string|null} social_relay_url - Shared stateless CORS relay Edge Function URL used by both js/linkedin.js and js/reddit.js (see docs/ROADMAP.md §2). Neither LinkedIn's nor Reddit's OAuth/REST endpoints send CORS headers for browser callers, so every call to either platform is relayed through this one function.
  * @property {{approval_reminder_hours_before: number, engagement_batch_time: string, quiet_hours_start: string, quiet_hours_end: string}} notification_preferences
  * @property {Object<string, number>} posting_limits
  * @property {{remove_client_names: boolean, remove_facility_locations: boolean, remove_proprietary_specs: boolean, remove_financial_data: boolean, custom_blocked_terms: string[]}} content_scrubbing
@@ -395,8 +396,9 @@ const SocialOSDB = (() => {
         client_secret: null
       },
       platform_connections: {
-        // Phase 5 (LinkedIn only, see docs/ROADMAP.md §5): extended
-        // with OAuth fields mirroring google_oauth. Populated by js/linkedin.js.
+        // Phase 5 (LinkedIn + Reddit, see docs/ROADMAP.md §5): both extended
+        // with OAuth fields mirroring google_oauth. Populated by
+        // js/linkedin.js / js/reddit.js respectively.
         linkedin: {
           connected: false,
           handle: null,
@@ -410,8 +412,20 @@ const SocialOSDB = (() => {
         },
         facebook:  { connected: false, handle: null, access_token: null },
         instagram: { connected: false, handle: null, access_token: null },
-        reddit:    { connected: false, handle: null, access_token: null }
+        // Reddit is a public "installed app" client (see js/reddit.js file
+        // header) — no client_secret field needed/issued, unlike LinkedIn.
+        reddit: {
+          connected: false,
+          handle: null,
+          access_token: null,
+          refresh_token: null,
+          expires_at: null,
+          client_id: null
+        }
       },
+      // Shared CORS relay for LinkedIn + Reddit (docs/ROADMAP.md §2). One
+      // deploy, reused by both — see the AppSettings typedef above.
+      social_relay_url: null,
       notification_preferences: {
         approval_reminder_hours_before: 48,
         engagement_batch_time: '08:00',

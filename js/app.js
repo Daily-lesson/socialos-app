@@ -130,7 +130,8 @@ const SocialOS = (() => {
     const profile = await SocialOSDB.getProfile();
     const googleConnected = await SocialOSGoogle.isConnected();
     const linkedinStatus = await SocialOSLinkedIn.getConnectionStatus();
-    SocialOSUI.renderSettings(settings, profile, googleConnected, linkedinStatus);
+    const redditStatus = await SocialOSReddit.getConnectionStatus();
+    SocialOSUI.renderSettings(settings, profile, googleConnected, linkedinStatus, redditStatus);
   }
 
   async function updateBadge() {
@@ -456,7 +457,8 @@ const SocialOS = (() => {
   function setupEventDelegation() {
     document.addEventListener('click', async (e) => {
       const target = /** @type {HTMLElement} */ (e.target);
-      const action = target.dataset?.action || target.closest('[data-action]')?.dataset?.action;
+      const actionEl = target.closest('[data-action]') || target;
+      const action = actionEl.dataset?.action;
 
       // Chip toggles (onboarding goals/topics/tones/off-limits) have no
       // data-action — handle them before the action guard below.
@@ -466,7 +468,11 @@ const SocialOS = (() => {
       }
       if (!action) return;
 
-      const actionEl = target.closest('[data-action]') || target;
+      // Prevent default for anchor tags to avoid page jump
+      if (actionEl.tagName === 'A') {
+        e.preventDefault();
+      }
+
       const id = actionEl.dataset?.id;
       const postId = actionEl.dataset?.postId;
 
@@ -591,17 +597,29 @@ const SocialOS = (() => {
           );
           break;
 
+        // ── Shared CORS relay (LinkedIn + Reddit, docs/ROADMAP.md §2) ──
+        case 'save-relay-url': {
+          const relayUrl = /** @type {HTMLInputElement} */ (SocialOSUI.$('set-social-relay-url'))?.value?.trim();
+          if (!relayUrl) { SocialOSUI.toast('Enter the CORS relay URL first.', 'warning'); break; }
+          const settings = await SocialOSDB.getOrCreateSettings();
+          settings.social_relay_url = relayUrl;
+          await SocialOSDB.saveSettings(settings);
+          SocialOSUI.toast('Relay URL saved.', 'success');
+          break;
+        }
+
         // ── LinkedIn connect (Phase 5, BUILD_PLAN §7) ──────────────────
         case 'connect-linkedin': {
           const clientId = /** @type {HTMLInputElement} */ (SocialOSUI.$('set-linkedin-client-id'))?.value?.trim();
           const clientSecret = /** @type {HTMLInputElement} */ (SocialOSUI.$('set-linkedin-client-secret'))?.value?.trim();
-          const relayUrl = /** @type {HTMLInputElement} */ (SocialOSUI.$('set-linkedin-relay-url'))?.value?.trim();
           if (!clientId || !clientSecret) { SocialOSUI.toast('Enter LinkedIn Client ID and Secret first.', 'warning'); break; }
-          if (!relayUrl) { SocialOSUI.toast('Enter the CORS relay URL first — see docs/ROADMAP.md §2 (LinkedIn relay).', 'warning'); break; }
           const settings = await SocialOSDB.getOrCreateSettings();
+          if (!settings.social_relay_url && !settings.platform_connections.linkedin.relay_url) {
+            SocialOSUI.toast('Enter the shared CORS relay URL first — see docs/ROADMAP.md §2.', 'warning');
+            break;
+          }
           settings.platform_connections.linkedin.client_id = clientId;
           settings.platform_connections.linkedin.client_secret = clientSecret;
-          settings.platform_connections.linkedin.relay_url = relayUrl;
           await SocialOSDB.saveSettings(settings);
           await SocialOSLinkedIn.startAuthFlow(clientId);
           break;
@@ -615,6 +633,34 @@ const SocialOS = (() => {
             async () => {
               await SocialOSLinkedIn.disconnect();
               SocialOSUI.toast('LinkedIn disconnected.', 'info');
+              await renderSettings();
+            }
+          );
+          break;
+
+        // ── Reddit connect (Phase 5, BUILD_PLAN §7 / docs/ROADMAP.md §5) ──
+        case 'connect-reddit': {
+          const clientId = /** @type {HTMLInputElement} */ (SocialOSUI.$('set-reddit-client-id'))?.value?.trim();
+          if (!clientId) { SocialOSUI.toast('Enter Reddit Client ID first.', 'warning'); break; }
+          const settings = await SocialOSDB.getOrCreateSettings();
+          if (!settings.social_relay_url && !settings.platform_connections.linkedin.relay_url) {
+            SocialOSUI.toast('Enter the shared CORS relay URL first — see docs/ROADMAP.md §2.', 'warning');
+            break;
+          }
+          settings.platform_connections.reddit.client_id = clientId;
+          await SocialOSDB.saveSettings(settings);
+          await SocialOSReddit.startAuthFlow(clientId);
+          break;
+        }
+
+        case 'disconnect-reddit':
+          SocialOSUI.confirm(
+            'Disconnect Reddit',
+            'This will remove Reddit access. You can reconnect anytime.',
+            'Disconnect',
+            async () => {
+              await SocialOSReddit.disconnect();
+              SocialOSUI.toast('Reddit disconnected.', 'info');
               await renderSettings();
             }
           );
@@ -865,7 +911,8 @@ const SocialOS = (() => {
           post.approved_at = SocialOSUtils.now();
           await SocialOSDB.put(SocialOSDB.STORES.posts, post);
           const linkedinReady = post.platform === 'linkedin' && await SocialOSLinkedIn.isConnected();
-          SocialOSUI.renderPublishFlow(post, linkedinReady);
+          const redditReady = post.platform === 'reddit' && await SocialOSReddit.isConnected();
+          SocialOSUI.renderPublishFlow(post, linkedinReady, redditReady);
           break;
         }
 
@@ -890,6 +937,31 @@ const SocialOS = (() => {
             await renderApprovals();
           } catch (err) {
             SocialOSUI.toast(`LinkedIn publish failed: ${err.message}`, 'error');
+          }
+          break;
+        }
+
+        case 'publish-reddit-now': {
+          if (!id) break;
+          const post = await SocialOSDB.get(SocialOSDB.STORES.posts, id);
+          if (!post) break;
+
+          SocialOSUI.toast('Publishing to Reddit…', 'info');
+          try {
+            await SocialOSReddit.redditPublish(post);
+
+            const content = await SocialOSDB.get(SocialOSDB.STORES.content, post.content_id);
+            if (content) {
+              content.status = 'posted';
+              content.last_used = SocialOSUtils.now();
+              content.post_history.push(post.id);
+              await SocialOSDB.put(SocialOSDB.STORES.content, content);
+            }
+
+            SocialOSUI.toast('Published to Reddit!', 'success');
+            await renderApprovals();
+          } catch (err) {
+            SocialOSUI.toast(`Reddit publish failed: ${err.message}`, 'error');
           }
           break;
         }
@@ -1311,9 +1383,10 @@ const SocialOS = (() => {
     // Open database
     await SocialOSDB.open();
 
-    // Check for OAuth callback — Google and LinkedIn are disambiguated by
-    // which flow's sessionStorage keys are present (see js/linkedin.js
-    // handleCallback() note), so trying both in sequence is safe.
+    // Check for OAuth callback — Google, LinkedIn, and Reddit are
+    // disambiguated by which flow's sessionStorage keys are present (see
+    // js/linkedin.js / js/reddit.js handleCallback() notes), so trying all
+    // three in sequence is safe.
     const oauthHandled = await SocialOSGoogle.handleCallback();
     if (oauthHandled) {
       SocialOSUI.toast('Google connected!', 'success');
@@ -1321,6 +1394,10 @@ const SocialOS = (() => {
     const linkedinOauthHandled = await SocialOSLinkedIn.handleCallback();
     if (linkedinOauthHandled) {
       SocialOSUI.toast('LinkedIn connected!', 'success');
+    }
+    const redditOauthHandled = await SocialOSReddit.handleCallback();
+    if (redditOauthHandled) {
+      SocialOSUI.toast('Reddit connected!', 'success');
     }
 
     // Restore onboarding state if returning from OAuth redirect

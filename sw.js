@@ -5,7 +5,7 @@
  * Paths are relative so the app works from a subpath (e.g. GitHub Pages).
  */
 
-const CACHE_NAME = 'socialos-v5'; // v5: Phase 3 Engagement Engine + Phase 5 LinkedIn direct posting (engagement.js, linkedin.js added)
+const CACHE_NAME = 'socialos-v6'; // v6: Phase 5 Reddit direct posting (reddit.js added, LinkedIn relay generalized to social-relay)
 const SHELL_ASSETS = [
   './',
   './index.html',
@@ -16,6 +16,7 @@ const SHELL_ASSETS = [
   './js/engagement.js',
   './js/google.js',
   './js/linkedin.js',
+  './js/reddit.js',
   './js/pm.js',
   './js/ui.js',
   './js/utils.js',

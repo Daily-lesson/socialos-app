@@ -30,11 +30,15 @@
  * "exchange code for access token" guidance, which explicitly tells
  * developers the token exchange must happen server-side, not from a browser.
  * Every call in this file therefore goes through a small stateless Supabase
- * Edge Function relay (not yet deployed — see docs/ROADMAP.md §2 (LinkedIn relay))
- * that forwards the request and adds CORS headers. The relay never sees or
- * stores the client_secret or any token beyond the single request it's
- * relaying — those still live only in this browser's IndexedDB, same
- * accepted single-user risk model as Google's tokens (BUILD_PLAN §9).
+ * Edge Function relay (not yet deployed — see docs/ROADMAP.md §2) that
+ * forwards the request and adds CORS headers. Originally built LinkedIn-only,
+ * it was generalized when Reddit (js/reddit.js) hit the identical CORS
+ * problem — it's the same `social-relay` function for both platforms now,
+ * with a host allowlist covering LinkedIn's and Reddit's domains, configured
+ * once via the shared `settings.social_relay_url` (see js/db.js). The relay
+ * never sees or stores the client_secret or any token beyond the single
+ * request it's relaying — those still live only in this browser's IndexedDB,
+ * same accepted single-user risk model as Google's tokens (BUILD_PLAN §9).
  */
 
 const SocialOSLinkedIn = (() => {
@@ -55,23 +59,27 @@ const SocialOSLinkedIn = (() => {
   // ── Relay ─────────────────────────────────────────────────────────────
 
   /**
-   * Forward a request to LinkedIn via the CORS relay Edge Function. The
-   * relay is a stateless pass-through: it takes {url, method, headers, body,
-   * encoding}, performs that exact fetch server-side (where CORS doesn't
-   * apply), and mirrors LinkedIn's response — status, body, and a small
-   * allowlist of headers (including `x-restli-id`, needed after publish) —
-   * straight back, with CORS headers added. It holds no secrets and persists
-   * nothing between requests. See docs/ROADMAP.md §2 (LinkedIn relay) for the deployed
-   * source and deploy steps.
+   * Forward a request to LinkedIn via the shared CORS relay Edge Function.
+   * The relay is a stateless pass-through: it takes {url, method, headers,
+   * body, encoding}, performs that exact fetch server-side (where CORS
+   * doesn't apply), and mirrors LinkedIn's response — status, body, and a
+   * small allowlist of headers (including `x-restli-id`, needed after
+   * publish) — straight back, with CORS headers added. It holds no secrets
+   * and persists nothing between requests, and is shared with Reddit
+   * (js/reddit.js) — see docs/ROADMAP.md §2 for the deployed source and
+   * deploy steps.
    * @param {string} targetUrl
    * @param {{method?: string, headers?: Object<string,string>, body?: string|null, encoding?: 'text'|'base64'}} [opts]
    * @returns {Promise<Response>}
    */
   async function relayFetch(targetUrl, opts = {}) {
     const settings = await SocialOSDB.getSettings();
-    const relayUrl = settings?.platform_connections?.linkedin?.relay_url;
+    // Prefer the shared relay URL; fall back to this connection's own
+    // (legacy, pre-generalization) relay_url field for anyone who configured
+    // it before the relay was shared with Reddit.
+    const relayUrl = settings?.social_relay_url || settings?.platform_connections?.linkedin?.relay_url;
     if (!relayUrl) {
-      throw new Error('LinkedIn relay URL not configured — set it in Settings > LinkedIn (see docs/ROADMAP.md §2 (LinkedIn relay)).');
+      throw new Error('CORS relay URL not configured — set it in Settings > Platform Connections (see docs/ROADMAP.md §2).');
     }
 
     return fetch(relayUrl, {
@@ -91,8 +99,9 @@ const SocialOSLinkedIn = (() => {
 
   /**
    * Start the LinkedIn OAuth flow. Redirects the browser to LinkedIn's
-   * consent screen. Assumes client_id/client_secret/relay_url have already
-   * been saved to settings by the caller (mirrors js/google.js's pattern).
+   * consent screen. Assumes client_id/client_secret and the shared
+   * social_relay_url have already been saved to settings by the caller
+   * (mirrors js/google.js's pattern).
    * @param {string} clientId
    * @returns {Promise<void>}
    */
