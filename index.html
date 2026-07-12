@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="theme-color" content="#4F8EF7">
+  <meta name="description" content="SocialOS — AI-powered personal social media manager">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+
+  <!-- CSP: no third-party scripts (Section 9 security rule) -->
+  <!-- style-src needs 'unsafe-inline': UI templates set platform colors and
+       progress widths via style attributes. Scripts stay locked to 'self'.
+       No api.anthropic.com — all Claude calls MUST go through the Supabase
+       Edge Function proxy (*.supabase.co), never directly. -->
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'self';
+                 script-src 'self';
+                 style-src 'self' 'unsafe-inline' https://fonts.googleapis.com;
+                 font-src https://fonts.gstatic.com;
+                 connect-src 'self' https://*.supabase.co https://www.googleapis.com https://accounts.google.com https://oauth2.googleapis.com https://photospicker.googleapis.com https://*.googleusercontent.com;
+                 img-src 'self' data: blob: https:;">
+
+  <title>SocialOS</title>
+
+  <!-- PWA -->
+  <link rel="manifest" href="manifest.json">
+  <link rel="icon" type="image/png" sizes="32x32" href="icons/favicon-32.png">
+  <link rel="apple-touch-icon" sizes="180x180" href="icons/apple-touch-icon.png">
+
+  <!-- Fonts (Section 6 typography) -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap">
+
+  <!-- Styles -->
+  <link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+
+  <div id="app">
+
+    <!-- ═══ Onboarding Screen ═══ -->
+    <div id="screen-onboarding" class="screen active">
+      <div id="onboarding-content"></div>
+    </div>
+
+    <!-- ═══ Dashboard Screen ═══ -->
+    <div id="screen-dashboard" class="screen">
+      <div id="dashboard-content"></div>
+    </div>
+
+    <!-- ═══ Approvals Screen ═══ -->
+    <div id="screen-approvals" class="screen">
+      <div id="approvals-content"></div>
+    </div>
+
+    <!-- ═══ Calendar Screen ═══ -->
+    <div id="screen-calendar" class="screen">
+      <div id="calendar-content"></div>
+    </div>
+
+    <!-- ═══ Content Library Screen ═══ -->
+    <div id="screen-library" class="screen">
+      <div id="library-content"></div>
+    </div>
+
+    <!-- ═══ Projects Screen (Program Manager) ═══ -->
+    <div id="screen-projects" class="screen">
+      <div id="projects-content"></div>
+    </div>
+
+    <!-- ═══ Settings Screen ═══ -->
+    <div id="screen-settings" class="screen">
+      <div id="settings-content"></div>
+    </div>
+
+    <!-- ═══ Bottom Navigation ═══ -->
+    <nav id="bottom-nav" style="display:none">
+      <button class="nav-tab" data-screen="screen-dashboard">
+        <span class="nav-tab-icon">&#9776;</span>
+        <span>Home</span>
+      </button>
+      <button class="nav-tab" data-screen="screen-approvals">
+        <span class="nav-tab-icon">&#10003;</span>
+        <span>Approvals</span>
+        <span class="nav-badge" id="approval-badge">0</span>
+      </button>
+      <button class="nav-tab" data-screen="screen-calendar">
+        <span class="nav-tab-icon">&#128197;</span>
+        <span>Calendar</span>
+      </button>
+      <button class="nav-tab" data-screen="screen-library">
+        <span class="nav-tab-icon">&#128218;</span>
+        <span>Library</span>
+      </button>
+      <button class="nav-tab" data-screen="screen-projects">
+        <span class="nav-tab-icon">&#9733;</span>
+        <span>Projects</span>
+      </button>
+      <button class="nav-tab" data-screen="screen-settings">
+        <span class="nav-tab-icon">&#9881;</span>
+        <span>Settings</span>
+      </button>
+    </nav>
+
+  </div>
+
+  <!-- ═══ Overlays ═══ -->
+
+  <!-- Toast container -->
+  <div id="toast-container"></div>
+
+  <!-- Loading overlay -->
+  <div id="loading-overlay">
+    <div class="loading-spinner"></div>
+    <div class="loading-message">Loading...</div>
+  </div>
+
+  <!-- Bottom sheet (confirmations) -->
+  <div id="bottom-sheet">
+    <div id="bottom-sheet-content"></div>
+  </div>
+
+  <!-- ═══ Scripts (order matters — no modules, no bundler) ═══ -->
+  <script src="js/utils.js"></script>
+  <script src="js/db.js"></script>
+  <script src="js/ai.js"></script>
+  <script src="js/google.js"></script>
+  <script src="js/pm.js"></script>
+  <script src="js/ui.js"></script>
+  <script src="js/app.js"></script>
+
+</body>
+</html>

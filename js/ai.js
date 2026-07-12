@@ -1,0 +1,468 @@
+// @ts-check
+
+/**
+ * SocialOS — AI Module
+ * All Claude API calls routed through the Cloudflare Worker proxy.
+ * Uses prompt templates from Section 11 of BUILD_PLAN exactly.
+ */
+
+const SocialOSAI = (() => {
+  'use strict';
+
+  const MODEL = 'claude-sonnet-4-6';
+
+  // ── Core proxy call ───────────────────────────────────────────────────
+
+  /**
+   * @typedef {{type: 'text', text: string} | {type: 'image', source: {type: 'base64', media_type: string, data: string}}} ContentBlock
+   */
+
+  /**
+   * Send a request to Claude via the proxy.
+   * @param {string} systemPrompt
+   * @param {string|ContentBlock[]} userMessage - string, or content blocks (e.g. image + text) for vision calls
+   * @param {number} [maxTokens=1000]
+   * @returns {Promise<string>}
+   */
+  async function callClaude(systemPrompt, userMessage, maxTokens = 1000) {
+    const settings = await SocialOSDB.getSettings();
+    if (!settings || !settings.proxy_url) {
+      throw new Error('Proxy URL not configured. Complete onboarding step 9.');
+    }
+
+    const response = await fetch(settings.proxy_url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-SocialOS-Secret': settings.proxy_secret
+      },
+      body: JSON.stringify({
+        model: MODEL,
+        max_tokens: maxTokens,
+        system: systemPrompt,
+        messages: [{ role: 'user', content: userMessage }]
+      })
+    });
+
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({}));
+      throw new Error(err.error?.message || `Proxy returned ${response.status}`);
+    }
+
+    const data = await response.json();
+
+    if (data.error) {
+      throw new Error(data.error.message || 'Claude API error');
+    }
+
+    return data.content[0].text;
+  }
+
+  /**
+   * Test the proxy connection with a simple ping.
+   * @param {string} proxyUrl
+   * @param {string} proxySecret
+   * @returns {Promise<boolean>}
+   */
+  async function testProxy(proxyUrl, proxySecret) {
+    try {
+      const response = await fetch(proxyUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-SocialOS-Secret': proxySecret
+        },
+        body: JSON.stringify({
+          model: MODEL,
+          max_tokens: 20,
+          messages: [{ role: 'user', content: 'Reply with only the word "connected".' }]
+        })
+      });
+
+      if (!response.ok) return false;
+      const data = await response.json();
+      return !!(data.content && data.content[0] && data.content[0].text);
+    } catch {
+      return false;
+    }
+  }
+
+  // ── System prompt builder ─────────────────────────────────────────────
+
+  /**
+   * Build the base system prompt per Section 11.
+   * @param {string} platform
+   * @returns {Promise<string>}
+   */
+  async function buildSystemPrompt(platform) {
+    const profile = await SocialOSDB.getProfile();
+    if (!profile) throw new Error('Profile not found');
+
+    return `You are the AI engine for SocialOS, a personal social media manager.
+
+User profile:
+- Name: ${profile.name}
+- Title: ${profile.title}
+- Expertise: ${profile.topics.join(', ')}
+- Tone preference: ${profile.tone[platform] || 'professional'}
+- Target audience on ${platform}: ${profile.target_audience[platform] || 'professionals'}
+
+Rules you must follow:
+1. Never include: client names, employer name, facility locations, financial figures, proprietary information, or any information marked as off-limits.
+2. Always write in first person as the user.
+3. Content must sound authentic, not like AI-generated corporate speak.
+4. Platform-specific rules must be followed exactly.
+5. Always return exactly what is requested — no preamble, no explanation.`;
+  }
+
+  // ── Post draft generation ─────────────────────────────────────────────
+
+  /** @type {Object<string, string>} */
+  const POST_PROMPTS = {
+    linkedin: `Write a LinkedIn post based on the following content.
+
+Source content: {content}
+Angle: {angle}
+
+Requirements:
+- Length: 150–350 words
+- Structure: Hook (1–2 sentences) → Story/Insight (3–5 paragraphs) → Takeaway/CTA
+- Hashtags: Exactly 5, relevant to robotics/engineering/autonomous systems
+- Tone: Professional, thoughtful, first-person narrative
+- Do NOT use: corporate buzzwords, "I'm excited to share", "Thrilled to announce"
+- DO use: specific details, real observations, honest insight
+- End with either a question for the reader OR a clear takeaway
+
+Return ONLY the post text followed by hashtags on the last line.
+No explanation, no title, no quotation marks.`,
+
+    facebook: `Write a Facebook post based on the following content.
+
+Source content: {content}
+Angle: {angle}
+
+Requirements:
+- Length: 100–250 words
+- Tone: Conversational, warm, relatable
+- Hashtags: 1–2 maximum
+- Write as if sharing with professional friends
+- End with a question to encourage comments
+- 1–2 emoji maximum, used naturally
+
+Return ONLY the post text. No explanation, no quotation marks.`,
+
+    instagram: `Write an Instagram caption based on the following content.
+
+Source content: {content}
+This post includes a photo/video related to the content.
+
+Requirements:
+- Caption length: 50–150 words
+- First line must be a punchy hook (visible before "more" cutoff)
+- Casual, visual-first tone — the image is the star
+- 1–3 relevant emoji maximum in the caption body
+- After caption body, add line break then 25–30 hashtags
+- Hashtag mix: 5 large (1M+ posts), 10 medium (100K–1M), 10 small/niche (<100K)
+- Include hashtags relevant to: robotics, engineering, technology, autonomous systems, and 5–8 niche tags specific to the content
+
+Return ONLY: caption text, blank line, hashtags.`,
+
+    reddit: `Write a Reddit post for {subreddit} based on the following content.
+
+Source content: {content}
+Subreddit: {subreddit}
+
+Requirements:
+- Title: Under 100 characters, informative, not clickbait
+- Body: Write as a peer sharing genuine experience, not self-promotion
+- Length: 200–500 words depending on complexity
+- Tone: Technical, honest, peer-to-peer — Reddit users are skeptical of marketing
+- NO hashtags
+- Include: what you did, what you learned, what was hard, what surprised you
+- End with a genuine question to spark discussion
+- Use Reddit markdown: **bold**, *italic*, bullet points where appropriate
+
+Return ONLY:
+TITLE: [title text]
+BODY: [body text]`
+  };
+
+  /**
+   * Generate post drafts for a content item across specified platforms.
+   * Scrubs content first, then generates 3 alternatives per platform.
+   * @param {ContentItem} contentItem
+   * @param {string[]} platforms
+   * @returns {Promise<ScheduledPost[]>}
+   */
+  async function generatePostDrafts(contentItem, platforms) {
+    const settings = await SocialOSDB.getSettings();
+    const rawText = contentItem.raw_content || contentItem.description || contentItem.title;
+
+    // Scrub before any Claude call
+    const scrubbed = SocialOSUtils.scrub(
+      rawText,
+      settings?.content_scrubbing?.custom_blocked_terms
+    );
+
+    const posts = [];
+
+    for (const platform of platforms) {
+      const systemPrompt = await buildSystemPrompt(platform);
+      const angle = contentItem.suggested_angles?.[0] || 'General professional insight';
+      const subreddit = platform === 'reddit' ? 'r/robotics' : '';
+
+      // Generate primary draft
+      let prompt = POST_PROMPTS[platform]
+        .replace('{content}', scrubbed.text)
+        .replace('{angle}', angle)
+        .replace(/\{subreddit\}/g, subreddit);
+
+      const maxTokens = platform === 'instagram' ? 1500 : 1500;
+      const primaryText = await callClaude(systemPrompt, prompt, maxTokens);
+
+      // Generate 2 alternative drafts
+      const alternatives = [];
+      const altAngles = (contentItem.suggested_angles || []).slice(1, 3);
+      if (altAngles.length === 0) {
+        altAngles.push('Behind-the-scenes perspective', 'Question to spark discussion');
+      }
+      while (altAngles.length < 2) {
+        altAngles.push('Different angle on the same topic');
+      }
+
+      for (const altAngle of altAngles) {
+        let altPrompt = POST_PROMPTS[platform]
+          .replace('{content}', scrubbed.text)
+          .replace('{angle}', altAngle)
+          .replace(/\{subreddit\}/g, subreddit);
+
+        const altText = await callClaude(systemPrompt, altPrompt, maxTokens);
+        alternatives.push({ text: altText, angle: altAngle });
+      }
+
+      // Parse hashtags from primary text
+      const hashtags = extractHashtags(primaryText);
+
+      // Parse Reddit title/body if applicable
+      const platformMetadata = {};
+      if (platform === 'reddit') {
+        const titleMatch = primaryText.match(/TITLE:\s*(.+)/i);
+        if (titleMatch) {
+          platformMetadata.reddit_title = titleMatch[1].trim();
+        }
+        platformMetadata.subreddit = subreddit;
+      }
+
+      /** @type {ScheduledPost} */
+      const post = {
+        id: SocialOSUtils.uuid(),
+        content_id: contentItem.id,
+        platform,
+        status: 'pending_approval',
+        scheduled_time: '',
+        published_time: null,
+        draft: {
+          text: primaryText,
+          hashtags,
+          angle,
+          platform_metadata: platformMetadata
+        },
+        alternatives,
+        selected_alternative: 0,
+        approval_sent_at: SocialOSUtils.now(),
+        approved_at: null,
+        approved_by: 'user',
+        edits_made: false,
+        edit_history: [],
+        platform_post_id: null,
+        engagement_stats: {
+          likes: 0,
+          comments: 0,
+          shares: 0,
+          last_checked: SocialOSUtils.now()
+        }
+      };
+
+      await SocialOSDB.put(SocialOSDB.STORES.posts, post);
+      posts.push(post);
+    }
+
+    return posts;
+  }
+
+  /**
+   * Extract hashtags from post text.
+   * @param {string} text
+   * @returns {string[]}
+   */
+  function extractHashtags(text) {
+    const matches = text.match(/#\w+/g);
+    return matches ? matches.map(h => h.replace('#', '')) : [];
+  }
+
+  // ── Content analysis ──────────────────────────────────────────────────
+
+  /**
+   * Analyse a piece of content for rating, tags, angles, and sensitivity.
+   * @param {string} text - Already scrubbed text
+   * @param {string} title
+   * @returns {Promise<{rating: string, rating_reason: string, tags: string[], angles: string[], platforms: string[], sensitivity_flags: string[]}>}
+   */
+  async function analyseContent(text, title) {
+    const prompt = `Analyse this content for a robotics/autonomous systems professional's social media.
+
+Title: ${title}
+Content (first 2000 chars): ${text.slice(0, 2000)}
+
+Return JSON only — no explanation:
+{
+  "rating": "high|medium|low|skip",
+  "rating_reason": "one sentence",
+  "tags": ["tag1", "tag2"],
+  "angles": ["angle 1", "angle 2", "angle 3"],
+  "platforms": ["linkedin", "reddit"],
+  "sensitivity_flags": []
+}`;
+
+    const result = await callClaude(
+      'You are a content analyst for a professional social media manager. Return only valid JSON.',
+      prompt,
+      2000
+    );
+
+    try {
+      return JSON.parse(result);
+    } catch {
+      // Try to extract JSON from the response
+      const jsonMatch = result.match(/\{[\s\S]*\}/);
+      if (jsonMatch) return JSON.parse(jsonMatch[0]);
+      return {
+        rating: 'medium',
+        rating_reason: 'Could not analyse — defaulting to medium',
+        tags: [],
+        angles: ['General professional insight'],
+        platforms: ['linkedin'],
+        sensitivity_flags: []
+      };
+    }
+  }
+
+  // ── Photo analysis (Phase 2, BUILD_PLAN §7 — vision) ──────────────────
+
+  /**
+   * Analyse a photo with Claude vision: is it post-worthy, what's in it,
+   * are faces visible. Mirrors analyseContent()'s return shape plus a
+   * `description` field the caller stores as the content item's description.
+   * @param {string} imageDataUri - "data:<mime>;base64,<data>"
+   * @param {string} mimeType
+   * @param {string} filename
+   * @returns {Promise<{rating: string, rating_reason: string, tags: string[], angles: string[], platforms: string[], sensitivity_flags: string[], description: string}>}
+   */
+  async function analysePhoto(imageDataUri, mimeType, filename) {
+    const base64Data = imageDataUri.slice(imageDataUri.indexOf(',') + 1);
+
+    const prompt = `Analyse this photo for a robotics/autonomous systems professional's social media.
+
+Filename: ${filename}
+
+Requirements:
+- Do NOT mention or transcribe any visible text, signage, badges, screens, or
+  facility/location names in the image — describe subject matter only
+  (e.g. "a quadruped robot on a warehouse floor", not what a sign says).
+- Flag if any person's face is clearly visible (consent consideration).
+
+Return JSON only — no explanation:
+{
+  "rating": "high|medium|low|skip",
+  "rating_reason": "one sentence",
+  "description": "1-2 sentences: what's shown, no identifying text",
+  "tags": ["tag1", "tag2"],
+  "angles": ["angle 1", "angle 2", "angle 3"],
+  "platforms": ["linkedin", "instagram"],
+  "sensitivity_flags": []
+}
+If a person's face is visible, include "faces_visible" in sensitivity_flags.`;
+
+    const result = await callClaude(
+      'You are a content analyst for a professional social media manager. Return only valid JSON.',
+      [
+        { type: 'image', source: { type: 'base64', media_type: mimeType, data: base64Data } },
+        { type: 'text', text: prompt }
+      ],
+      1000
+    );
+
+    try {
+      return JSON.parse(result);
+    } catch {
+      const jsonMatch = result.match(/\{[\s\S]*\}/);
+      if (jsonMatch) return JSON.parse(jsonMatch[0]);
+      return {
+        rating: 'medium',
+        rating_reason: 'Could not analyse — defaulting to medium',
+        description: filename,
+        tags: [],
+        angles: ['General professional insight'],
+        platforms: ['linkedin'],
+        sensitivity_flags: []
+      };
+    }
+  }
+
+  // ── Content scrubbing (secondary Claude check per Section 9) ──────────
+
+  /**
+   * Run Claude secondary scrub check.
+   * @param {string} text - Already regex-scrubbed text
+   * @returns {Promise<{clean: boolean, issues: Array<{type: string, text: string, replacement: string}>}>}
+   */
+  async function scrubCheck(text) {
+    const prompt = `Review the following text for social media safety.
+
+Text: ${text}
+
+Identify and list any of the following that appear:
+1. Company or client names (other than well-known public companies)
+2. Specific geographic locations (cities, facilities, campuses, addresses)
+3. Financial figures (costs, budgets, savings amounts)
+4. Proprietary technical specifications
+5. Employee or colleague names
+6. Any information that a corporate legal or communications team would flag
+
+Return JSON only:
+{
+  "clean": true/false,
+  "issues": [
+    { "type": "company_name", "text": "found text", "replacement": "suggested replacement" }
+  ]
+}`;
+
+    const result = await callClaude(
+      'You are a corporate communications reviewer. Return only valid JSON.',
+      prompt,
+      500
+    );
+
+    try {
+      return JSON.parse(result);
+    } catch {
+      const jsonMatch = result.match(/\{[\s\S]*\}/);
+      if (jsonMatch) return JSON.parse(jsonMatch[0]);
+      return { clean: true, issues: [] };
+    }
+  }
+
+  // ── Public API ────────────────────────────────────────────────────────
+
+  return {
+    callClaude,
+    testProxy,
+    buildSystemPrompt,
+    generatePostDrafts,
+    analyseContent,
+    analysePhoto,
+    scrubCheck,
+    extractHashtags,
+    MODEL
+  };
+})();
