@@ -23,13 +23,17 @@
        bug to accidentally call any of those platforms directly instead.
        The OAuth *authorize* redirect is a top-level navigation
        (window.location.href), not a fetch, so it isn't governed by
-       connect-src at all — same as Google's flow. -->
+       connect-src at all — same for Google's accounts.google.com page.
+       No oauth2.googleapis.com either: Google token exchange/refresh/revoke
+       all happen server-side in the google-oauth Edge Function
+       (*.supabase.co), so the client secret never exists in the browser and
+       this CSP makes a direct token call impossible by construction. -->
   <meta http-equiv="Content-Security-Policy"
         content="default-src 'self';
                  script-src 'self';
                  style-src 'self' 'unsafe-inline' https://fonts.googleapis.com;
                  font-src https://fonts.gstatic.com;
-                 connect-src 'self' https://*.supabase.co https://www.googleapis.com https://accounts.google.com https://oauth2.googleapis.com https://photospicker.googleapis.com https://*.googleusercontent.com;
+                 connect-src 'self' https://*.supabase.co https://www.googleapis.com https://photospicker.googleapis.com https://*.googleusercontent.com;
                  img-src 'self' data: blob: https:;">
 
   <title>SocialOS</title>

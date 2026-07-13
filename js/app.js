@@ -208,14 +208,8 @@ const SocialOS = (() => {
         }
         break;
       }
-      // Step 10 (AI engine) has nothing to collect — the proxy is baked in.
-      case 11: {
-        const clientId = /** @type {HTMLInputElement} */ (SocialOSUI.$('ob-google-client-id'));
-        const clientSecret = /** @type {HTMLInputElement} */ (SocialOSUI.$('ob-google-client-secret'));
-        if (clientId) d.google_client_id = clientId.value.trim();
-        if (clientSecret) d.google_client_secret = clientSecret.value.trim();
-        break;
-      }
+      // Step 10 (AI engine) and Step 11 (Connect Google) have nothing to
+      // collect — the proxy and the Google OAuth broker are both baked in.
     }
   }
 
@@ -839,39 +833,37 @@ const SocialOS = (() => {
           break;
         }
 
-        // ── Google connect ─────────────────────────────
+        // ── Google connect — one tap to Google's sign-in page; the OAuth
+        // broker handles everything secret-bearing (js/google.js header) ──
         case 'connect-google': {
-          const clientId = /** @type {HTMLInputElement} */ (SocialOSUI.$('ob-google-client-id'))?.value?.trim();
-          const clientSecret = /** @type {HTMLInputElement} */ (SocialOSUI.$('ob-google-client-secret'))?.value?.trim();
-          if (!clientId) { SocialOSUI.toast('Enter Google Client ID first.', 'warning'); break; }
           collectOnboardingData();
-          // Save progress before redirect
+          // Save progress before the redirect leaves the page
           const settings = await SocialOSDB.getOrCreateSettings();
           settings.onboarding_step = state.onboardingStep;
-          settings.google_oauth.client_id = clientId;
-          settings.google_oauth.client_secret = clientSecret || null;
           await SocialOSDB.saveSettings(settings);
           sessionStorage.setItem('socialos_onboarding_data', JSON.stringify(state.onboardingData));
-          await SocialOSGoogle.startAuthFlow(clientId);
+          try {
+            await SocialOSGoogle.startAuthFlow();
+          } catch (err) {
+            sessionStorage.removeItem('socialos_onboarding_data');
+            SocialOSUI.toast(`Couldn't start Google sign-in: ${err instanceof Error ? err.message : String(err)}`, 'error');
+          }
           break;
         }
 
         case 'connect-google-settings': {
-          const clientId = /** @type {HTMLInputElement} */ (SocialOSUI.$('set-google-client-id'))?.value?.trim();
-          const clientSecret = /** @type {HTMLInputElement} */ (SocialOSUI.$('set-google-client-secret'))?.value?.trim();
-          if (!clientId) { SocialOSUI.toast('Enter Google Client ID first.', 'warning'); break; }
-          const settings = await SocialOSDB.getOrCreateSettings();
-          settings.google_oauth.client_id = clientId;
-          settings.google_oauth.client_secret = clientSecret || null;
-          await SocialOSDB.saveSettings(settings);
-          await SocialOSGoogle.startAuthFlow(clientId);
+          try {
+            await SocialOSGoogle.startAuthFlow();
+          } catch (err) {
+            SocialOSUI.toast(`Couldn't start Google sign-in: ${err instanceof Error ? err.message : String(err)}`, 'error');
+          }
           break;
         }
 
         case 'disconnect-google':
           SocialOSUI.confirm(
             'Disconnect Google',
-            'This will remove Google access. You can reconnect anytime.',
+            'This revokes SocialOS’s access at Google and removes the tokens from this device. You can reconnect anytime.',
             'Disconnect',
             async () => {
               await SocialOSGoogle.disconnect();
@@ -1797,13 +1789,31 @@ const SocialOS = (() => {
     // Open database
     await SocialOSDB.open();
 
+    // One-time hygiene: earlier versions stored the Google OAuth client
+    // secret in local settings (the token exchange now happens server-side
+    // in the google-oauth broker) — scrub it from any previously saved
+    // settings so it no longer exists anywhere client-side.
+    {
+      const s = /** @type {any} */ (await SocialOSDB.getSettings());
+      if (s?.google_oauth && ('client_secret' in s.google_oauth || 'client_id' in s.google_oauth)) {
+        delete s.google_oauth.client_secret;
+        delete s.google_oauth.client_id;
+        await SocialOSDB.saveSettings(s);
+      }
+    }
+
     // Check for OAuth callback — Google, LinkedIn, Reddit, and TikTok are
     // disambiguated by which flow's sessionStorage keys are present (see
     // js/linkedin.js / js/reddit.js / js/tiktok.js handleCallback() notes),
     // so trying all four in sequence is safe.
-    const oauthHandled = await SocialOSGoogle.handleCallback();
+    const googleCallback = await SocialOSGoogle.handleCallback();
+    const oauthHandled = googleCallback && googleCallback.status === 'connected';
     if (oauthHandled) {
       SocialOSUI.toast('Google connected!', 'success');
+    } else if (googleCallback && googleCallback.status === 'denied') {
+      SocialOSUI.toast('Google sign-in was cancelled — you can connect later in Settings.', 'info');
+    } else if (googleCallback) {
+      SocialOSUI.toast('Google sign-in didn\'t complete — please try again.', 'error');
     }
     const linkedinOauthHandled = await SocialOSLinkedIn.handleCallback();
     if (linkedinOauthHandled) {
