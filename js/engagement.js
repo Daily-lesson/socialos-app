@@ -30,7 +30,8 @@ const SocialOSEngagement = (() => {
     linkedin: 'linkedin_likes_per_day',
     instagram: 'instagram_likes_per_day',
     facebook: 'facebook_likes_per_day',
-    reddit: 'reddit_upvotes_per_day'
+    reddit: 'reddit_upvotes_per_day',
+    tiktok: 'tiktok_likes_per_day'
   };
 
   /**
@@ -102,7 +103,7 @@ const SocialOSEngagement = (() => {
    * Paste-a-comment entry point. Scrubs, categorizes, and (unless spam)
    * drafts a reply + 1 alternative. Saves an EngagementAction either way
    * so spam is still visible/skippable in the queue.
-   * @param {{platform: 'linkedin'|'facebook'|'instagram'|'reddit', comment_text: string, post_summary?: string, commenter_title?: string, commenter_handle?: string, commenter_name?: string}} input
+   * @param {{platform: 'linkedin'|'facebook'|'instagram'|'reddit'|'tiktok', comment_text: string, post_summary?: string, commenter_title?: string, commenter_handle?: string, commenter_name?: string}} input
    * @returns {Promise<EngagementAction>}
    */
   async function submitComment(input) {
@@ -175,7 +176,7 @@ const SocialOSEngagement = (() => {
    * Paste-a-post entry point. Scrubs, scores relevance 0-1. Only scores
    * > 0.7 join the like queue (BUILD_PLAN §7); lower scores are reported
    * back but not saved.
-   * @param {{platform: 'linkedin'|'facebook'|'instagram'|'reddit', post_url?: string, post_snippet: string}} input
+   * @param {{platform: 'linkedin'|'facebook'|'instagram'|'reddit'|'tiktok', post_url?: string, post_snippet: string}} input
    * @returns {Promise<{queued: boolean, score: number, reason: string, action: EngagementAction|null}>}
    */
   async function submitLikeCandidate(input) {

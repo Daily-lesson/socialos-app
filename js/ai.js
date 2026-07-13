@@ -184,7 +184,23 @@ Requirements:
 
 Return ONLY:
 TITLE: [title text]
-BODY: [body text]`
+BODY: [body text]`,
+
+    tiktok: `Write a TikTok caption and a short video concept based on the following content.
+
+Source content: {content}
+Angle: {angle}
+
+Requirements:
+- Caption: under 150 characters before any hashtags — the first 3–5 words must hook
+- Tone: energetic, authentic, first-person — TikTok rewards real over polished
+- Hashtags: 3–5, mixing one broad tag with niche robotics/engineering tags
+- 1–2 emoji maximum, used naturally
+- Video concept: one sentence describing a 15–30 second clip that fits the content (what's on screen, what's said or shown)
+
+Return ONLY:
+CAPTION: [caption text with hashtags]
+VIDEO: [one-sentence video concept]`
   };
 
   /**
@@ -251,6 +267,12 @@ BODY: [body text]`
           platformMetadata.reddit_title = titleMatch[1].trim();
         }
         platformMetadata.subreddit = subreddit;
+      }
+      if (platform === 'tiktok') {
+        const videoMatch = primaryText.match(/VIDEO:\s*(.+)/i);
+        if (videoMatch) {
+          platformMetadata.video_concept = videoMatch[1].trim();
+        }
       }
 
       /** @type {ScheduledPost} */
@@ -409,6 +431,64 @@ If a person's face is visible, include "faces_visible" in sensitivity_flags.`;
     }
   }
 
+  // ── Linked-profile analysis (onboarding Step 1, js/linker.js) ─────────
+
+  /**
+   * Infer a starting user profile from linked social accounts and whatever
+   * public activity data js/linker.js could fetch. Everything in the
+   * payload is already scrubbed by the caller. Runs WITHOUT
+   * buildSystemPrompt (no profile exists yet — this call creates the
+   * suggestions the profile is built from).
+   * @param {{linked_accounts: Object<string, string>, public_data: any[]}} payload
+   * @returns {Promise<{name: string, title: string, topics: string[], target_audience: Object<string, string>, tone: Object<string, string>, post_frequency_preference: string, activity_summary: Object<string, string>}|null>}
+   */
+  async function analyseLinkedProfiles(payload) {
+    const prompt = `A new user is setting up SocialOS, a personal social media manager. They linked these social accounts as the first onboarding step. Infer as much of their profile as the data supports, so the rest of setup arrives pre-filled.
+
+Linked accounts (platform -> handle): ${JSON.stringify(payload.linked_accounts)}
+Public activity data fetched from those profiles: ${JSON.stringify(payload.public_data)}
+
+Rules:
+- Infer the real display name from public data first (e.g. a TikTok display name), then from handle wording (e.g. "jane-doe" -> "Jane Doe"). Empty string if genuinely unknowable.
+- topics: infer from recent post titles and handle context; empty array if unknowable.
+- post_frequency_preference must reflect their EXISTING posting rhythm where measurable (posts_per_week from public data): >5/week -> "daily", 2-5 -> "moderate", <2 -> "conservative", no data -> "ai_recommended".
+- tone values must come from this vocabulary per platform:
+  linkedin: professional_thoughtful | authoritative | conversational_professional
+  facebook: conversational_warm | friendly | inspirational
+  instagram: casual_visual | playful | minimal
+  reddit: technical_peer | helpful_expert | casual_knowledgeable
+  tiktok: energetic_authentic | educational_quick | playful_casual
+- Only include platforms the user actually linked in target_audience, tone, and activity_summary.
+- activity_summary: one honest sentence per linked platform about their existing presence and posting/interaction frequency (say "no public data available" where nothing was fetched).
+
+Return JSON only — no explanation:
+{
+  "name": "",
+  "title": "",
+  "topics": [],
+  "target_audience": { "<platform>": "one-line audience description" },
+  "tone": { "<platform>": "tone_value" },
+  "post_frequency_preference": "ai_recommended|daily|moderate|conservative",
+  "activity_summary": { "<platform>": "one sentence" }
+}`;
+
+    const result = await callClaude(
+      'You are an onboarding analyst for a personal social media manager. Infer only what the data supports; never fabricate specifics. Return only valid JSON.',
+      prompt,
+      1500
+    );
+
+    try {
+      return JSON.parse(result);
+    } catch {
+      const jsonMatch = result.match(/\{[\s\S]*\}/);
+      if (jsonMatch) {
+        try { return JSON.parse(jsonMatch[0]); } catch { return null; }
+      }
+      return null;
+    }
+  }
+
   // ── Content scrubbing (secondary Claude check per Section 9) ──────────
 
   /**
@@ -464,7 +544,8 @@ Return JSON only:
     linkedin: '2–4 sentences, professional and thoughtful',
     facebook: '1–3 sentences, conversational and warm',
     instagram: '1–2 sentences, casual, optional emoji (max 1-2)',
-    reddit: 'can be longer than other platforms, peer-to-peer technical tone, markdown formatting welcome'
+    reddit: 'can be longer than other platforms, peer-to-peer technical tone, markdown formatting welcome',
+    tiktok: '1–2 short sentences, energetic and authentic, optional emoji (max 1-2)'
   };
 
   /**
@@ -618,6 +699,7 @@ Return ONLY the comment text.`;
     generatePostDrafts,
     analyseContent,
     analysePhoto,
+    analyseLinkedProfiles,
     scrubCheck,
     extractHashtags,
     categorizeComment,

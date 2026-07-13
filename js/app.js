@@ -137,7 +137,8 @@ const SocialOS = (() => {
     const googleConnected = await SocialOSGoogle.isConnected();
     const linkedinStatus = await SocialOSLinkedIn.getConnectionStatus();
     const redditStatus = await SocialOSReddit.getConnectionStatus();
-    SocialOSUI.renderSettings(settings, profile, googleConnected, linkedinStatus, redditStatus);
+    const tiktokStatus = await SocialOSTikTok.getConnectionStatus();
+    SocialOSUI.renderSettings(settings, profile, googleConnected, linkedinStatus, redditStatus, tiktokStatus);
   }
 
   async function updateBadge() {
@@ -157,6 +158,20 @@ const SocialOS = (() => {
 
     switch (step) {
       case 1: {
+        // Account linking (js/linker.js) — keep whatever the user typed;
+        // normalization happens at analyze/finish time.
+        d.linked_accounts = d.linked_accounts || {};
+        SocialOSLinker.LINKABLE_PLATFORMS.forEach(p => {
+          const el = /** @type {HTMLInputElement} */ (SocialOSUI.$(`ob-link-${p}`));
+          if (el) {
+            const v = el.value.trim();
+            if (v) d.linked_accounts[p] = v;
+            else delete d.linked_accounts[p];
+          }
+        });
+        break;
+      }
+      case 2: {
         const name = /** @type {HTMLInputElement} */ (SocialOSUI.$('ob-name'));
         const title = /** @type {HTMLInputElement} */ (SocialOSUI.$('ob-title'));
         const employer = /** @type {HTMLInputElement} */ (SocialOSUI.$('ob-employer'));
@@ -165,36 +180,36 @@ const SocialOS = (() => {
         if (employer) d.employer = employer.value.trim();
         break;
       }
-      case 2: {
+      case 3: {
         d.goals = d.goals || [];
         break;
       }
-      case 3: {
+      case 4: {
         d.target_audience = d.target_audience || {};
-        ['linkedin', 'facebook', 'instagram', 'reddit'].forEach(p => {
+        ['linkedin', 'facebook', 'instagram', 'reddit', 'tiktok'].forEach(p => {
           const el = /** @type {HTMLInputElement} */ (SocialOSUI.$(`ob-aud-${p}`));
           if (el) d.target_audience[p] = el.value.trim();
         });
         break;
       }
-      case 5: {
+      case 6: {
         // Tones collected via chip clicks
         break;
       }
-      case 6: {
+      case 7: {
         const checked = /** @type {HTMLInputElement} */ (document.querySelector('input[name="frequency"]:checked'));
         if (checked) d.post_frequency_preference = checked.value;
         break;
       }
-      case 7: {
+      case 8: {
         const textarea = /** @type {HTMLTextAreaElement} */ (SocialOSUI.$('ob-blackout'));
         if (textarea) {
           d.blackout_dates = textarea.value.split('\n').map(s => s.trim()).filter(Boolean);
         }
         break;
       }
-      // Step 9 (AI engine) has nothing to collect — the proxy is baked in.
-      case 10: {
+      // Step 10 (AI engine) has nothing to collect — the proxy is baked in.
+      case 11: {
         const clientId = /** @type {HTMLInputElement} */ (SocialOSUI.$('ob-google-client-id'));
         const clientSecret = /** @type {HTMLInputElement} */ (SocialOSUI.$('ob-google-client-secret'));
         if (clientId) d.google_client_id = clientId.value.trim();
@@ -213,7 +228,7 @@ const SocialOS = (() => {
     const d = state.onboardingData;
 
     switch (step) {
-      case 1:
+      case 2:
         if (!d.name || !d.title) {
           SocialOSUI.toast('Please enter your name and title.', 'warning');
           return false;
@@ -230,6 +245,15 @@ const SocialOS = (() => {
   async function finishOnboarding() {
     const d = state.onboardingData;
 
+    // Normalize whatever was typed on the linking step (Step 1) so the
+    // profile stores clean handles even if "Analyze" was never tapped.
+    /** @type {Object<string, string>} */
+    const linkedAccounts = {};
+    for (const [p, raw] of Object.entries(d.linked_accounts || {})) {
+      const h = SocialOSLinker.normalizeHandle(p, /** @type {string} */ (raw));
+      if (h) linkedAccounts[p] = h;
+    }
+
     /** @type {UserProfile} */
     const profile = {
       name: d.name || '',
@@ -241,7 +265,8 @@ const SocialOS = (() => {
         linkedin: 'Engineering managers, robotics professionals',
         facebook: 'Industry peers, colleagues',
         instagram: 'Tech community, robotics enthusiasts',
-        reddit: 'Engineers, robotics hobbyists'
+        reddit: 'Engineers, robotics hobbyists',
+        tiktok: 'Tech-curious viewers, makers, engineering students'
       },
       topics: d.topics || ['robotics', 'autonomous_systems', 'drones', 'manufacturing', 'iot'],
       off_limits_topics: d.off_limits_topics || ['salary', 'client_names', 'facility_locations', 'proprietary_specs', 'family', 'personal_life'],
@@ -249,10 +274,13 @@ const SocialOS = (() => {
         linkedin: 'professional_thoughtful',
         facebook: 'conversational_warm',
         instagram: 'casual_visual',
-        reddit: 'technical_peer'
+        reddit: 'technical_peer',
+        tiktok: 'energetic_authentic'
       },
       post_frequency_preference: d.post_frequency_preference || 'ai_recommended',
       blackout_dates: d.blackout_dates || [],
+      linked_accounts: linkedAccounts,
+      social_activity: d.social_activity || {},
       onboarding_complete: true,
       created_at: SocialOSUtils.now(),
       updated_at: SocialOSUtils.now()
@@ -264,7 +292,18 @@ const SocialOS = (() => {
     const settings = await SocialOSDB.getOrCreateSettings();
     if (d.proxy_url) settings.proxy_url = d.proxy_url;
     if (d.proxy_secret) settings.proxy_secret = d.proxy_secret;
-    settings.onboarding_step = 11;
+    settings.onboarding_step = 12;
+
+    // Seed platform connection handles from the linked accounts so
+    // Settings shows them even before any OAuth connect happens.
+    for (const [p, handle] of Object.entries(linkedAccounts)) {
+      if (!settings.platform_connections[p]) {
+        settings.platform_connections[p] = { connected: false, handle: null, access_token: null };
+      }
+      if (!settings.platform_connections[p].handle) {
+        settings.platform_connections[p].handle = handle;
+      }
+    }
     await SocialOSDB.saveSettings(settings);
 
     // Add employer to scrub rules
@@ -297,7 +336,7 @@ const SocialOS = (() => {
 
     const profile = await SocialOSDB.getProfile();
     const blackouts = new Set(profile?.blackout_dates || []);
-    const platforms = ['linkedin', 'facebook', 'instagram', 'reddit'];
+    const platforms = ['linkedin', 'facebook', 'instagram', 'reddit', 'tiktok'];
     const today = new Date();
     today.setHours(0, 0, 0, 0);
 
@@ -591,11 +630,11 @@ const SocialOS = (() => {
       // Multi-select toggle
       const step = state.onboardingStep;
       let arr;
-      if (step === 2) {
+      if (step === 3) {
         arr = state.onboardingData.goals = state.onboardingData.goals || [];
-      } else if (step === 4) {
+      } else if (step === 5) {
         arr = state.onboardingData.topics = state.onboardingData.topics || [];
-      } else if (step === 8) {
+      } else if (step === 9) {
         arr = state.onboardingData.off_limits_topics = state.onboardingData.off_limits_topics || [];
       }
       if (arr) {
@@ -682,7 +721,7 @@ const SocialOS = (() => {
         case 'ob-next':
           collectOnboardingData();
           if (!validateOnboardingStep()) break;
-          state.onboardingStep = Math.min(state.onboardingStep + 1, 11);
+          state.onboardingStep = Math.min(state.onboardingStep + 1, 12);
           SocialOSUI.renderOnboardingStep(state.onboardingStep, state.onboardingData);
           break;
 
@@ -696,6 +735,58 @@ const SocialOS = (() => {
           collectOnboardingData();
           await finishOnboarding();
           break;
+
+        // ── Account linking (onboarding Step 1, js/linker.js) ──────────
+        case 'analyze-profiles': {
+          collectOnboardingData();
+          const accounts = state.onboardingData.linked_accounts || {};
+          if (!Object.values(accounts).some(Boolean)) {
+            SocialOSUI.toast('Enter at least one profile handle or URL first.', 'warning');
+            break;
+          }
+          SocialOSUI.loading(true, 'Reading your public profiles…');
+          try {
+            const result = await SocialOSLinker.analyzeProfiles(accounts);
+            const d = state.onboardingData;
+            d.linked_accounts = result.linked_accounts;
+            d.social_activity = result.social_activity;
+
+            // Pre-fill the later steps; never overwrite something the user
+            // already typed or picked.
+            const s = result.suggestions || {};
+            if (s.name && !d.name) d.name = s.name;
+            if (s.title && !d.title) d.title = s.title;
+            if (s.topics && !(d.topics || []).length) d.topics = s.topics;
+            if (s.post_frequency_preference && !d.post_frequency_preference) {
+              d.post_frequency_preference = s.post_frequency_preference;
+            }
+            if (s.target_audience) {
+              d.target_audience = d.target_audience || {};
+              for (const [p, aud] of Object.entries(s.target_audience)) {
+                if (!d.target_audience[p]) d.target_audience[p] = aud;
+              }
+            }
+            if (s.tone) {
+              d.tone = d.tone || {};
+              for (const [p, t] of Object.entries(s.tone)) {
+                if (!d.tone[p]) d.tone[p] = t;
+              }
+            }
+
+            SocialOSUI.renderOnboardingStep(state.onboardingStep, d);
+            const extracted = Object.keys(result.social_activity).length;
+            SocialOSUI.toast(
+              extracted
+                ? `Linked ${Object.keys(result.linked_accounts).length} account${Object.keys(result.linked_accounts).length > 1 ? 's' : ''} — the next steps are pre-filled for you.`
+                : 'Accounts linked. Public data was limited, so review the pre-filled steps.',
+              'success'
+            );
+          } catch (/** @type {any} */ err) {
+            SocialOSUI.toast(`Could not analyze profiles: ${err.message}`, 'error');
+          }
+          SocialOSUI.loading(false);
+          break;
+        }
 
         // ── Custom topic / off-limit add ───────────────
         case 'add-custom-topic': {
@@ -854,6 +945,39 @@ const SocialOS = (() => {
             async () => {
               await SocialOSReddit.disconnect();
               SocialOSUI.toast('Reddit disconnected.', 'info');
+              await renderSettings();
+            }
+          );
+          break;
+
+        // ── TikTok connect (js/tiktok.js — profile connect) ────────────
+        case 'connect-tiktok': {
+          const clientKey = /** @type {HTMLInputElement} */ (SocialOSUI.$('set-tiktok-client-key'))?.value?.trim();
+          const clientSecret = /** @type {HTMLInputElement} */ (SocialOSUI.$('set-tiktok-client-secret'))?.value?.trim();
+          if (!clientKey || !clientSecret) { SocialOSUI.toast('Enter TikTok Client Key and Secret first.', 'warning'); break; }
+          const settings = await SocialOSDB.getOrCreateSettings();
+          if (!settings.social_relay_url && !settings.platform_connections.linkedin.relay_url) {
+            SocialOSUI.toast('Enter the shared CORS relay URL first — see docs/ROADMAP.md §2.', 'warning');
+            break;
+          }
+          if (!settings.platform_connections.tiktok) {
+            settings.platform_connections.tiktok = /** @type {any} */ ({ connected: false, handle: null, access_token: null });
+          }
+          /** @type {any} */ (settings.platform_connections.tiktok).client_key = clientKey;
+          settings.platform_connections.tiktok.client_secret = clientSecret;
+          await SocialOSDB.saveSettings(settings);
+          await SocialOSTikTok.startAuthFlow(clientKey);
+          break;
+        }
+
+        case 'disconnect-tiktok':
+          SocialOSUI.confirm(
+            'Disconnect TikTok',
+            'This will remove TikTok access. You can reconnect anytime.',
+            'Disconnect',
+            async () => {
+              await SocialOSTikTok.disconnect();
+              SocialOSUI.toast('TikTok disconnected.', 'info');
               await renderSettings();
             }
           );
@@ -1673,10 +1797,10 @@ const SocialOS = (() => {
     // Open database
     await SocialOSDB.open();
 
-    // Check for OAuth callback — Google, LinkedIn, and Reddit are
+    // Check for OAuth callback — Google, LinkedIn, Reddit, and TikTok are
     // disambiguated by which flow's sessionStorage keys are present (see
-    // js/linkedin.js / js/reddit.js handleCallback() notes), so trying all
-    // three in sequence is safe.
+    // js/linkedin.js / js/reddit.js / js/tiktok.js handleCallback() notes),
+    // so trying all four in sequence is safe.
     const oauthHandled = await SocialOSGoogle.handleCallback();
     if (oauthHandled) {
       SocialOSUI.toast('Google connected!', 'success');
@@ -1688,6 +1812,10 @@ const SocialOS = (() => {
     const redditOauthHandled = await SocialOSReddit.handleCallback();
     if (redditOauthHandled) {
       SocialOSUI.toast('Reddit connected!', 'success');
+    }
+    const tiktokOauthHandled = await SocialOSTikTok.handleCallback();
+    if (tiktokOauthHandled) {
+      SocialOSUI.toast('TikTok connected!', 'success');
     }
 
     // Restore onboarding state if returning from OAuth redirect

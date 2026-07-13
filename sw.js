@@ -5,7 +5,7 @@
  * Paths are relative so the app works from a subpath (e.g. GitHub Pages).
  */
 
-const CACHE_NAME = 'socialos-v8'; // v8: self-healing error capture + feedback relay (js/self-healing.js)
+const CACHE_NAME = 'socialos-v9'; // v9: TikTok platform (js/tiktok.js) + account-linking onboarding (js/linker.js)
 const SHELL_ASSETS = [
   './',
   './index.html',
@@ -17,6 +17,8 @@ const SHELL_ASSETS = [
   './js/google.js',
   './js/linkedin.js',
   './js/reddit.js',
+  './js/tiktok.js',
+  './js/linker.js',
   './js/pm.js',
   './js/self-healing.js',
   './js/ui.js',
