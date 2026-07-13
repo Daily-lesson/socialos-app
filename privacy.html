@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#06060B">
+  <meta name="description" content="SocialOS Privacy Policy — how the app handles your data">
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'self'; script-src 'none'; style-src 'unsafe-inline'; img-src 'self'">
+  <title>Privacy Policy — SocialOS</title>
+  <link rel="icon" type="image/png" sizes="32x32" href="icons/favicon-32.png">
+  <style>
+    :root { color-scheme: dark; }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      background: #06060B; color: #E8E8F0;
+      font: 16px/1.65 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      -webkit-font-smoothing: antialiased;
+    }
+    main { max-width: 760px; margin: 0 auto; padding: 48px 20px 80px; }
+    h1 { font-size: 2rem; line-height: 1.2; margin-bottom: 8px; }
+    h2 { font-size: 1.25rem; margin: 36px 0 12px; color: #FFFFFF; }
+    h3 { font-size: 1.05rem; margin: 24px 0 8px; color: #FFFFFF; }
+    p, li { color: #B8B8C8; margin-bottom: 12px; }
+    ul { padding-left: 22px; margin-bottom: 12px; }
+    li { margin-bottom: 6px; }
+    a { color: #7C8CFF; }
+    strong { color: #E8E8F0; }
+    .meta { color: #8888A0; font-size: 0.9rem; margin-bottom: 32px; }
+    .summary {
+      background: #101018; border: 1px solid #26263A; border-radius: 12px;
+      padding: 18px 20px; margin: 24px 0;
+    }
+    .summary p:last-child { margin-bottom: 0; }
+    .back { display: inline-block; margin-bottom: 28px; color: #8888A0; text-decoration: none; }
+    .back:hover { color: #E8E8F0; }
+    code { background: #16161f; border-radius: 4px; padding: 1px 5px; font-size: 0.9em; }
+  </style>
+</head>
+<body>
+  <main>
+    <a class="back" href="index.html">&larr; Back to SocialOS</a>
+    <h1>Privacy Policy</h1>
+    <p class="meta">SocialOS &mdash; effective July 13, 2026</p>
+
+    <div class="summary">
+      <p><strong>The short version:</strong> SocialOS is a local-first app. Your profile,
+      content, tokens, and settings are stored in your own browser on your own device
+      &mdash; there is no SocialOS account and no server-side database of your content.
+      Data leaves your device only for the specific purposes listed below, and nothing
+      is ever posted to any social platform without your explicit approval.</p>
+    </div>
+
+    <h2>1. What SocialOS stores, and where</h2>
+    <p>Everything you enter or import is stored <strong>locally in your browser</strong>
+    (IndexedDB) on the device you use:</p>
+    <ul>
+      <li>Profile details you type during setup (name, title, employer, goals, audience,
+        topics, tone preferences, blackout dates, off-limits topics).</li>
+      <li>Social profile handles you link, and any publicly available profile information
+        fetched for them.</li>
+      <li>Content you import &mdash; uploads from your device, files read from Google
+        Drive, photos you pick from Google Photos, and text or links you paste.</li>
+      <li>Drafted posts, calendars, project notes, and engagement items.</li>
+      <li>OAuth access/refresh tokens for services you connect (Google and, if
+        configured, LinkedIn, Reddit, or TikTok).</li>
+    </ul>
+    <p>Clearing the app's site data in your browser, or using
+    <strong>Settings &rarr; Reset All Data</strong>, permanently deletes all of it.</p>
+
+    <h2>2. When data leaves your device</h2>
+
+    <h3>AI drafting and analysis (Anthropic Claude)</h3>
+    <p>To draft posts, analyse content, and suggest replies, SocialOS sends the relevant
+    text or image to Anthropic's Claude API through a small relay function we operate
+    (hosted on Supabase). Before anything is sent, a <strong>local scrubbing step</strong>
+    removes your employer name, client names, facility locations, proprietary terms,
+    financial figures, and any custom blocked terms you configure. The relay holds the
+    API key, forwards your request, and <strong>stores nothing</strong>. Anthropic
+    processes the request under its own
+    <a href="https://www.anthropic.com/legal/privacy" rel="noopener">privacy policy</a>.</p>
+
+    <h3>Google Drive and Google Photos</h3>
+    <p>Connecting Google is optional. If you tap "Sign in with Google," you authenticate
+    on Google's own page &mdash; SocialOS never sees your Google password. The app requests
+    two <strong>read-only</strong> scopes:</p>
+    <ul>
+      <li><code>drive.readonly</code> &mdash; lets SocialOS read your Drive files to suggest
+        post content. It cannot create, modify, share, or delete anything in your Drive.</li>
+      <li><code>photospicker.mediaitems.readonly</code> &mdash; lets SocialOS receive
+        <strong>only the photos and videos you explicitly select</strong> in Google's
+        picker. It can never browse or scan your photo library.</li>
+    </ul>
+    <p>How this data is handled:</p>
+    <ul>
+      <li>Your Google tokens are stored only on your device. The one-time sign-in
+        handshake (exchanging Google's authorization code for tokens, refreshing them,
+        and revoking them) passes through a stateless server function we operate, which
+        keeps the app's OAuth client secret server-side and <strong>stores no tokens and
+        no data</strong>.</li>
+      <li>File and photo content read from Google is stored locally on your device, and
+        excerpts are sent (after the scrubbing step above) to the AI service for analysis
+        as described in the previous section.</li>
+      <li>Google user data is never sold, never shared with any other third party, never
+        used for advertising, and never used for any purpose other than the
+        content-suggestion features you see in the app.</li>
+      <li><strong>Disconnecting</strong> in Settings revokes SocialOS's access with Google
+        and deletes the tokens from your device. You can also revoke access anytime at
+        <a href="https://myaccount.google.com/permissions" rel="noopener">myaccount.google.com/permissions</a>.</li>
+    </ul>
+    <p>SocialOS's use and transfer of information received from Google APIs adheres to the
+    <a href="https://developers.google.com/terms/api-services-user-data-policy" rel="noopener">Google
+    API Services User Data Policy</a>, including the <strong>Limited Use</strong> requirements.</p>
+
+    <h3>Social platforms (LinkedIn, Reddit, TikTok, Facebook, Instagram)</h3>
+    <ul>
+      <li>Profile linking during setup reads <strong>publicly available</strong> profile
+        data only (for example, public Reddit posts or a public TikTok display name).</li>
+      <li>If you connect a platform account for direct posting, you authenticate on that
+        platform's own page and its tokens are stored only on your device. Because these
+        platforms' APIs don't accept direct browser calls, requests pass through a
+        stateless relay function that forwards them and stores nothing.</li>
+      <li><strong>Nothing is ever posted, liked, or replied to on your behalf without your
+        explicit approval of that specific item.</strong></li>
+    </ul>
+
+    <h3>Automatic error reports and feedback</h3>
+    <p>If the app hits a bug, a technical error report (error message, stack trace, page
+    URL, browser user-agent string, and app version) is sent to our error-tracking service
+    (Sentry) so we can fix it. These reports contain <strong>no content, tokens, profile
+    data, or anything you've imported</strong>. Feedback you choose to submit through the
+    in-app feedback button is stored so we can act on it.</p>
+
+    <h3>Infrastructure</h3>
+    <p>Like any website, the servers that deliver the app can see standard request
+    metadata (such as your IP address) in their logs: GitHub Pages serves the app's
+    files, Supabase runs the relay functions above, and Google Fonts serves the app's
+    typefaces. None of these receive your app content.</p>
+
+    <h2>3. What SocialOS does not do</h2>
+    <ul>
+      <li>No SocialOS account, sign-up, or server-side profile.</li>
+      <li>No advertising, no analytics trackers, no tracking cookies.</li>
+      <li>No selling or sharing of your data with third parties.</li>
+      <li>No posting without your explicit per-item approval.</li>
+    </ul>
+
+    <h2>4. Data retention and deletion</h2>
+    <p>Because your data lives on your device, you control it directly:
+    <strong>Settings &rarr; Reset All Data</strong> erases everything the app has stored;
+    disconnecting a service revokes and deletes its tokens; clearing the site's data in
+    your browser has the same effect as Reset. We retain nothing server-side to delete,
+    other than transient function logs and the error reports described above.</p>
+
+    <h2>5. Children</h2>
+    <p>SocialOS is not directed at children under 13 and should not be used by them.</p>
+
+    <h2>6. Changes and contact</h2>
+    <p>If this policy changes, the updated version will be published at this address with
+    a new effective date. Questions or requests:
+    <a href="mailto:scoty65@gmail.com">scoty65@gmail.com</a>.</p>
+  </main>
+</body>
+</html>

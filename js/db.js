@@ -200,7 +200,8 @@
  * @typedef {Object} AppSettings
  * @property {string} proxy_url
  * @property {string} proxy_secret
- * @property {{access_token: string|null, refresh_token: string|null, expires_at: string|null, scopes: string[], client_id: string|null, client_secret: string|null}} google_oauth
+ * @property {{access_token: string|null, refresh_token: string|null, expires_at: string|null, scopes: string[]}} google_oauth - Tokens only. The OAuth client ID/secret live server-side in the `google-oauth` Edge Function (js/google.js header) — legacy client_id/client_secret fields in previously saved settings are scrubbed at boot (js/app.js init).
+ * @property {string} [google_auth_url] - Google OAuth broker Edge Function URL. Baked-in default (DEFAULT_GOOGLE_AUTH_URL); overridable for local dev, like proxy_url.
  * @property {Object<string, PlatformConnection>} platform_connections
  * @property {string|null} social_relay_url - Shared stateless CORS relay Edge Function URL used by both js/linkedin.js and js/reddit.js (see docs/ROADMAP.md §2). Neither LinkedIn's nor Reddit's OAuth/REST endpoints send CORS headers for browser callers, so every call to either platform is relayed through this one function.
  * @property {{approval_reminder_hours_before: number, engagement_batch_time: string, quiet_hours_start: string, quiet_hours_end: string}} notification_preferences
@@ -386,18 +387,22 @@ const SocialOSDB = (() => {
   // (GitHub Pages), so no secret is needed or shipped in this public code.
   const DEFAULT_PROXY_URL = 'https://qjnvihdrzeyzkjbmzmyf.supabase.co/functions/v1/socialos-proxy';
 
+  // Google OAuth broker — same baked-in, origin-authorized model as the AI
+  // proxy above. Holds the Google OAuth client ID + secret server-side so
+  // the user just taps "Sign in with Google" (js/google.js header).
+  const DEFAULT_GOOGLE_AUTH_URL = 'https://qjnvihdrzeyzkjbmzmyf.supabase.co/functions/v1/google-oauth';
+
   /** @returns {AppSettings} */
   function defaultSettings() {
     return {
       proxy_url: DEFAULT_PROXY_URL,
       proxy_secret: '',
+      google_auth_url: DEFAULT_GOOGLE_AUTH_URL,
       google_oauth: {
         access_token: null,
         refresh_token: null,
         expires_at: null,
-        scopes: [],
-        client_id: null,
-        client_secret: null
+        scopes: []
       },
       platform_connections: {
         // Phase 5 (LinkedIn + Reddit, see docs/ROADMAP.md §5): both extended
@@ -610,6 +615,7 @@ const SocialOSDB = (() => {
 
   return {
     STORES,
+    DEFAULT_GOOGLE_AUTH_URL,
     open,
     get,
     put,

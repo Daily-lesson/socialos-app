@@ -5,10 +5,12 @@
  * Paths are relative so the app works from a subpath (e.g. GitHub Pages).
  */
 
-const CACHE_NAME = 'socialos-v9'; // v9: TikTok platform (js/tiktok.js) + account-linking onboarding (js/linker.js)
+const CACHE_NAME = 'socialos-v10'; // v10: one-tap Google sign-in (OAuth broker) + privacy/terms pages
 const SHELL_ASSETS = [
   './',
   './index.html',
+  './privacy.html',
+  './terms.html',
   './css/app.css',
   './js/app.js',
   './js/ai.js',

@@ -3,7 +3,15 @@
 /**
  * SocialOS — Google OAuth PKCE + Drive/Photos Picker API
  * Phase 1: Drive readonly. Phase 2: Photos Picker readonly (BUILD_PLAN §7).
- * No backend needed — PKCE flow runs entirely in the browser.
+ *
+ * Auth model (docs/API_KEYS_SETUP.md §2): the browser runs the user-facing
+ * part of the flow — consent redirect, PKCE verifier, `state` CSRF check —
+ * and every call that needs the OAuth client_secret (code exchange, token
+ * refresh, revocation) goes through the `google-oauth` Supabase Edge
+ * Function ("the broker"), which holds the client ID + secret as server-side
+ * secrets. The user just taps "Sign in with Google" — no credentials are
+ * ever typed into or stored in the app, and the secret never reaches the
+ * browser. Tokens live only in IndexedDB on this device.
  */
 
 const SocialOSGoogle = (() => {
@@ -11,13 +19,52 @@ const SocialOSGoogle = (() => {
 
   const SCOPES_PHASE1 = 'https://www.googleapis.com/auth/drive.readonly';
   const SCOPES_PHASE2 = 'https://www.googleapis.com/auth/photospicker.mediaitems.readonly';
-  // Requested together at onboarding step 10 — one consent screen covers
+  // Requested together at onboarding step 11 — one consent screen covers
   // both Drive scanning and the Photos Picker, so Phase 2 needs no re-auth.
   const SCOPES = `${SCOPES_PHASE1} ${SCOPES_PHASE2}`;
   const AUTH_ENDPOINT = 'https://accounts.google.com/o/oauth2/v2/auth';
-  const TOKEN_ENDPOINT = 'https://oauth2.googleapis.com/token';
   const PICKER_API = 'https://photospicker.googleapis.com/v1';
   const REDIRECT_URI = location.origin + location.pathname;
+
+  const STORAGE_VERIFIER = 'socialos_pkce_verifier';
+  const STORAGE_STATE = 'socialos_google_state';
+
+  // ── Broker (google-oauth Edge Function) ───────────────────────────────
+
+  /**
+   * Resolve the broker URL — stored settings first (lets local dev point
+   * elsewhere), baked-in default otherwise, same policy as the AI proxy.
+   * @param {AppSettings|null} settings
+   * @returns {string}
+   */
+  function brokerUrl(settings) {
+    return settings?.google_auth_url || SocialOSDB.DEFAULT_GOOGLE_AUTH_URL;
+  }
+
+  /**
+   * Call the broker. Throws with the broker's error message on failure so
+   * callers can surface something actionable ("not configured yet" etc.).
+   * @param {Object<string, any>} payload
+   * @returns {Promise<any>}
+   */
+  async function brokerCall(payload) {
+    const settings = await SocialOSDB.getSettings();
+    /** @type {Object<string, string>} */
+    const headers = { 'Content-Type': 'application/json' };
+    // Browsers authorize by Origin; the optional secret covers local dev.
+    if (settings?.proxy_secret) headers['X-SocialOS-Secret'] = settings.proxy_secret;
+
+    const response = await fetch(brokerUrl(settings), {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(payload)
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw new Error(data.error_description || data.error || `Google auth service error (${response.status})`);
+    }
+    return data;
+  }
 
   // ── PKCE helpers ──────────────────────────────────────────────────────
 
@@ -58,17 +105,23 @@ const SocialOSGoogle = (() => {
 
   /**
    * Start the Google OAuth PKCE flow.
-   * Redirects the browser to Google's consent screen.
-   * @param {string} clientId - Google OAuth client ID
+   * Fetches the (public) client ID from the broker, then redirects the
+   * browser to Google's own sign-in/consent page. Throws if the broker is
+   * unreachable or not configured — callers surface the message.
    * @returns {Promise<void>}
    */
-  async function startAuthFlow(clientId) {
+  async function startAuthFlow() {
+    const { client_id: clientId } = await brokerCall({ action: 'config' });
+    if (!clientId) throw new Error('Google sign-in is not configured yet.');
+
     const verifier = generateVerifier();
     const challenge = await generateChallenge(verifier);
+    // Random `state` ties the callback to this browser session (CSRF
+    // protection, RFC 6749 §10.12) — verified in handleCallback.
+    const state = generateVerifier();
 
-    // Store verifier for the callback
-    sessionStorage.setItem('socialos_pkce_verifier', verifier);
-    sessionStorage.setItem('socialos_oauth_client_id', clientId);
+    sessionStorage.setItem(STORAGE_VERIFIER, verifier);
+    sessionStorage.setItem(STORAGE_STATE, state);
 
     const params = new URLSearchParams({
       client_id: clientId,
@@ -78,106 +131,83 @@ const SocialOSGoogle = (() => {
       code_challenge: challenge,
       code_challenge_method: 'S256',
       access_type: 'offline',
-      prompt: 'consent'
+      prompt: 'consent',
+      state
     });
 
     window.location.href = `${AUTH_ENDPOINT}?${params.toString()}`;
   }
 
   /**
-   * Handle the OAuth callback — exchange authorization code for tokens.
-   * Call this on page load when URL contains ?code= parameter.
-   * @returns {Promise<boolean>} true if tokens were obtained
+   * Handle the OAuth callback — verify state, then exchange the
+   * authorization code for tokens via the broker.
+   * Call this on page load. Returns false when the current URL isn't a
+   * Google callback for this app (no stored state), so the other platforms'
+   * handlers can safely run after it.
+   * @returns {Promise<false|{status: 'connected'|'denied'|'failed', reason?: string}>}
    */
   async function handleCallback() {
+    const storedState = sessionStorage.getItem(STORAGE_STATE);
+    const verifier = sessionStorage.getItem(STORAGE_VERIFIER);
+    if (!storedState || !verifier) return false;
+
     const params = new URLSearchParams(window.location.search);
     const code = params.get('code');
-    if (!code) return false;
+    const error = params.get('error');
+    if (!code && !error) return false;
 
-    const verifier = sessionStorage.getItem('socialos_pkce_verifier');
-    const clientId = sessionStorage.getItem('socialos_oauth_client_id');
-    if (!verifier || !clientId) return false;
+    // One-shot: whatever happens next, this callback attempt is consumed.
+    sessionStorage.removeItem(STORAGE_VERIFIER);
+    sessionStorage.removeItem(STORAGE_STATE);
+    window.history.replaceState({}, document.title, REDIRECT_URI);
+
+    if (error) {
+      // e.g. access_denied — the user backed out at Google. Not a failure.
+      return { status: error === 'access_denied' ? 'denied' : 'failed', reason: error };
+    }
+    if (params.get('state') !== storedState) {
+      // State mismatch = this code wasn't requested by this session. Do not
+      // exchange it (CSRF / injected-code protection).
+      return { status: 'failed', reason: 'state_mismatch' };
+    }
 
     try {
-      // Google's token endpoint requires client_secret for "Web application"
-      // OAuth clients even with PKCE. The secret is stored locally (IndexedDB)
-      // like the proxy secret — see docs/API_KEYS_SETUP.md for the tradeoff.
-      const preSettings = await SocialOSDB.getSettings();
-      const body = new URLSearchParams({
+      const tokens = await brokerCall({
+        action: 'exchange',
         code,
-        client_id: clientId,
-        redirect_uri: REDIRECT_URI,
-        grant_type: 'authorization_code',
-        code_verifier: verifier
-      });
-      if (preSettings?.google_oauth?.client_secret) {
-        body.set('client_secret', preSettings.google_oauth.client_secret);
-      }
-
-      const response = await fetch(TOKEN_ENDPOINT, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        body
+        code_verifier: verifier,
+        redirect_uri: REDIRECT_URI
       });
 
-      if (!response.ok) return false;
-
-      const tokens = await response.json();
-
-      // Save tokens to settings
       const settings = await SocialOSDB.getOrCreateSettings();
       settings.google_oauth = {
         access_token: tokens.access_token,
-        refresh_token: tokens.refresh_token || settings.google_oauth.refresh_token,
+        refresh_token: tokens.refresh_token || settings.google_oauth?.refresh_token || null,
         expires_at: new Date(Date.now() + tokens.expires_in * 1000).toISOString(),
-        scopes: (tokens.scope || SCOPES).split(' '),
-        client_id: clientId,
-        client_secret: settings.google_oauth.client_secret || null
+        scopes: (tokens.scope || SCOPES).split(' ')
       };
       await SocialOSDB.saveSettings(settings);
 
-      // Clean up
-      sessionStorage.removeItem('socialos_pkce_verifier');
-      sessionStorage.removeItem('socialos_oauth_client_id');
-
-      // Remove code from URL without reload
-      window.history.replaceState({}, document.title, REDIRECT_URI);
-
-      return true;
-    } catch {
-      return false;
+      return { status: 'connected' };
+    } catch (err) {
+      return { status: 'failed', reason: err instanceof Error ? err.message : String(err) };
     }
   }
 
   /**
-   * Refresh the access token using the refresh token.
+   * Refresh the access token via the broker using the refresh token.
    * @returns {Promise<boolean>}
    */
   async function refreshToken() {
     const settings = await SocialOSDB.getSettings();
-    if (!settings?.google_oauth?.refresh_token || !settings.google_oauth.client_id) {
-      return false;
-    }
+    if (!settings?.google_oauth?.refresh_token) return false;
 
     try {
-      const body = new URLSearchParams({
-        client_id: settings.google_oauth.client_id,
-        grant_type: 'refresh_token',
+      const tokens = await brokerCall({
+        action: 'refresh',
         refresh_token: settings.google_oauth.refresh_token
       });
-      if (settings.google_oauth.client_secret) {
-        body.set('client_secret', settings.google_oauth.client_secret);
-      }
 
-      const response = await fetch(TOKEN_ENDPOINT, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        body
-      });
-
-      if (!response.ok) return false;
-
-      const tokens = await response.json();
       settings.google_oauth.access_token = tokens.access_token;
       settings.google_oauth.expires_at = new Date(Date.now() + tokens.expires_in * 1000).toISOString();
       await SocialOSDB.saveSettings(settings);
@@ -219,18 +249,24 @@ const SocialOSGoogle = (() => {
   }
 
   /**
-   * Disconnect Google (clear tokens).
+   * Disconnect Google: revoke the grant at Google (best-effort, via the
+   * broker — revoking either token invalidates the whole grant), then clear
+   * everything locally. Local clearing happens regardless, so "Disconnect"
+   * always leaves the app signed out even if the revoke call fails offline;
+   * the grant also remains visible/removable at myaccount.google.com.
    * @returns {Promise<void>}
    */
   async function disconnect() {
     const settings = await SocialOSDB.getOrCreateSettings();
+    const token = settings.google_oauth?.refresh_token || settings.google_oauth?.access_token;
+    if (token) {
+      try { await brokerCall({ action: 'revoke', token }); } catch { /* best-effort */ }
+    }
     settings.google_oauth = {
       access_token: null,
       refresh_token: null,
       expires_at: null,
-      scopes: [],
-      client_id: null,
-      client_secret: null
+      scopes: []
     };
     await SocialOSDB.saveSettings(settings);
   }
