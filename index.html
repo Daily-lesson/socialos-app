@@ -93,7 +93,7 @@
     <!-- ═══ Main Navigation — bottom bar on mobile, sidebar on desktop ═══ -->
     <nav id="main-nav" style="display:none" aria-label="Main">
       <div class="nav-brand" aria-hidden="true">
-        <span class="nav-brand-mark">S</span>
+        <img class="nav-brand-mark" src="icons/logo.svg" alt="" width="34" height="34">
         <span class="nav-brand-name">Social<em>OS</em></span>
       </div>
 
@@ -159,7 +159,16 @@
     <div id="bottom-sheet-content"></div>
   </div>
 
+  <!-- Feedback: persistent entry point (self-healing feedback loop) -->
+  <button id="feedback-fab" class="feedback-fab" data-action="open-feedback" aria-label="Send feedback">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a8 8 0 0 1-8 8H4l2-3a8 8 0 1 1 15-5z"/><path d="M9 11h6M9 14h3"/></svg>
+  </button>
+
   <!-- ═══ Scripts (order matters — no modules, no bundler) ═══ -->
+  <!-- self-healing.js has no dependencies and installs window.onerror /
+       unhandledrejection from SocialOS.init(); it must load first so early
+       errors during boot are still catchable. -->
+  <script src="js/self-healing.js"></script>
   <script src="js/utils.js"></script>
   <script src="js/db.js"></script>
   <script src="js/ai.js"></script>

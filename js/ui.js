@@ -146,6 +146,47 @@ const SocialOSUI = (() => {
     sheet.addEventListener('click', handleClick);
   }
 
+  /**
+   * Close the bottom sheet. Generic helper — used by the feedback sheet;
+   * confirm() above manages its own open/close since it also owns a
+   * one-off click handler tied to the specific onConfirm callback.
+   */
+  function closeSheet() {
+    const sheet = $('bottom-sheet');
+    if (sheet) sheet.classList.remove('open');
+  }
+
+  /**
+   * Show the feedback bottom sheet (bug report / idea submission →
+   * self-healing relay). This function only builds and opens the sheet;
+   * the segmented type toggle, cancel, and submit are all data-action
+   * cases handled by app.js's global event delegation, same as every
+   * other interactive element in this app.
+   */
+  function renderFeedback() {
+    const sheet = $('bottom-sheet');
+    if (!sheet) return;
+
+    setHTML('bottom-sheet-content', `
+      <h3>Send Feedback</h3>
+      <p class="text-secondary">Spot a bug or have an idea? Tell us — it goes straight to the team.</p>
+      <div class="chip-group" id="feedback-type-group">
+        <button type="button" class="chip selected" data-action="feedback-type" data-value="bug">Bug</button>
+        <button type="button" class="chip" data-action="feedback-type" data-value="idea">Idea</button>
+      </div>
+      <div class="form-group" style="margin-top:16px">
+        <label for="feedback-message">Details</label>
+        <textarea id="feedback-message" class="input textarea" rows="4" placeholder="What happened, or what would help?"></textarea>
+      </div>
+      <div class="sheet-actions">
+        <button class="btn btn-secondary" data-action="close-feedback">Cancel</button>
+        <button class="btn btn-primary" data-action="submit-feedback">Send</button>
+      </div>
+    `);
+
+    sheet.classList.add('open');
+  }
+
   // ── Inline SVG icon set (CSP-safe: no external assets) ───────────────
 
   const ICONS = {
@@ -181,7 +222,7 @@ const SocialOSUI = (() => {
 
           <header class="landing-topbar">
             <span class="landing-logo">
-              <span class="nav-brand-mark">S</span>
+              <img class="nav-brand-mark" src="icons/logo.svg" alt="" width="34" height="34">
               <span>Social<em>OS</em></span>
             </span>
             <button class="btn btn-ghost btn-sm" data-action="start-onboarding">Sign in</button>
@@ -299,7 +340,7 @@ const SocialOSUI = (() => {
     const progress = Math.round((step / 11) * 100);
     let html = `
       <div class="ob-brand">
-        <span class="nav-brand-mark">S</span>
+        <img class="nav-brand-mark" src="icons/logo.svg" alt="" width="34" height="34">
         <span>SocialOS Setup</span>
       </div>`;
     html += `<div class="onboarding-progress"><div class="progress-bar" style="width:${progress}%"></div></div>`;
@@ -1741,6 +1782,8 @@ const SocialOSUI = (() => {
     toast,
     loading,
     confirm,
+    closeSheet,
+    renderFeedback,
     renderLanding,
     renderOnboardingStep,
     renderDashboard,
