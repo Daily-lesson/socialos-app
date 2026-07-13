@@ -5,7 +5,7 @@
  * Paths are relative so the app works from a subpath (e.g. GitHub Pages).
  */
 
-const CACHE_NAME = 'socialos-v10'; // v10: one-tap Google sign-in (OAuth broker) + privacy/terms pages
+const CACHE_NAME = 'socialos-v11'; // v11: opaque full-bleed home-screen icons (no transparent corners)
 const SHELL_ASSETS = [
   './',
   './index.html',
