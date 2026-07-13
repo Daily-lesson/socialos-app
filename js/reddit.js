@@ -4,77 +4,44 @@
  * SocialOS — Reddit OAuth + direct posting (BUILD_PLAN §7 Phase 5, second
  * platform after LinkedIn — see docs/ROADMAP.md §5 "2. Reddit")
  *
- * Mirrors js/linkedin.js's shape (authorize → callback → token exchange →
- * refresh → publish), but the OAuth-flow-type research came out differently
- * for Reddit, confirmed against Reddit's own OAuth2 docs
- * (github.com/reddit-archive/reddit/wiki/OAuth2 and .../OAuth2-App-Types,
- * 2026-07):
+ * Auth model — same one-tap split as js/google.js and js/linkedin.js
+ * (docs/API_KEYS_SETUP.md §4): the browser does the user-facing part
+ * (redirect to Reddit's own sign-in page + `state` CSRF check) and every
+ * token-endpoint call — exchange, refresh, revoke — happens server-side in
+ * the `social-oauth` broker Edge Function. Reddit's "installed app" client
+ * type is issued no client secret at all; the broker still owns the calls
+ * because Reddit's token endpoint requires HTTP Basic auth with the client
+ * ID and sends no CORS headers for browsers. REDDIT_CLIENT_ID lives as a
+ * Supabase secret; tokens live only in this browser's IndexedDB.
  *
- * 1. App type: "installed app" (public client), not "web app"/"script".
- *    Reddit's authorization-code token exchange authenticates via HTTP Basic
- *    Auth with `client_id` as the username — confidential app types
- *    ("web app", "script") send `client_secret` as the password; "installed
- *    app" sends an EMPTY string, because Reddit issues no secret at all for
- *    that type. That means this app never stores or sends a Reddit
- *    client_secret client-side — strictly better than LinkedIn's
- *    confidential-client flow (js/linkedin.js), which has no choice but to
- *    hold a secret in IndexedDB. The `submit` scope (needed to post) is NOT
- *    gated by app type in Reddit's docs — installed apps get the same scope
- *    catalogue as any other type, confirmed directly against the docs before
- *    committing to this design, per the task's explicit "don't assume"
- *    instruction.
- * 2. No PKCE. Unlike Google (js/google.js), Reddit's OAuth2 documentation
- *    makes no mention of `code_challenge`/`code_verifier`/RFC 7636 anywhere
- *    — verified by reading the docs directly, not assumed from the
- *    "installed app = PKCE-capable" pattern common to other providers.
- *    Reddit's actual security model for installed apps is: no secret to
- *    leak (nothing worth intercepting), a strict exact-match redirect_uri
- *    allowlist configured on the app itself, and the `state` param for CSRF
- *    protection — weaker than PKCE in theory, but it's Reddit's real,
- *    current design, not a gap in this implementation. Documenting this
- *    plainly rather than silently bolting on a PKCE flow Reddit doesn't
- *    speak.
- * 3. Refresh tokens DO work for installed apps (unlike LinkedIn's standard
- *    app tier). Requesting `duration=permanent` in the authorize URL yields
- *    a `refresh_token` in the token response, usable via the standard
- *    `grant_type=refresh_token` request (also Basic-auth'd with an empty
- *    password). Reddit access tokens last 1 hour (BUILD_PLAN §7's
- *    "token_refresh_manager" note) — short enough that silent background
- *    refresh (unlike LinkedIn's 60-day dead-end) is the normal path here,
- *    not an edge case.
+ * Reddit specifics, confirmed against Reddit's own OAuth2 docs
+ * (github.com/reddit-archive/reddit/wiki/OAuth2, 2026-07):
  *
- * CORS — the reason relayFetch() exists:
- * Confirmed (not assumed) that neither Reddit's OAuth token endpoint
- * (www.reddit.com/api/v1/access_token) nor its REST API
- * (oauth.reddit.com/api/...) send `Access-Control-Allow-Origin` for browser
- * callers — real-world reports of exactly this failure exist for both
- * endpoints (e.g. the `snoowrap` and `dart-reddit` GitHub issue trackers hit
- * this directly). Same shape of problem LinkedIn has. Per docs/ROADMAP.md's
- * explicit instruction, this file does NOT stand up a second bespoke relay —
- * it reuses the same generic `{url, method, headers, body}` pass-through
- * relay originally built for LinkedIn (js/linkedin.js), now generalized and
- * documented as "social-relay" in docs/ROADMAP.md §2, with
- * www.reddit.com/oauth.reddit.com added to its host allowlist. The relay
- * still holds no secrets and persists nothing — Reddit has no secret to hold
- * anyway (see point 1 above), and the access/refresh tokens live only in
- * this browser's IndexedDB, same accepted single-user risk model as every
- * other platform connection in this app (BUILD_PLAN §9).
+ * 1. App type: "installed app" (public client) — no secret issued, and the
+ *    `submit` scope is not gated by app type.
+ * 2. No PKCE — Reddit's OAuth2 docs don't implement RFC 7636 at all; its
+ *    security model for installed apps is exact-match redirect_uri plus the
+ *    `state` param (kept here).
+ * 3. Refresh tokens DO work for installed apps: `duration=permanent` at
+ *    authorize time yields one, and access tokens last 1 hour, so silent
+ *    background refresh (via the broker) is the normal path.
  *
- * User-Agent — Reddit's API docs require a descriptive User-Agent
- * (`<platform>:<app ID>:<version> (by /u/<username>)`) and aggressively
- * throttles generic/default ones. Browsers refuse to let JS override the
- * `User-Agent` header on a same-context fetch — but every Reddit call here
- * goes through the relay, whose fetch happens server-side in Deno, where
- * setting a custom User-Agent is not restricted. So REDDIT_USER_AGENT below
- * is sent as a normal header in the relay envelope and actually reaches
- * Reddit, unlike a direct browser call would allow.
+ * CORS — post-auth API calls (oauth.reddit.com) send no
+ * `Access-Control-Allow-Origin` either, so they go through the stateless
+ * `social-relay` Edge Function (supabase/functions/social-relay/index.ts —
+ * deployed), which forwards the request, adds CORS headers, holds no
+ * secrets, and persists nothing.
+ *
+ * User-Agent — Reddit requires a descriptive User-Agent and throttles
+ * generic ones. Browsers won't let JS set that header, but both the broker
+ * and the relay fetch server-side in Deno, where it's not restricted — so
+ * REDDIT_USER_AGENT below actually reaches Reddit.
  */
 
 const SocialOSReddit = (() => {
   'use strict';
 
   const AUTH_ENDPOINT = 'https://www.reddit.com/api/v1/authorize';
-  const TOKEN_URL = 'https://www.reddit.com/api/v1/access_token';
   const IDENTITY_URL = 'https://oauth.reddit.com/api/v1/me';
   const SUBMIT_URL = 'https://oauth.reddit.com/api/submit';
   // identity: resolves the username for display + the User-Agent string.
@@ -87,28 +54,43 @@ const SocialOSReddit = (() => {
   // the token), it's just good citizenship to avoid the generic-UA throttle.
   const REDDIT_USER_AGENT = 'web:socialos-app:v1.0.0 (by /u/socialos_user)';
 
-  // ── Relay ─────────────────────────────────────────────────────────────
+  // ── Broker + relay plumbing ───────────────────────────────────────────
 
   /**
-   * Forward a request to Reddit via the shared CORS relay Edge Function —
-   * the same generic, stateless pass-through originally built for LinkedIn
-   * (js/linkedin.js), generalized to also allow www.reddit.com/
-   * oauth.reddit.com. See docs/ROADMAP.md §2 for the deployed source and
-   * deploy steps, and the file header above for why this file doesn't stand
-   * up a second relay.
+   * Call the social-oauth broker (token grants — exchange/refresh/revoke,
+   * which need the Basic-auth'd client ID server-side). Throws with the
+   * broker's error message so callers can surface something actionable.
+   * @param {Object<string, any>} payload
+   * @returns {Promise<any>}
+   */
+  async function brokerCall(payload) {
+    const settings = await SocialOSDB.getSettings();
+    /** @type {Object<string, string>} */
+    const headers = { 'Content-Type': 'application/json' };
+    if (settings?.proxy_secret) headers['X-SocialOS-Secret'] = settings.proxy_secret;
+
+    const response = await fetch(settings?.social_oauth_url || SocialOSDB.DEFAULT_SOCIAL_OAUTH_URL, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ provider: 'reddit', ...payload })
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw new Error(data.error_description || data.error || `Reddit auth service error (${response.status})`);
+    }
+    return data;
+  }
+
+  /**
+   * Forward a post-auth API request to Reddit via the shared CORS relay
+   * Edge Function (stateless pass-through, holds no secrets).
    * @param {string} targetUrl
    * @param {{method?: string, headers?: Object<string,string>, body?: string|null, encoding?: 'text'|'base64'}} [opts]
    * @returns {Promise<Response>}
    */
   async function relayFetch(targetUrl, opts = {}) {
     const settings = await SocialOSDB.getSettings();
-    // Prefer the shared relay URL; fall back to the legacy per-connection
-    // LinkedIn field for anyone who configured the relay before it was
-    // generalized (see js/db.js's PlatformConnection.relay_url doc comment).
-    const relayUrl = settings?.social_relay_url || settings?.platform_connections?.linkedin?.relay_url;
-    if (!relayUrl) {
-      throw new Error('CORS relay URL not configured — set it in Settings > Platform Connections (see docs/ROADMAP.md §2).');
-    }
+    const relayUrl = settings?.social_relay_url || SocialOSDB.DEFAULT_SOCIAL_RELAY_URL;
 
     return fetch(relayUrl, {
       method: 'POST',
@@ -126,20 +108,22 @@ const SocialOSReddit = (() => {
   // ── OAuth flow ────────────────────────────────────────────────────────
 
   /**
-   * Start the Reddit OAuth flow. Redirects the browser to Reddit's consent
-   * screen. Assumes client_id has already been saved to settings by the
-   * caller (mirrors js/linkedin.js's pattern) — no client_secret to save,
-   * see file header point 1.
-   * @param {string} clientId
+   * Start the Reddit OAuth flow: fetch the (public) client ID from the
+   * broker, then redirect the browser to Reddit's own sign-in/consent page.
+   * Throws if Reddit isn't configured server-side.
    * @returns {Promise<void>}
    */
-  async function startAuthFlow(clientId) {
+  async function startAuthFlow() {
+    const config = await brokerCall({ action: 'config' });
+    if (!config.configured || !config.client_id) {
+      throw new Error('Reddit sign-in isn\'t configured yet on the server — see docs/API_KEYS_SETUP.md §4.');
+    }
+
     const state = SocialOSUtils.uuid();
     sessionStorage.setItem('socialos_reddit_state', state);
-    sessionStorage.setItem('socialos_reddit_client_id', clientId);
 
     const params = new URLSearchParams({
-      client_id: clientId,
+      client_id: config.client_id,
       response_type: 'code',
       state,
       redirect_uri: REDIRECT_URI,
@@ -152,63 +136,47 @@ const SocialOSReddit = (() => {
   }
 
   /**
-   * Handle the OAuth callback — exchange authorization code for tokens.
-   * Call this on page load alongside SocialOSGoogle.handleCallback() and
-   * SocialOSLinkedIn.handleCallback(); all three are disambiguated by which
-   * flow's sessionStorage keys are present (only one OAuth flow is ever
-   * in-flight at a time), so calling all three in sequence on every page
-   * load is safe.
+   * Handle the OAuth callback — verify state, then exchange the code for
+   * tokens via the broker. Call this on page load alongside the other
+   * platforms' handlers; flows are disambiguated by which sessionStorage
+   * keys are present (only one OAuth flow is ever in-flight at a time).
    * @returns {Promise<boolean>} true if tokens were obtained
    */
   async function handleCallback() {
     const params = new URLSearchParams(window.location.search);
     const storedState = sessionStorage.getItem('socialos_reddit_state');
-    const clientId = sessionStorage.getItem('socialos_reddit_client_id');
 
     // Not a Reddit callback — bail without touching anything.
-    if (!storedState || !clientId) return false;
+    if (!storedState) return false;
 
     const code = params.get('code');
     const returnedState = params.get('state');
     const error = params.get('error');
 
+    // One-shot: this callback attempt is consumed whatever happens next.
+    sessionStorage.removeItem('socialos_reddit_state');
+
+    // Denied consent, upstream error, or state mismatch (CSRF protection —
+    // do not exchange a code this session didn't request).
     if (error || !code || returnedState !== storedState) {
-      sessionStorage.removeItem('socialos_reddit_state');
-      sessionStorage.removeItem('socialos_reddit_client_id');
+      if (code || error) window.history.replaceState({}, document.title, REDIRECT_URI);
       return false;
     }
 
     try {
-      const settings = await SocialOSDB.getOrCreateSettings();
-      const rd = settings.platform_connections.reddit;
-
-      const body = new URLSearchParams({
-        grant_type: 'authorization_code',
+      const tokens = await brokerCall({
+        action: 'exchange',
         code,
         redirect_uri: REDIRECT_URI
-      }).toString();
-
-      const tokenRes = await relayFetch(TOKEN_URL, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/x-www-form-urlencoded',
-          // Installed app = public client: Basic Auth with client_id as the
-          // username and an EMPTY password (no secret issued — file header
-          // point 1). btoa() is safe: client_id is always ASCII.
-          Authorization: `Basic ${btoa(`${clientId}:`)}`,
-          'User-Agent': REDDIT_USER_AGENT
-        },
-        body
       });
-
-      if (!tokenRes.ok) return false;
-      const tokens = await tokenRes.json();
       if (!tokens.access_token) return false;
+
+      const settings = await SocialOSDB.getOrCreateSettings();
+      const rd = settings.platform_connections.reddit;
 
       rd.access_token = tokens.access_token;
       rd.refresh_token = tokens.refresh_token || null;
       rd.expires_at = new Date(Date.now() + tokens.expires_in * 1000).toISOString();
-      rd.client_id = clientId;
 
       // Resolve the username for display (not required for posting itself).
       const meRes = await relayFetch(IDENTITY_URL, {
@@ -226,8 +194,6 @@ const SocialOSReddit = (() => {
       rd.connected = !!rd.access_token;
       await SocialOSDB.saveSettings(settings);
 
-      sessionStorage.removeItem('socialos_reddit_state');
-      sessionStorage.removeItem('socialos_reddit_client_id');
       window.history.replaceState({}, document.title, REDIRECT_URI);
 
       return rd.connected;
@@ -237,36 +203,22 @@ const SocialOSReddit = (() => {
   }
 
   /**
-   * Attempt a refresh_token grant. Unlike LinkedIn, this is the NORMAL path
-   * for Reddit — access tokens last only 1 hour (BUILD_PLAN §7) and a
+   * Attempt a refresh_token grant via the broker. Unlike LinkedIn, this is
+   * the NORMAL path for Reddit — access tokens last only 1 hour and a
    * refresh_token is present whenever the connect flow requested
-   * duration=permanent (the default here). UNVERIFIED end-to-end (no live
-   * Reddit app available to test against in this environment).
+   * duration=permanent (the default here).
    * @returns {Promise<boolean>}
    */
   async function refreshToken() {
     const settings = await SocialOSDB.getSettings();
     const rd = settings?.platform_connections?.reddit;
-    if (!rd?.refresh_token || !rd.client_id) return false;
+    if (!rd?.refresh_token) return false;
 
     try {
-      const body = new URLSearchParams({
-        grant_type: 'refresh_token',
+      const tokens = await brokerCall({
+        action: 'refresh',
         refresh_token: rd.refresh_token
-      }).toString();
-
-      const response = await relayFetch(TOKEN_URL, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/x-www-form-urlencoded',
-          Authorization: `Basic ${btoa(`${rd.client_id}:`)}`,
-          'User-Agent': REDDIT_USER_AGENT
-        },
-        body
       });
-      if (!response.ok) return false;
-
-      const tokens = await response.json();
       if (!tokens.access_token) return false;
 
       rd.access_token = tokens.access_token;
@@ -331,18 +283,29 @@ const SocialOSReddit = (() => {
   }
 
   /**
-   * Disconnect Reddit (clear stored credentials).
+   * Disconnect Reddit: revoke the grant at Reddit (best-effort, via the
+   * broker — Reddit's revoke_token endpoint), then clear everything locally.
    * @returns {Promise<void>}
    */
   async function disconnect() {
     const settings = await SocialOSDB.getOrCreateSettings();
+    const rd = settings.platform_connections.reddit;
+    const token = rd?.refresh_token || rd?.access_token;
+    if (token) {
+      try {
+        await brokerCall({
+          action: 'revoke',
+          token,
+          token_type_hint: rd?.refresh_token ? 'refresh_token' : 'access_token'
+        });
+      } catch { /* best-effort */ }
+    }
     settings.platform_connections.reddit = {
       connected: false,
       handle: null,
       access_token: null,
       refresh_token: null,
-      expires_at: null,
-      client_id: null
+      expires_at: null
     };
     await SocialOSDB.saveSettings(settings);
   }

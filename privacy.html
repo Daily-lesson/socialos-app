@@ -116,12 +116,19 @@
     <ul>
       <li>Profile linking during setup reads <strong>publicly available</strong> profile
         data only (for example, public Reddit posts or a public TikTok display name).</li>
-      <li>If you connect a platform account for direct posting, you authenticate on that
-        platform's own page and its tokens are stored only on your device. Because these
-        platforms' APIs don't accept direct browser calls, requests pass through a
-        stateless relay function that forwards them and stores nothing.</li>
+      <li>If you sign in to a platform account (LinkedIn, Reddit, or TikTok today), you
+        authenticate on that platform's own page — SocialOS never sees your password —
+        and its tokens are stored only on your device. The one-time sign-in handshake
+        passes through a stateless server function we operate, which keeps the app's
+        platform credentials server-side and <strong>stores no tokens and no data</strong>;
+        disconnecting in Settings revokes SocialOS's access with the platform where the
+        platform supports revocation, and always deletes the tokens from your device.</li>
+      <li>Because these platforms' APIs don't accept direct browser calls, posting and
+        profile requests pass through a stateless relay function that forwards them and
+        stores nothing.</li>
       <li><strong>Nothing is ever posted, liked, or replied to on your behalf without your
-        explicit approval of that specific item.</strong></li>
+        explicit approval of that specific item.</strong> When an account is connected,
+        approving a drafted post publishes it in that same action.</li>
     </ul>
 
     <h3>Automatic error reports and feedback</h3>

@@ -358,18 +358,32 @@ const SocialOSUI = (() => {
     html += `<div class="onboarding-step-label">Step ${step} of ${ONBOARDING_TOTAL_STEPS}</div>`;
 
     switch (step) {
-      case 1:
+      case 1: {
+        /** @type {Object<string, {connected: boolean, needsReconnect: boolean, handle: string|null}>} */
+        const ps = /** @type {any} */ (data).platform_status || {};
         html += `
           <h2>Link your accounts</h2>
-          <p class="onboarding-desc">Start with the social profiles you already have. SocialOS reads what's publicly available and pre-fills the rest of this setup automatically — your name, topics, tone, and how often you already post. Add what you have; skip what you don't.</p>
-          ${['linkedin', 'facebook', 'instagram', 'reddit', 'tiktok'].map(p => `
+          <p class="onboarding-desc">Sign in to the platforms you use — each button takes you to that platform's own login page, where you grant SocialOS access (SocialOS never sees your passwords). Signing in unlocks direct one-tap posting later. No account on a platform, or prefer not to sign in? Just type your public handle instead.</p>
+          ${['linkedin', 'facebook', 'instagram', 'reddit', 'tiktok'].map(p => {
+            const label = p === 'tiktok' ? 'TikTok' : p === 'linkedin' ? 'LinkedIn' : p.charAt(0).toUpperCase() + p.slice(1);
+            const status = ps[p];
+            const hasSignIn = ['linkedin', 'reddit', 'tiktok'].includes(p);
+            return `
             <div class="form-group">
-              <label for="ob-link-${p}">${p === 'tiktok' ? 'TikTok' : p === 'linkedin' ? 'LinkedIn' : p.charAt(0).toUpperCase() + p.slice(1)}</label>
-              <input type="text" id="ob-link-${p}" class="input"
-                placeholder="${SocialOSLinker.HANDLE_PLACEHOLDERS[p] || ''}"
-                value="${escapeHtml((data.linked_accounts || {})[p] || '')}">
-            </div>
-          `).join('')}
+              <label for="ob-link-${p}">${label}
+                ${status?.connected ? `<span class="text-secondary" style="font-weight:400"> — &#10003; connected${status.handle ? ' as ' + escapeHtml(status.handle) : ''}</span>` : ''}
+              </label>
+              <div class="input-row">
+                <input type="text" id="ob-link-${p}" class="input"
+                  placeholder="${SocialOSLinker.HANDLE_PLACEHOLDERS[p] || ''}"
+                  value="${escapeHtml((data.linked_accounts || {})[p] || '')}">
+                ${hasSignIn && !status?.connected ? `
+                  <button class="btn btn-small" data-action="connect-platform-ob" data-platform="${p}"
+                    style="white-space:nowrap;background:${/** @type {any} */ (PLATFORM_COLORS)[p] || '#666'};color:#fff">Sign in</button>
+                ` : ''}
+              </div>
+            </div>`;
+          }).join('')}
           <button class="btn btn-accent" data-action="analyze-profiles" style="width:100%;margin-top:8px">Analyze My Profiles</button>
           ${data.social_activity && Object.keys(data.social_activity).length ? `
             <div class="info-box" style="margin-top:16px">
@@ -379,8 +393,9 @@ const SocialOSUI = (() => {
                 ${escapeHtml(String(s))}<br>`).join('')}
             </div>
           ` : ''}
-          <p class="text-secondary" style="margin-top:12px">Public data only — nothing is ever posted without your approval, and you can edit everything in the next steps.</p>`;
+          <p class="text-secondary" style="margin-top:12px">Facebook and Instagram sign-in is coming (their APIs require an app review) — handles work today. Nothing is ever posted without your approval, and you can connect or disconnect any account later in Settings. <a href="privacy.html" target="_blank" rel="noopener">Privacy Policy</a></p>`;
         break;
+      }
 
       case 2:
         html += `
@@ -724,7 +739,8 @@ const SocialOSUI = (() => {
    *   tab: 'posts'|'engagement',
    *   posts: ScheduledPost[],
    *   engagement: {likes: EngagementAction[], replies: EngagementAction[], strategic: EngagementAction[]},
-   *   engagementSubTab: 'likes'|'replies'|'strategic'
+   *   engagementSubTab: 'likes'|'replies'|'strategic',
+   *   directPlatforms?: Object<string, boolean>
    * }} data
    */
   function renderApprovals(data) {
@@ -747,16 +763,17 @@ const SocialOSUI = (() => {
 
     html += data.tab === 'engagement'
       ? renderEngagementTabContent(data.engagement, data.engagementSubTab)
-      : renderPostsTabContent(data.posts);
+      : renderPostsTabContent(data.posts, data.directPlatforms || {});
 
     container.innerHTML = html;
   }
 
   /**
    * @param {ScheduledPost[]} posts
+   * @param {Object<string, boolean>} directPlatforms - platform → connected for direct publish (approve = post, one tap)
    * @returns {string}
    */
-  function renderPostsTabContent(posts) {
+  function renderPostsTabContent(posts, directPlatforms) {
     if (!posts.length) {
       return `
         <div class="empty-state">
@@ -767,7 +784,7 @@ const SocialOSUI = (() => {
 
     return `
       <div class="approval-list">
-        ${posts.map(post => renderApprovalCard(post)).join('')}
+        ${posts.map(post => renderApprovalCard(post, !!directPlatforms[post.platform])).join('')}
       </div>`;
   }
 
@@ -1016,9 +1033,10 @@ const SocialOSUI = (() => {
   /**
    * Render a single approval card.
    * @param {ScheduledPost} post
+   * @param {boolean} [direct] - platform is connected: approving publishes in the same tap
    * @returns {string}
    */
-  function renderApprovalCard(post) {
+  function renderApprovalCard(post, direct) {
     const activeText = post.selected_alternative === 0
       ? post.draft.text
       : (post.alternatives[post.selected_alternative - 1]?.text || post.draft.text);
@@ -1043,7 +1061,7 @@ const SocialOSUI = (() => {
         <div class="card-actions">
           <button class="btn btn-secondary btn-sm" data-action="edit-post" data-id="${post.id}">Edit</button>
           <button class="btn btn-danger btn-sm" data-action="skip-post" data-id="${post.id}">Skip</button>
-          <button class="btn btn-success btn-lg" data-action="approve-post" data-id="${post.id}">APPROVE</button>
+          <button class="btn btn-success btn-lg" data-action="approve-post" data-id="${post.id}">${direct ? 'APPROVE &amp; POST' : 'APPROVE'}</button>
         </div>
       </div>`;
   }
@@ -1414,11 +1432,8 @@ const SocialOSUI = (() => {
     const container = $('settings-content');
     if (!container) return;
 
-    const li = settings.platform_connections?.linkedin || {};
     const liStatus = linkedinStatus || { connected: false, needsReconnect: false, handle: null };
-    const rd = settings.platform_connections?.reddit || {};
     const rdStatus = redditStatus || { connected: false, needsReconnect: false, handle: null };
-    const tk = /** @type {any} */ (settings.platform_connections?.tiktok || {});
     const tkStatus = tiktokStatus || { connected: false, needsReconnect: false, handle: null };
 
     container.innerHTML = `
@@ -1452,81 +1467,45 @@ const SocialOSUI = (() => {
       </div>
 
       <div class="settings-section">
-        <h3>Platform Connections <span class="text-secondary" style="font-weight:400">(CORS Relay)</span></h3>
-        <p class="text-secondary" style="margin:0 0 8px">
-          LinkedIn, Reddit, and TikTok's APIs don't allow direct browser calls
-          (no CORS) — every call to these platforms is relayed through one
-          shared, stateless Supabase Edge Function. Deploy it once
-          (docs/ROADMAP.md §2 — "social-relay") and paste its URL below; the
-          LinkedIn, Reddit, and TikTok sections underneath all reuse it.
-        </p>
-        <div class="form-group">
-          <label for="set-social-relay-url">CORS Relay Function URL</label>
-          <input type="text" id="set-social-relay-url" class="input"
-                 placeholder="https://<project-ref>.supabase.co/functions/v1/social-relay"
-                 value="${settings.social_relay_url || ''}">
-        </div>
-        <button class="btn btn-primary btn-sm" data-action="save-relay-url">Save Relay URL</button>
-      </div>
-
-      <div class="settings-section">
-        <h3>LinkedIn <span class="text-secondary" style="font-weight:400">(Phase 5 — direct posting)</span></h3>
+        <h3>LinkedIn <span class="text-secondary" style="font-weight:400">(direct posting)</span></h3>
         <div class="connection-status ${liStatus.connected ? 'connected' : 'disconnected'}">
           ${liStatus.connected
             ? `Connected${liStatus.handle ? ' as ' + escapeHtml(liStatus.handle) : ''}`
             : liStatus.needsReconnect ? 'Token expired — reconnect' : 'Not connected'}
         </div>
         <p class="text-secondary" style="margin:8px 0">
-          LinkedIn access tokens last 60 days and don't silently refresh on a
-          standard app — you'll tap Reconnect when this expires. Setup steps:
-          docs/API_KEYS_SETUP.md §4.
+          Sign in on LinkedIn's own page to let SocialOS post approved
+          drafts directly to your profile. Access lasts 60 days (a LinkedIn
+          platform limit) — you'll tap Reconnect when it expires.
         </p>
         ${liStatus.connected ? `
           <button class="btn btn-danger btn-sm" data-action="disconnect-linkedin">Disconnect</button>
         ` : `
-          <div class="form-group">
-            <label for="set-linkedin-client-id">LinkedIn Client ID</label>
-            <input type="text" id="set-linkedin-client-id" class="input" value="${li.client_id || ''}">
-          </div>
-          <div class="form-group">
-            <label for="set-linkedin-client-secret">LinkedIn Client Secret</label>
-            <input type="password" id="set-linkedin-client-secret" class="input" value="${li.client_secret || ''}">
-          </div>
-          <p class="text-secondary" style="margin:4px 0 8px;font-size:12px">
-            Uses the shared CORS Relay URL above — set that first if you haven't.
-          </p>
-          <button class="btn btn-accent btn-sm" data-action="connect-linkedin">
-            ${liStatus.needsReconnect ? 'Reconnect LinkedIn' : 'Connect LinkedIn'}
+          <button class="btn btn-accent btn-sm" data-action="connect-linkedin"
+            style="background:${PLATFORM_COLORS.linkedin};color:#fff">
+            ${liStatus.needsReconnect ? 'Reconnect LinkedIn' : 'Sign in with LinkedIn'}
           </button>
         `}
       </div>
 
       <div class="settings-section">
-        <h3>Reddit <span class="text-secondary" style="font-weight:400">(Phase 5 — direct posting)</span></h3>
+        <h3>Reddit <span class="text-secondary" style="font-weight:400">(direct posting)</span></h3>
         <div class="connection-status ${rdStatus.connected ? 'connected' : 'disconnected'}">
           ${rdStatus.connected
             ? `Connected${rdStatus.handle ? ' as u/' + escapeHtml(rdStatus.handle) : ''}`
             : rdStatus.needsReconnect ? 'Token expired — reconnect' : 'Not connected'}
         </div>
         <p class="text-secondary" style="margin:8px 0">
-          Reddit access tokens last 1 hour but refresh silently in the
-          background (unlike LinkedIn) as long as you stay connected. Setup
-          steps: docs/API_KEYS_SETUP.md §4.
+          Sign in on Reddit's own page to let SocialOS submit approved posts
+          for you. The connection refreshes silently in the background for
+          as long as you stay connected.
         </p>
         ${rdStatus.connected ? `
           <button class="btn btn-danger btn-sm" data-action="disconnect-reddit">Disconnect</button>
         ` : `
-          <div class="form-group">
-            <label for="set-reddit-client-id">Reddit Client ID</label>
-            <input type="text" id="set-reddit-client-id" class="input" value="${rd.client_id || ''}">
-            <p class="text-secondary" style="margin-top:4px;font-size:12px">
-              Register an "installed app" at reddit.com/prefs/apps — this app
-              type gets no client secret (none needed here), unlike LinkedIn.
-              Uses the shared CORS Relay URL above.
-            </p>
-          </div>
-          <button class="btn btn-accent btn-sm" data-action="connect-reddit">
-            ${rdStatus.needsReconnect ? 'Reconnect Reddit' : 'Connect Reddit'}
+          <button class="btn btn-accent btn-sm" data-action="connect-reddit"
+            style="background:${PLATFORM_COLORS.reddit};color:#fff">
+            ${rdStatus.needsReconnect ? 'Reconnect Reddit' : 'Sign in with Reddit'}
           </button>
         `}
       </div>
@@ -1539,30 +1518,18 @@ const SocialOSUI = (() => {
             : tkStatus.needsReconnect ? 'Token expired — reconnect' : 'Not connected'}
         </div>
         <p class="text-secondary" style="margin:8px 0">
-          Connects your TikTok identity (display name) for planning and
-          engagement. Direct video posting needs TikTok's Content Posting
-          API audit — until then, approved TikTok posts use the clipboard
-          flow plus the tiktok.com/upload link. Access tokens last 24 hours
-          and refresh silently in the background (like Reddit).
+          Sign in on TikTok's own page to connect your TikTok identity for
+          planning and engagement. Direct video posting needs TikTok's
+          Content Posting API audit — until then, approved TikTok posts use
+          the clipboard flow plus the tiktok.com/upload link. The connection
+          refreshes silently in the background.
         </p>
         ${tkStatus.connected ? `
           <button class="btn btn-danger btn-sm" data-action="disconnect-tiktok">Disconnect</button>
         ` : `
-          <div class="form-group">
-            <label for="set-tiktok-client-key">TikTok Client Key</label>
-            <input type="text" id="set-tiktok-client-key" class="input" value="${tk.client_key || ''}">
-          </div>
-          <div class="form-group">
-            <label for="set-tiktok-client-secret">TikTok Client Secret</label>
-            <input type="password" id="set-tiktok-client-secret" class="input" value="${tk.client_secret || ''}">
-            <p class="text-secondary" style="margin-top:4px;font-size:12px">
-              Register a web app at developers.tiktok.com with the Login Kit
-              product and this app's URL as the redirect URI. Uses the shared
-              CORS Relay URL above.
-            </p>
-          </div>
-          <button class="btn btn-accent btn-sm" data-action="connect-tiktok">
-            ${tkStatus.needsReconnect ? 'Reconnect TikTok' : 'Connect TikTok'}
+          <button class="btn btn-accent btn-sm" data-action="connect-tiktok"
+            style="background:${PLATFORM_COLORS.tiktok};color:#fff">
+            ${tkStatus.needsReconnect ? 'Reconnect TikTok' : 'Sign in with TikTok'}
           </button>
         `}
       </div>

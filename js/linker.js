@@ -12,14 +12,13 @@
  * How automatic it can actually be, per platform, inside this app's
  * architecture (static PWA, strict CSP, shared CORS relay — docs/ROADMAP.md §2):
  *
- * - Reddit: fully automatic when the relay is configured. Reddit's public
- *   JSON endpoints (/user/<name>/about.json, /user/<name>/submitted.json)
- *   need no auth; they're fetched through the relay (www.reddit.com is
- *   already on its allowlist) and yield karma, account age, and recent post
- *   timestamps — enough to compute a real posts-per-week figure.
+ * - Reddit: fully automatic — Reddit's public JSON endpoints
+ *   (/user/<name>/about.json, /user/<name>/submitted.json) need no auth;
+ *   they're fetched through the baked-in relay (www.reddit.com is on its
+ *   allowlist) and yield karma, account age, and recent post timestamps —
+ *   enough to compute a real posts-per-week figure.
  * - TikTok: display name via the unauthenticated oEmbed endpoint through
- *   the relay (js/tiktok.js fetchPublicProfile — www.tiktok.com must be on
- *   the relay allowlist, see docs/ROADMAP.md §2).
+ *   the relay (js/tiktok.js fetchPublicProfile).
  * - LinkedIn / Facebook / Instagram: no public unauthenticated profile API
  *   exists (LinkedIn requires OAuth per-member consent; Meta requires an
  *   app-reviewed token). For these, the handle itself plus whatever the
@@ -84,16 +83,17 @@ const SocialOSLinker = (() => {
 
   /**
    * Same envelope as js/reddit.js / js/tiktok.js relayFetch, but returns
-   * null instead of throwing when no relay is configured: the linking step
-   * must work (in AI-inference-only mode) with zero setup.
+   * null instead of throwing on any failure: the linking step must work
+   * (in AI-inference-only mode) even when the relay is unreachable. The
+   * relay URL is baked in (js/db.js DEFAULT_SOCIAL_RELAY_URL) — deployed,
+   * stateless, public-data fetches only here.
    * @param {string} targetUrl
    * @param {Object<string,string>} [headers]
    * @returns {Promise<Response|null>}
    */
   async function tryRelayFetch(targetUrl, headers) {
     const settings = await SocialOSDB.getSettings();
-    const relayUrl = settings?.social_relay_url || settings?.platform_connections?.linkedin?.relay_url;
-    if (!relayUrl) return null;
+    const relayUrl = settings?.social_relay_url || SocialOSDB.DEFAULT_SOCIAL_RELAY_URL;
 
     try {
       return await fetch(relayUrl, {
