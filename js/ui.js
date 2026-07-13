@@ -14,21 +14,24 @@ const SocialOSUI = (() => {
     linkedin: '#0A66C2',
     facebook: '#1877F2',
     instagram: 'linear-gradient(45deg, #E1306C, #833AB4)',
-    reddit: '#FF4500'
+    reddit: '#FF4500',
+    tiktok: 'linear-gradient(45deg, #25F4EE, #FE2C55)'
   };
 
   const PLATFORM_ICONS = {
     linkedin: 'LI',
     facebook: 'FB',
     instagram: 'IG',
-    reddit: 'RD'
+    reddit: 'RD',
+    tiktok: 'TT'
   };
 
   const PLATFORM_DEEP_LINKS = {
     linkedin: 'https://www.linkedin.com/sharing/share-offsite/',
     facebook: 'https://www.facebook.com/sharer/sharer.php',
     instagram: '', // Opens Instagram app — no pre-fill on mobile
-    reddit: 'https://www.reddit.com/submit'
+    reddit: 'https://www.reddit.com/submit',
+    tiktok: 'https://www.tiktok.com/upload'
   };
 
   // ── Helpers ───────────────────────────────────────────────────────────
@@ -249,6 +252,7 @@ const SocialOSUI = (() => {
             <span class="platform-pill"><span class="platform-dot" style="background:${PLATFORM_COLORS.facebook}"></span>Facebook</span>
             <span class="platform-pill"><span class="platform-dot" style="background:${PLATFORM_COLORS.instagram}"></span>Instagram</span>
             <span class="platform-pill"><span class="platform-dot" style="background:${PLATFORM_COLORS.reddit}"></span>Reddit</span>
+            <span class="platform-pill"><span class="platform-dot" style="background:${PLATFORM_COLORS.tiktok}"></span>TikTok</span>
           </section>
 
           <section class="landing-section" id="landing-features">
@@ -296,8 +300,8 @@ const SocialOSUI = (() => {
             <div class="steps-grid">
               <div class="step-card">
                 <span class="step-num">1</span>
-                <h3>Tell it who you are</h3>
-                <p>A short guided setup captures your goals, audience, tone, and off-limits topics — the DNA of your personal brand.</p>
+                <h3>Link your accounts</h3>
+                <p>Start by linking the profiles you already have — SocialOS reads what's public and pre-fills your name, tone, topics, and posting rhythm. A short guided setup captures the rest.</p>
               </div>
               <div class="step-card">
                 <span class="step-num">2</span>
@@ -326,7 +330,9 @@ const SocialOSUI = (() => {
       </div>`;
   }
 
-  // ── Onboarding Wizard (11 steps) ─────────────────────────────────────
+  // ── Onboarding Wizard (12 steps — Step 1 is account linking) ─────────
+
+  const ONBOARDING_TOTAL_STEPS = 12;
 
   /**
    * Render a specific onboarding step.
@@ -337,20 +343,44 @@ const SocialOSUI = (() => {
     const container = $('onboarding-content');
     if (!container) return;
 
-    const progress = Math.round((step / 11) * 100);
+    const progress = Math.round((step / ONBOARDING_TOTAL_STEPS) * 100);
     let html = `
       <div class="ob-brand">
         <img class="nav-brand-mark" src="icons/logo.svg" alt="" width="34" height="34">
         <span>SocialOS Setup</span>
       </div>`;
     html += `<div class="onboarding-progress"><div class="progress-bar" style="width:${progress}%"></div></div>`;
-    html += `<div class="onboarding-step-label">Step ${step} of 11</div>`;
+    html += `<div class="onboarding-step-label">Step ${step} of ${ONBOARDING_TOTAL_STEPS}</div>`;
 
     switch (step) {
       case 1:
         html += `
+          <h2>Link your accounts</h2>
+          <p class="onboarding-desc">Start with the social profiles you already have. SocialOS reads what's publicly available and pre-fills the rest of this setup automatically — your name, topics, tone, and how often you already post. Add what you have; skip what you don't.</p>
+          ${['linkedin', 'facebook', 'instagram', 'reddit', 'tiktok'].map(p => `
+            <div class="form-group">
+              <label for="ob-link-${p}">${p === 'tiktok' ? 'TikTok' : p === 'linkedin' ? 'LinkedIn' : p.charAt(0).toUpperCase() + p.slice(1)}</label>
+              <input type="text" id="ob-link-${p}" class="input"
+                placeholder="${SocialOSLinker.HANDLE_PLACEHOLDERS[p] || ''}"
+                value="${escapeHtml((data.linked_accounts || {})[p] || '')}">
+            </div>
+          `).join('')}
+          <button class="btn btn-accent" data-action="analyze-profiles" style="width:100%;margin-top:8px">Analyze My Profiles</button>
+          ${data.social_activity && Object.keys(data.social_activity).length ? `
+            <div class="info-box" style="margin-top:16px">
+              <strong>Found on your profiles:</strong><br>
+              ${Object.entries(data.social_activity).map(([p, s]) => `
+                <span class="platform-badge" style="background:${PLATFORM_COLORS[p] || '#666'}">${PLATFORM_ICONS[p] || p}</span>
+                ${escapeHtml(String(s))}<br>`).join('')}
+            </div>
+          ` : ''}
+          <p class="text-secondary" style="margin-top:12px">Public data only — nothing is ever posted without your approval, and you can edit everything in the next steps.</p>`;
+        break;
+
+      case 2:
+        html += `
           <h2>Welcome to SocialOS</h2>
-          <p class="onboarding-desc">Your AI social media manager. Let's set up your profile.</p>
+          <p class="onboarding-desc">Your AI social media manager. ${data.name ? 'We pre-filled this from your linked profiles — check it looks right.' : "Let's set up your profile."}</p>
           <div class="form-group">
             <label for="ob-name">Full Name</label>
             <input type="text" id="ob-name" class="input" placeholder="Scot Carl Jr." value="${data.name || ''}">
@@ -365,7 +395,7 @@ const SocialOSUI = (() => {
           </div>`;
         break;
 
-      case 2:
+      case 3:
         html += `
           <h2>What are your goals?</h2>
           <p class="onboarding-desc">Select all that apply.</p>
@@ -376,11 +406,11 @@ const SocialOSUI = (() => {
           </div>`;
         break;
 
-      case 3:
+      case 4:
         html += `
           <h2>Who's your audience?</h2>
           <p class="onboarding-desc">Describe your target audience per platform.</p>
-          ${['linkedin', 'facebook', 'instagram', 'reddit'].map(p => `
+          ${['linkedin', 'facebook', 'instagram', 'reddit', 'tiktok'].map(p => `
             <div class="form-group">
               <label for="ob-aud-${p}">${p.charAt(0).toUpperCase() + p.slice(1)}</label>
               <input type="text" id="ob-aud-${p}" class="input"
@@ -390,7 +420,7 @@ const SocialOSUI = (() => {
           `).join('')}`;
         break;
 
-      case 4:
+      case 5:
         html += `
           <h2>Your expertise topics</h2>
           <p class="onboarding-desc">Select or add topics you post about.</p>
@@ -408,16 +438,17 @@ const SocialOSUI = (() => {
           </div>`;
         break;
 
-      case 5:
+      case 6:
         html += `
           <h2>Tone preferences</h2>
           <p class="onboarding-desc">How should SocialOS sound on each platform?</p>
-          ${['linkedin', 'facebook', 'instagram', 'reddit'].map(p => {
+          ${['linkedin', 'facebook', 'instagram', 'reddit', 'tiktok'].map(p => {
             const tones = {
               linkedin: ['professional_thoughtful', 'authoritative', 'conversational_professional'],
               facebook: ['conversational_warm', 'friendly', 'inspirational'],
               instagram: ['casual_visual', 'playful', 'minimal'],
-              reddit: ['technical_peer', 'helpful_expert', 'casual_knowledgeable']
+              reddit: ['technical_peer', 'helpful_expert', 'casual_knowledgeable'],
+              tiktok: ['energetic_authentic', 'educational_quick', 'playful_casual']
             };
             return `
             <div class="form-group">
@@ -431,7 +462,7 @@ const SocialOSUI = (() => {
           }).join('')}`;
         break;
 
-      case 6:
+      case 7:
         html += `
           <h2>Posting frequency</h2>
           <p class="onboarding-desc">How often should SocialOS schedule posts?</p>
@@ -451,7 +482,7 @@ const SocialOSUI = (() => {
           </div>`;
         break;
 
-      case 7:
+      case 8:
         html += `
           <h2>Blackout dates</h2>
           <p class="onboarding-desc">Any dates SocialOS should never post? (Optional)</p>
@@ -461,7 +492,7 @@ const SocialOSUI = (() => {
           </div>`;
         break;
 
-      case 8:
+      case 9:
         html += `
           <h2>Off-limits topics</h2>
           <p class="onboarding-desc">Topics SocialOS must never mention in posts.</p>
@@ -479,7 +510,7 @@ const SocialOSUI = (() => {
           </div>`;
         break;
 
-      case 9:
+      case 10:
         html += `
           <h2>AI engine</h2>
           <p class="onboarding-desc">Nothing to set up — SocialOS's AI is built in and ready. Your writing is drafted by Claude through a secure managed connection; no API key or configuration needed.</p>
@@ -490,7 +521,7 @@ const SocialOSUI = (() => {
           </div>`;
         break;
 
-      case 10:
+      case 11:
         html += `
           <h2>Connect Google</h2>
           <p class="onboarding-desc">SocialOS reads your Google Drive to find content for posts, and lets you pick photos from Google Photos when you want to. Both are read-only — it can't modify or delete anything, and for photos it only ever sees what you explicitly select.</p>
@@ -519,11 +550,19 @@ const SocialOSUI = (() => {
           </div>`;
         break;
 
-      case 11:
+      case 12:
         html += `
           <h2>You're all set!</h2>
           <p class="onboarding-desc">SocialOS is ready to manage your social media presence.</p>
           <div class="completion-summary">
+            <div class="summary-item">
+              <span class="check ${Object.keys(data.linked_accounts || {}).length ? '' : 'pending'}">
+                ${Object.keys(data.linked_accounts || {}).length ? '&#10003;' : '&#9675;'}
+              </span>
+              ${Object.keys(data.linked_accounts || {}).length
+                ? `${Object.keys(data.linked_accounts).length} social account${Object.keys(data.linked_accounts).length > 1 ? 's' : ''} linked`
+                : 'No social accounts linked yet'}
+            </div>
             <div class="summary-item"><span class="check">&#10003;</span> Profile configured</div>
             <div class="summary-item"><span class="check">&#10003;</span> Goals & audience defined</div>
             <div class="summary-item"><span class="check">&#10003;</span> Tone preferences set</div>
@@ -546,8 +585,8 @@ const SocialOSUI = (() => {
     } else {
       html += `<div></div>`;
     }
-    if (step < 11) {
-      html += `<button class="btn btn-primary" data-action="ob-next">${step === 10 ? 'Skip / Next' : 'Next'}</button>`;
+    if (step < ONBOARDING_TOTAL_STEPS) {
+      html += `<button class="btn btn-primary" data-action="ob-next">${step === 11 ? 'Skip / Next' : 'Next'}</button>`;
     } else {
       html += `<button class="btn btn-primary btn-lg" data-action="ob-finish">Launch SocialOS</button>`;
     }
@@ -918,6 +957,7 @@ const SocialOSUI = (() => {
             <option value="facebook">Facebook</option>
             <option value="instagram">Instagram</option>
             <option value="reddit">Reddit</option>
+            <option value="tiktok">TikTok</option>
           </select>
         </div>
         <div class="form-group">
@@ -957,6 +997,7 @@ const SocialOSUI = (() => {
             <option value="facebook">Facebook</option>
             <option value="instagram">Instagram</option>
             <option value="reddit">Reddit</option>
+            <option value="tiktok">TikTok</option>
           </select>
         </div>
         <div class="form-group">
@@ -1368,8 +1409,9 @@ const SocialOSUI = (() => {
    * @param {boolean} googleConnected
    * @param {{connected: boolean, needsReconnect: boolean, handle: string|null}} [linkedinStatus]
    * @param {{connected: boolean, needsReconnect: boolean, handle: string|null}} [redditStatus]
+   * @param {{connected: boolean, needsReconnect: boolean, handle: string|null}} [tiktokStatus]
    */
-  function renderSettings(settings, profile, googleConnected, linkedinStatus, redditStatus) {
+  function renderSettings(settings, profile, googleConnected, linkedinStatus, redditStatus, tiktokStatus) {
     const container = $('settings-content');
     if (!container) return;
 
@@ -1377,6 +1419,8 @@ const SocialOSUI = (() => {
     const liStatus = linkedinStatus || { connected: false, needsReconnect: false, handle: null };
     const rd = settings.platform_connections?.reddit || {};
     const rdStatus = redditStatus || { connected: false, needsReconnect: false, handle: null };
+    const tk = /** @type {any} */ (settings.platform_connections?.tiktok || {});
+    const tkStatus = tiktokStatus || { connected: false, needsReconnect: false, handle: null };
 
     container.innerHTML = `
       <h2 class="screen-title">Settings</h2>
@@ -1413,11 +1457,11 @@ const SocialOSUI = (() => {
       <div class="settings-section">
         <h3>Platform Connections <span class="text-secondary" style="font-weight:400">(CORS Relay)</span></h3>
         <p class="text-secondary" style="margin:0 0 8px">
-          LinkedIn and Reddit's APIs don't allow direct browser calls (no CORS) —
-          every call to either platform is relayed through one shared,
-          stateless Supabase Edge Function. Deploy it once
-          (docs/ROADMAP.md §2 — "social-relay") and paste its URL below; both
-          the LinkedIn and Reddit sections underneath reuse it.
+          LinkedIn, Reddit, and TikTok's APIs don't allow direct browser calls
+          (no CORS) — every call to these platforms is relayed through one
+          shared, stateless Supabase Edge Function. Deploy it once
+          (docs/ROADMAP.md §2 — "social-relay") and paste its URL below; the
+          LinkedIn, Reddit, and TikTok sections underneath all reuse it.
         </p>
         <div class="form-group">
           <label for="set-social-relay-url">CORS Relay Function URL</label>
@@ -1486,6 +1530,42 @@ const SocialOSUI = (() => {
           </div>
           <button class="btn btn-accent btn-sm" data-action="connect-reddit">
             ${rdStatus.needsReconnect ? 'Reconnect Reddit' : 'Connect Reddit'}
+          </button>
+        `}
+      </div>
+
+      <div class="settings-section">
+        <h3>TikTok <span class="text-secondary" style="font-weight:400">(profile connect)</span></h3>
+        <div class="connection-status ${tkStatus.connected ? 'connected' : 'disconnected'}">
+          ${tkStatus.connected
+            ? `Connected${tkStatus.handle ? ' as ' + escapeHtml(tkStatus.handle) : ''}`
+            : tkStatus.needsReconnect ? 'Token expired — reconnect' : 'Not connected'}
+        </div>
+        <p class="text-secondary" style="margin:8px 0">
+          Connects your TikTok identity (display name) for planning and
+          engagement. Direct video posting needs TikTok's Content Posting
+          API audit — until then, approved TikTok posts use the clipboard
+          flow plus the tiktok.com/upload link. Access tokens last 24 hours
+          and refresh silently in the background (like Reddit).
+        </p>
+        ${tkStatus.connected ? `
+          <button class="btn btn-danger btn-sm" data-action="disconnect-tiktok">Disconnect</button>
+        ` : `
+          <div class="form-group">
+            <label for="set-tiktok-client-key">TikTok Client Key</label>
+            <input type="text" id="set-tiktok-client-key" class="input" value="${tk.client_key || ''}">
+          </div>
+          <div class="form-group">
+            <label for="set-tiktok-client-secret">TikTok Client Secret</label>
+            <input type="password" id="set-tiktok-client-secret" class="input" value="${tk.client_secret || ''}">
+            <p class="text-secondary" style="margin-top:4px;font-size:12px">
+              Register a web app at developers.tiktok.com with the Login Kit
+              product and this app's URL as the redirect URI. Uses the shared
+              CORS Relay URL above.
+            </p>
+          </div>
+          <button class="btn btn-accent btn-sm" data-action="connect-tiktok">
+            ${tkStatus.needsReconnect ? 'Reconnect TikTok' : 'Connect TikTok'}
           </button>
         `}
       </div>

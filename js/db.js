@@ -22,6 +22,8 @@
  * @property {Object<string, string>} tone
  * @property {string} post_frequency_preference
  * @property {string[]} blackout_dates
+ * @property {Object<string, string>} [linked_accounts] - Onboarding Step 1 (js/linker.js): platform → handle the user linked. Optional/additive — pre-existing profiles won't have it.
+ * @property {Object<string, string>} [social_activity] - Onboarding Step 1: per-platform one-line summary of the user's existing presence/posting frequency, extracted from public profile data at link time.
  * @property {boolean} onboarding_complete
  * @property {string} created_at
  * @property {string} updated_at
@@ -56,7 +58,7 @@
  * @typedef {Object} ScheduledPost
  * @property {string} id
  * @property {string} content_id
- * @property {'linkedin'|'facebook'|'instagram'|'reddit'} platform
+ * @property {'linkedin'|'facebook'|'instagram'|'reddit'|'tiktok'} platform
  * @property {'draft'|'pending_approval'|'approved'|'published'|'skipped'|'failed'} status
  * @property {string} scheduled_time
  * @property {string|null} published_time
@@ -85,7 +87,7 @@
  * @typedef {Object} EngagementAction
  * @property {string} id
  * @property {'like'|'comment_reply'|'comment_on_other'|'follow'|'follow_back'|'unfollow'} type
- * @property {'linkedin'|'facebook'|'instagram'|'reddit'} platform
+ * @property {'linkedin'|'facebook'|'instagram'|'reddit'|'tiktok'} platform
  * @property {'pending_approval'|'approved'|'completed'|'skipped'} status
  * @property {'high'|'normal'|'low'} priority
  * @property {{user_handle: string, user_display_name: string, user_title: string, post_id: string, post_snippet: string, comment_id: string}} target
@@ -103,7 +105,7 @@
  * 4.5 — Follow/Unfollow Record
  * @typedef {Object} NetworkRecord
  * @property {string} id
- * @property {'linkedin'|'facebook'|'instagram'|'reddit'} platform
+ * @property {'linkedin'|'facebook'|'instagram'|'reddit'|'tiktok'} platform
  * @property {string} user_handle
  * @property {string} user_display_name
  * @property {string} user_title
@@ -122,7 +124,7 @@
  * @property {string} id
  * @property {string} date
  * @property {string} time
- * @property {'linkedin'|'facebook'|'instagram'|'reddit'} platform
+ * @property {'linkedin'|'facebook'|'instagram'|'reddit'|'tiktok'} platform
  * @property {string} content_id
  * @property {string|null} post_id
  * @property {'milestone'|'technical_insight'|'behind_the_scenes'|'question'|'achievement'} theme
@@ -188,6 +190,8 @@
  * @property {string|null} [client_id]
  * @property {string|null} [client_secret] - LinkedIn only. Reddit's "installed app" type is a public client and is issued no secret — see js/reddit.js file header.
  * @property {string|null} [member_urn] - LinkedIn only: `urn:li:person:{id}`, the `author` field required by /v2/ugcPosts.
+ * @property {string|null} [client_key] - TikTok only: TikTok calls its OAuth client id a "client key" — stored under that name to match its docs (js/tiktok.js).
+ * @property {string|null} [open_id] - TikTok only: the user's app-scoped open_id from the token response.
  * @property {string|null} [relay_url] - Legacy/deprecated per-connection CORS relay URL field (originally LinkedIn-only). Superseded by the shared top-level `social_relay_url` (see below) once the relay was generalized for Reddit too — kept only so pre-existing saved settings still resolve; new connects should populate `social_relay_url` instead.
  */
 
@@ -421,6 +425,20 @@ const SocialOSDB = (() => {
           refresh_token: null,
           expires_at: null,
           client_id: null
+        },
+        // TikTok (js/tiktok.js): confidential web client like LinkedIn,
+        // but TikTok names its client id "client key" — field named to
+        // match. Settings saved before TikTok shipped won't have this
+        // record; js/tiktok.js ensureConnection() backfills it.
+        tiktok: {
+          connected: false,
+          handle: null,
+          access_token: null,
+          refresh_token: null,
+          expires_at: null,
+          client_key: null,
+          client_secret: null,
+          open_id: null
         }
       },
       // Shared CORS relay for LinkedIn + Reddit (docs/ROADMAP.md §2). One
@@ -437,6 +455,7 @@ const SocialOSDB = (() => {
         instagram_likes_per_day: 40,
         facebook_likes_per_day: 15,
         reddit_upvotes_per_day: 15,
+        tiktok_likes_per_day: 20,
         comments_per_day: 6,
         follows_per_day: 15
       },

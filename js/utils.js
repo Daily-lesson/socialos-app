@@ -218,7 +218,8 @@ const SocialOSUtils = (() => {
     linkedin:  { days: [2, 3, 4],       hours: [8, 9, 10, 12] },  // Tue–Thu
     facebook:  { days: [3, 4, 5],       hours: [13, 14, 15] },    // Wed–Fri
     instagram: { days: [1, 3, 5],       hours: [11, 19] },        // Mon/Wed/Fri
-    reddit:    { days: [1, 2, 3, 4, 5], hours: [9, 18] }          // Mon–Fri
+    reddit:    { days: [1, 2, 3, 4, 5], hours: [9, 18] },         // Mon–Fri
+    tiktok:    { days: [2, 4, 5],       hours: [12, 15, 19] }     // Tue/Thu/Fri
   };
 
   // ── Truncate helper ───────────────────────────────────────────────────
