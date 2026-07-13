@@ -31,7 +31,7 @@
  * 4.2 — Content Item
  * @typedef {Object} ContentItem
  * @property {string} id
- * @property {'google_drive'|'google_photos'|'manual'|'web_clip'|'project'} source
+ * @property {'google_drive'|'google_photos'|'manual'|'web_clip'|'project'|'local_upload'} source
  * @property {string|null} source_id
  * @property {'document'|'photo'|'video'|'text'|'link'} type
  * @property {string} title

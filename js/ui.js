@@ -64,12 +64,14 @@ const SocialOSUI = (() => {
   }
 
   /**
-   * Show/hide the bottom nav bar.
+   * Show/hide the main nav (bottom bar on mobile, sidebar on desktop).
+   * Also toggles body.nav-visible so CSS can offset screens on desktop.
    * @param {boolean} visible
    */
   function showNav(visible) {
-    const nav = $('bottom-nav');
+    const nav = $('main-nav');
     if (nav) nav.style.display = visible ? 'flex' : 'none';
+    document.body.classList.toggle('nav-visible', visible);
   }
 
   /**
@@ -144,6 +146,145 @@ const SocialOSUI = (() => {
     sheet.addEventListener('click', handleClick);
   }
 
+  // ── Inline SVG icon set (CSP-safe: no external assets) ───────────────
+
+  const ICONS = {
+    upload:   '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 16V4m0 0 4.5 4.5M12 4 7.5 8.5"/><path d="M4 15v4a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-4"/></svg>',
+    drive:    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7v13h18V7"/><path d="M3 7l3-4h12l3 4H3z"/><path d="M10 12h4"/></svg>',
+    photos:   '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="9" cy="10" r="1.6"/><path d="m21 16-4.5-4.5L9 19"/></svg>',
+    link:     '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M10 14a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7"/><path d="M14 10a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7"/></svg>',
+    note:     '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>',
+    calendar: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M16 3v4M8 3v4M3 11h18"/></svg>',
+    star:     '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l2.6 5.3 5.9.8-4.3 4.1 1 5.8L12 16.3 6.8 19l1-5.8L3.5 9.1l5.9-.8L12 3z"/></svg>',
+    spark:    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2l1.9 6.1L20 10l-6.1 1.9L12 18l-1.9-6.1L4 10l6.1-1.9L12 2z"/><path d="M19 15l.9 2.6L22.5 18l-2.6.9L19 21.5l-.9-2.6L15.5 18l2.6-.9L19 15z"/></svg>',
+    shield:   '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-3.6 8-9.5V5.4L12 2 4 5.4v7.1C4 18.4 12 22 12 22z"/><path d="m9 11.5 2 2 4-4.5"/></svg>',
+    engage:   '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a8 8 0 0 1-8 8H4l2-3a8 8 0 1 1 15-5z"/><path d="M9 11h6M9 14h3"/></svg>'
+  };
+
+  // ── Landing page (signed-out / pre-onboarding) ────────────────────────
+
+  /**
+   * Render the marketing landing page shown before onboarding completes.
+   */
+  function renderLanding() {
+    const container = $('landing-content');
+    if (!container) return;
+
+    container.innerHTML = `
+      <div class="landing">
+        <div class="landing-bg"></div>
+        <div class="landing-orb landing-orb-1"></div>
+        <div class="landing-orb landing-orb-2"></div>
+        <div class="landing-orb landing-orb-3"></div>
+
+        <div class="landing-inner">
+
+          <header class="landing-topbar">
+            <span class="landing-logo">
+              <span class="nav-brand-mark">S</span>
+              <span>Social<em>OS</em></span>
+            </span>
+            <button class="btn btn-ghost btn-sm" data-action="start-onboarding">Sign in</button>
+          </header>
+
+          <section class="landing-hero">
+            <span class="hero-badge"><span class="hero-badge-dot"></span> AI-powered social command center</span>
+            <h1 class="hero-title">Your career deserves<br>a <span class="grad">louder voice.</span></h1>
+            <p class="hero-sub">
+              SocialOS turns your everyday work — projects, photos, milestones — into
+              polished, on-brand posts for LinkedIn, Facebook, Instagram, and Reddit.
+              You approve with one tap. It handles everything else.
+            </p>
+            <div class="hero-ctas">
+              <button class="btn btn-primary btn-hero" data-action="start-onboarding">Get Started — Free</button>
+              <button class="btn btn-ghost btn-lg" data-action="scroll-how">See how it works</button>
+            </div>
+            <p class="hero-note">No credit card. Your data stays on your device.</p>
+          </section>
+
+          <section class="landing-platforms">
+            <span class="label">Built for the platforms that matter</span>
+            <span class="platform-pill"><span class="platform-dot" style="background:${PLATFORM_COLORS.linkedin}"></span>LinkedIn</span>
+            <span class="platform-pill"><span class="platform-dot" style="background:${PLATFORM_COLORS.facebook}"></span>Facebook</span>
+            <span class="platform-pill"><span class="platform-dot" style="background:${PLATFORM_COLORS.instagram}"></span>Instagram</span>
+            <span class="platform-pill"><span class="platform-dot" style="background:${PLATFORM_COLORS.reddit}"></span>Reddit</span>
+          </section>
+
+          <section class="landing-section" id="landing-features">
+            <span class="landing-kicker">What it does</span>
+            <h2 class="landing-h2">A full social team, in your pocket</h2>
+            <p class="landing-section-sub">Six capabilities that normally take an agency — running quietly for one person: you.</p>
+            <div class="feature-grid">
+              <div class="feature-card">
+                <span class="feature-icon">${ICONS.spark}</span>
+                <h3>AI-drafted posts</h3>
+                <p>Claude writes platform-perfect drafts in your voice — with alternates to pick from. Every post waits for your approval before it goes anywhere.</p>
+              </div>
+              <div class="feature-card">
+                <span class="feature-icon">${ICONS.photos}</span>
+                <h3>Media from anywhere</h3>
+                <p>Upload from your phone or computer, pull from Google Drive and Google Photos, or paste a link. AI rates and tags everything automatically.</p>
+              </div>
+              <div class="feature-card">
+                <span class="feature-icon">${ICONS.calendar}</span>
+                <h3>Smart calendar</h3>
+                <p>A 4-week posting plan generated around best posting times, your blackout dates, and platform rhythm — no spreadsheet required.</p>
+              </div>
+              <div class="feature-card">
+                <span class="feature-icon">${ICONS.engage}</span>
+                <h3>Engagement engine</h3>
+                <p>Comments get categorized and answered with drafted replies. Posts worth liking get scored and queued. You stay present without living online.</p>
+              </div>
+              <div class="feature-card">
+                <span class="feature-icon">${ICONS.star}</span>
+                <h3>Project tracker</h3>
+                <p>Track initiatives, tasks, and milestones — then turn a reached milestone into a ready-to-post story in one tap.</p>
+              </div>
+              <div class="feature-card">
+                <span class="feature-icon">${ICONS.shield}</span>
+                <h3>Privacy scrubbing</h3>
+                <p>Client names, locations, and proprietary details are stripped before AI ever sees your content. Everything is stored locally on your device.</p>
+              </div>
+            </div>
+          </section>
+
+          <section class="landing-section" id="how-it-works">
+            <span class="landing-kicker">How it works</span>
+            <h2 class="landing-h2">Three steps to autopilot</h2>
+            <p class="landing-section-sub">Set it up once. From then on, your only job is tapping "Approve."</p>
+            <div class="steps-grid">
+              <div class="step-card">
+                <span class="step-num">1</span>
+                <h3>Tell it who you are</h3>
+                <p>A short guided setup captures your goals, audience, tone, and off-limits topics — the DNA of your personal brand.</p>
+              </div>
+              <div class="step-card">
+                <span class="step-num">2</span>
+                <h3>Feed it your work</h3>
+                <p>Connect Google, upload photos from your device, or jot quick notes. SocialOS finds the stories hiding in your content.</p>
+              </div>
+              <div class="step-card">
+                <span class="step-num">3</span>
+                <h3>Approve &amp; grow</h3>
+                <p>Review drafted posts and replies in one queue. Approve, edit, or skip — then watch your presence compound.</p>
+              </div>
+            </div>
+          </section>
+
+          <section class="landing-cta">
+            <h2>Ready to be seen?</h2>
+            <p>Set up takes about five minutes. Your future audience is already scrolling.</p>
+            <button class="btn btn-primary btn-hero" data-action="start-onboarding">Launch SocialOS</button>
+          </section>
+
+          <footer class="landing-footer">
+            SocialOS — your personal social media operating system. All data stays on your device.
+          </footer>
+
+        </div>
+      </div>`;
+  }
+
   // ── Onboarding Wizard (11 steps) ─────────────────────────────────────
 
   /**
@@ -156,7 +297,12 @@ const SocialOSUI = (() => {
     if (!container) return;
 
     const progress = Math.round((step / 11) * 100);
-    let html = `<div class="onboarding-progress"><div class="progress-bar" style="width:${progress}%"></div></div>`;
+    let html = `
+      <div class="ob-brand">
+        <span class="nav-brand-mark">S</span>
+        <span>SocialOS Setup</span>
+      </div>`;
+    html += `<div class="onboarding-progress"><div class="progress-bar" style="width:${progress}%"></div></div>`;
     html += `<div class="onboarding-step-label">Step ${step} of 11</div>`;
 
     switch (step) {
@@ -373,17 +519,20 @@ const SocialOSUI = (() => {
 
   /**
    * Render the dashboard screen.
-   * @param {object} data - { profile, pendingCount, nextPost, contentCount }
+   * @param {{profile?: any, pendingCount?: number, nextPost?: any, contentCount?: number, pm?: any}} data
    */
   function renderDashboard(data) {
     const container = $('dashboard-content');
     if (!container) return;
 
     const greeting = getGreeting();
+    const np = /** @type {ScheduledPost|null} */ (data.nextPost || null);
+    /** @type {{title: string, project: string, due_date: string}[]} */
+    const dueSoon = data.pm?.dueSoon || [];
 
     container.innerHTML = `
       <div class="dash-header">
-        <h1>${greeting}, ${data.profile?.name?.split(' ')[0] || 'there'}</h1>
+        <h1>${greeting}, <span class="grad">${escapeHtml(data.profile?.name?.split(' ')[0] || 'there')}</span></h1>
         <p class="text-secondary">Your social media command center</p>
       </div>
 
@@ -409,63 +558,70 @@ const SocialOSUI = (() => {
         </div>
       </div>
 
-      ${data.pm && data.pm.dueSoon && data.pm.dueSoon.length ? `
-        <div class="card duesoon-card">
-          <div class="card-header"><span>Due this week</span></div>
-          ${data.pm.dueSoon.slice(0, 4).map(d => `
-            <div class="duesoon-row">
-              <span class="duesoon-title">${escapeHtml(SocialOSUtils.truncate(d.title, 40))}</span>
-              <span class="text-secondary">${escapeHtml(d.project)} · ${d.due_date}</span>
+      <div class="dash-columns">
+        <div class="dash-col-main">
+          ${np ? `
+            <div class="card next-post-card">
+              <div class="card-header">
+                <span class="platform-badge" style="background:${PLATFORM_COLORS[np.platform]}">${PLATFORM_ICONS[np.platform]}</span>
+                <span>Next Post</span>
+                <span class="text-secondary">${np.scheduled_time ? SocialOSUtils.formatDate(np.scheduled_time) : 'Unscheduled'}</span>
+              </div>
+              <p class="post-preview">${SocialOSUtils.truncate(np.draft?.text || '', 150)}</p>
+              <button class="btn btn-primary btn-sm" data-action="review-post" data-id="${np.id}">Review</button>
             </div>
-          `).join('')}
-          <button class="btn btn-secondary btn-sm" data-action="go-projects" style="margin-top:8px">Open Projects</button>
-        </div>
-      ` : ''}
+          ` : `
+            <div class="card empty-state">
+              <h3>No posts queued yet</h3>
+              <p class="text-secondary">Add some content and SocialOS will draft posts for you.</p>
+              <button class="btn btn-primary" data-action="go-library" style="margin-top:12px">Add Content</button>
+            </div>
+          `}
 
-      ${data.nextPost ? `
-        <div class="card next-post-card">
-          <div class="card-header">
-            <span class="platform-badge" style="background:${PLATFORM_COLORS[data.nextPost.platform]}">${PLATFORM_ICONS[data.nextPost.platform]}</span>
-            <span>Next Post</span>
-            <span class="text-secondary">${data.nextPost.scheduled_time ? SocialOSUtils.formatDate(data.nextPost.scheduled_time) : 'Unscheduled'}</span>
+          ${dueSoon.length ? `
+            <div class="card duesoon-card">
+              <div class="card-header"><span>Due this week</span></div>
+              ${dueSoon.slice(0, 4).map(d => `
+                <div class="duesoon-row">
+                  <span class="duesoon-title">${escapeHtml(SocialOSUtils.truncate(d.title, 40))}</span>
+                  <span class="text-secondary">${escapeHtml(d.project)} · ${d.due_date}</span>
+                </div>
+              `).join('')}
+              <button class="btn btn-secondary btn-sm" data-action="go-projects" style="margin-top:8px">Open Projects</button>
+            </div>
+          ` : ''}
+        </div>
+
+        <div class="dash-col-side">
+          <div class="card quick-actions">
+            <h3>Quick Actions</h3>
+            <div class="action-grid">
+              <button class="action-btn" data-action="upload-local">
+                <span class="action-icon">${ICONS.upload}</span>
+                <span>Upload Media</span>
+              </button>
+              <button class="action-btn" data-action="add-content-manual">
+                <span class="action-icon">${ICONS.note}</span>
+                <span>Add a Note</span>
+              </button>
+              <button class="action-btn" data-action="scan-drive">
+                <span class="action-icon">${ICONS.drive}</span>
+                <span>Scan Drive</span>
+              </button>
+              <button class="action-btn" data-action="pick-photos">
+                <span class="action-icon">${ICONS.photos}</span>
+                <span>Google Photos</span>
+              </button>
+              <button class="action-btn" data-action="add-project">
+                <span class="action-icon">${ICONS.star}</span>
+                <span>New Project</span>
+              </button>
+              <button class="action-btn" data-action="generate-calendar">
+                <span class="action-icon">${ICONS.calendar}</span>
+                <span>Generate Calendar</span>
+              </button>
+            </div>
           </div>
-          <p class="post-preview">${SocialOSUtils.truncate(data.nextPost.draft?.text || '', 150)}</p>
-          <button class="btn btn-primary btn-sm" data-action="review-post" data-id="${data.nextPost.id}">Review</button>
-        </div>
-      ` : `
-        <div class="card empty-state">
-          <p>No posts queued yet.</p>
-          <button class="btn btn-primary" data-action="go-library">Add Content</button>
-        </div>
-      `}
-
-      <div class="card quick-actions">
-        <h3>Quick Actions</h3>
-        <div class="action-grid">
-          <button class="action-btn" data-action="add-content-manual">
-            <span class="action-icon">+</span>
-            <span>Add Content</span>
-          </button>
-          <button class="action-btn" data-action="scan-drive">
-            <span class="action-icon">G</span>
-            <span>Scan Drive</span>
-          </button>
-          <button class="action-btn" data-action="pick-photos">
-            <span class="action-icon">&#128247;</span>
-            <span>Pick Photos</span>
-          </button>
-          <button class="action-btn" data-action="add-project">
-            <span class="action-icon">&#9733;</span>
-            <span>New Project</span>
-          </button>
-          <button class="action-btn" data-action="generate-calendar">
-            <span class="action-icon">&#128197;</span>
-            <span>Generate Calendar</span>
-          </button>
-          <button class="action-btn" data-action="go-settings">
-            <span class="action-icon">&#9881;</span>
-            <span>Settings</span>
-          </button>
         </div>
       </div>
     `;
@@ -925,17 +1081,23 @@ const SocialOSUI = (() => {
     container.innerHTML = `
       <div class="library-header">
         <h2 class="screen-title">Content Library</h2>
-        <button class="btn btn-primary btn-sm" data-action="add-content-manual">+ Add</button>
+      </div>
+
+      <div class="source-bar">
+        <button class="source-btn" data-action="upload-local">${ICONS.upload} Upload from device</button>
+        <button class="source-btn" data-action="scan-drive">${ICONS.drive} Google Drive</button>
+        <button class="source-btn" data-action="pick-photos">${ICONS.photos} Google Photos</button>
+        <button class="source-btn" data-action="show-add-media-url">${ICONS.link} From URL</button>
+        <button class="source-btn" data-action="add-content-manual">${ICONS.note} Write a note</button>
       </div>
 
       ${!items.length ? `
         <div class="empty-state">
-          <h3>No content yet</h3>
-          <p class="text-secondary">Add content manually, scan your Google Drive, or pick photos.</p>
-          <div class="action-grid" style="margin-top:16px">
-            <button class="btn btn-primary" data-action="add-content-manual">Add Manually</button>
-            <button class="btn btn-accent" data-action="scan-drive">Scan Drive</button>
-            <button class="btn btn-accent" data-action="pick-photos">Pick Photos</button>
+          <h3>Your library is empty</h3>
+          <p class="text-secondary">Bring in media from your device, Google Drive, Google Photos, a URL — or just write a note. AI rates and tags everything for posting.</p>
+          <div class="btn-row" style="margin-top:16px;justify-content:center">
+            <button class="btn btn-primary" data-action="upload-local">Upload from Device</button>
+            <button class="btn btn-secondary" data-action="add-content-manual">Write a Note</button>
           </div>
         </div>
       ` : `
@@ -950,7 +1112,7 @@ const SocialOSUI = (() => {
               ` : ''}
               <div class="content-card-header">
                 <span class="rating-badge rating-${item.ai_rating}">${item.ai_rating}</span>
-                <span class="source-badge">${item.source.replace('google_', 'G ')}</span>
+                <span class="source-badge">${item.source.replace('google_', 'G ').replace(/_/g, ' ')}</span>
               </div>
               <h4 class="content-title">${escapeHtml(SocialOSUtils.truncate(item.title, 60))}</h4>
               <p class="text-secondary content-desc">${escapeHtml(SocialOSUtils.truncate(item.description, 80))}</p>
@@ -1059,6 +1221,38 @@ const SocialOSUI = (() => {
           </select>
         </div>
         <button class="btn btn-primary" data-action="save-manual-content" style="width:100%;margin-top:16px">
+          Add to Library
+        </button>
+      </div>`;
+  }
+
+  /**
+   * "From URL" media source: save a link to an image or page as content.
+   * The CSP forbids fetching arbitrary hosts, so the URL is stored as-is
+   * (browsers can still *display* the image — img-src allows https:).
+   */
+  function renderAddMediaUrl() {
+    const container = $('library-content');
+    if (!container) return;
+
+    container.innerHTML = `
+      <div class="add-content-view">
+        <button class="btn btn-secondary btn-sm" data-action="back-to-library">&#8592; Back</button>
+        <h2>Add from URL</h2>
+        <p class="text-secondary" style="margin-bottom:16px">Paste a direct link to an image, or any web page you want to post about.</p>
+        <div class="form-group">
+          <label for="media-url">URL</label>
+          <input type="url" id="media-url" class="input" placeholder="https://example.com/photo.jpg">
+        </div>
+        <div class="form-group">
+          <label for="media-url-title">Title</label>
+          <input type="text" id="media-url-title" class="input" placeholder="What is this?">
+        </div>
+        <div class="form-group">
+          <label for="media-url-desc">Notes (optional — helps AI suggest post angles)</label>
+          <textarea id="media-url-desc" class="input textarea" rows="3" placeholder="Context, what's shown, why it matters..."></textarea>
+        </div>
+        <button class="btn btn-primary" data-action="save-media-url" style="width:100%;margin-top:16px">
           Add to Library
         </button>
       </div>`;
@@ -1547,6 +1741,7 @@ const SocialOSUI = (() => {
     toast,
     loading,
     confirm,
+    renderLanding,
     renderOnboardingStep,
     renderDashboard,
     renderApprovals,
@@ -1558,6 +1753,7 @@ const SocialOSUI = (() => {
     renderLibrary,
     renderContentDetail,
     renderAddContent,
+    renderAddMediaUrl,
     renderCalendar,
     renderProjects,
     renderProjectDetail,

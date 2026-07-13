@@ -11,10 +11,10 @@ const SocialOS = (() => {
 
   /**
    * In-memory working state.
-   * @type {{currentScreen: string, onboardingStep: number, onboardingData: Object<string, any>, calendarFocusDate: string|null}}
+   * @type {{currentScreen: string, onboardingStep: number, onboardingData: Object<string, any>, calendarFocusDate: string|null, approvalsTab: string, engagementSubTab: string}}
    */
   const state = {
-    currentScreen: 'onboarding',
+    currentScreen: 'landing',
     onboardingStep: 1,
     onboardingData: {},
     calendarFocusDate: null,
@@ -32,6 +32,12 @@ const SocialOS = (() => {
     state.currentScreen = screen;
 
     switch (screen) {
+      case 'landing':
+        SocialOSUI.showNav(false);
+        SocialOSUI.showScreen('screen-landing');
+        SocialOSUI.renderLanding();
+        break;
+
       case 'onboarding':
         SocialOSUI.showNav(false);
         SocialOSUI.showScreen('screen-onboarding');
@@ -108,10 +114,10 @@ const SocialOS = (() => {
     const posts = await SocialOSDB.getPendingPosts();
     const engagement = await SocialOSEngagement.getQueues();
     SocialOSUI.renderApprovals({
-      tab: state.approvalsTab,
+      tab: /** @type {any} */ (state.approvalsTab),
       posts,
       engagement,
-      engagementSubTab: state.engagementSubTab
+      engagementSubTab: /** @type {any} */ (state.engagementSubTab)
     });
   }
 
@@ -359,6 +365,153 @@ const SocialOS = (() => {
     await renderCalendar();
   }
 
+  // ── Local device media import ("Upload from device" source) ──────────
+
+  /**
+   * Read a picked file as a data URI. Images are downscaled to a JPEG
+   * (max 1600px long edge) so IndexedDB stays light and the AI proxy
+   * payload stays under limits.
+   * @param {File} file
+   * @returns {Promise<{dataUri: string, mimeType: string}>}
+   */
+  function fileToDataUri(file) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onerror = () => reject(new Error(`Could not read ${file.name}`));
+      reader.onload = () => {
+        const raw = /** @type {string} */ (reader.result);
+        if (!file.type.startsWith('image/') || file.type === 'image/gif') {
+          resolve({ dataUri: raw, mimeType: file.type });
+          return;
+        }
+        const img = new Image();
+        img.onerror = () => resolve({ dataUri: raw, mimeType: file.type });
+        img.onload = () => {
+          const MAX = 1600;
+          const scale = Math.min(1, MAX / Math.max(img.width, img.height));
+          if (scale === 1 && file.type === 'image/jpeg') {
+            resolve({ dataUri: raw, mimeType: file.type });
+            return;
+          }
+          const canvas = document.createElement('canvas');
+          canvas.width = Math.round(img.width * scale);
+          canvas.height = Math.round(img.height * scale);
+          canvas.getContext('2d')?.drawImage(img, 0, 0, canvas.width, canvas.height);
+          resolve({ dataUri: canvas.toDataURL('image/jpeg', 0.85), mimeType: 'image/jpeg' });
+        };
+        img.src = raw;
+      };
+      reader.readAsDataURL(file);
+    });
+  }
+
+  /**
+   * Import files picked from the device into the content library.
+   * Mirrors the Google Photos import path (js/google.js pickPhotos()):
+   * scrub filename → AI analyse (photos only) → scrub description → save.
+   * @param {FileList} files
+   */
+  async function importLocalFiles(files) {
+    const list = Array.from(files);
+    if (!list.length) return;
+
+    let saved = 0;
+    for (let i = 0; i < list.length; i++) {
+      const file = list[i];
+      const isVideo = file.type.startsWith('video/');
+      SocialOSUI.loading(true, `Importing ${SocialOSUtils.truncate(file.name, 30)} (${i + 1}/${list.length})…`);
+
+      try {
+        const settings = await SocialOSDB.getSettings();
+        const filename = SocialOSUtils.scrub(
+          file.name,
+          settings?.content_scrubbing?.custom_blocked_terms
+        ).text;
+
+        // Videos over ~20MB skip the data URI (IndexedDB bloat) — the
+        // library entry still tracks them for planning; photos always embed.
+        let dataUri = null;
+        let mimeType = file.type;
+        if (!isVideo) {
+          ({ dataUri, mimeType } = await fileToDataUri(file));
+        } else if (file.size <= 20 * 1024 * 1024) {
+          ({ dataUri } = await fileToDataUri(file));
+        }
+
+        /** @type {{rating: string, rating_reason: string, tags: string[], angles: string[], platforms: string[], sensitivity_flags: string[], description: string}} */
+        let analysis;
+        if (isVideo) {
+          analysis = {
+            rating: 'medium',
+            rating_reason: 'Video — needs manual review (vision analysis covers photos only).',
+            tags: ['video'],
+            angles: ['Behind-the-scenes footage'],
+            platforms: ['linkedin', 'instagram'],
+            sensitivity_flags: [],
+            description: `Video: ${filename}`
+          };
+        } else {
+          try {
+            analysis = await SocialOSAI.analysePhoto(/** @type {string} */ (dataUri), mimeType, filename);
+          } catch (/** @type {any} */ err) {
+            // AI being down shouldn't block getting media in — fall back.
+            analysis = {
+              rating: 'medium',
+              rating_reason: `AI analysis unavailable (${err.message}) — review manually.`,
+              tags: [],
+              angles: [],
+              platforms: ['linkedin'],
+              sensitivity_flags: [],
+              description: filename
+            };
+          }
+        }
+
+        // Defense in depth: scrub whatever text Claude returned before storing.
+        const scrubbedDescription = SocialOSUtils.scrub(
+          analysis.description || '',
+          settings?.content_scrubbing?.custom_blocked_terms
+        ).text;
+
+        /** @type {ContentItem} */
+        const item = {
+          id: SocialOSUtils.uuid(),
+          source: 'local_upload',
+          source_id: null,
+          type: isVideo ? 'video' : 'photo',
+          title: filename,
+          description: scrubbedDescription,
+          thumbnail_url: isVideo ? null : dataUri,
+          raw_content: null,
+          tags: analysis.tags || [],
+          sensitivity_flags: analysis.sensitivity_flags || [],
+          scrubbed: true,
+          ai_rating: /** @type {any} */ (analysis.rating || 'medium'),
+          ai_rating_reason: analysis.rating_reason || '',
+          suggested_platforms: analysis.platforms || ['linkedin'],
+          suggested_angles: analysis.angles || [],
+          status: 'available',
+          post_history: [],
+          added_at: SocialOSUtils.now(),
+          last_used: null
+        };
+
+        await SocialOSDB.put(SocialOSDB.STORES.content, item);
+        saved++;
+      } catch (/** @type {any} */ err) {
+        console.warn(`Skipping local file ${file.name}:`, err.message);
+      }
+    }
+
+    SocialOSUI.loading(false);
+    SocialOSUI.toast(
+      saved ? `Imported ${saved} file${saved > 1 ? 's' : ''} from your device!` : 'Nothing imported.',
+      saved ? 'success' : 'warning'
+    );
+    if (state.currentScreen === 'library') await renderLibrary();
+    if (state.currentScreen === 'dashboard') await renderDashboard();
+  }
+
   // ── Notifications (BUILD_PLAN §7 notification_scheduler, §12 triggers) ─
   // A PWA can't run timers in the background, so reminders are checked on
   // every app open. Phase 5 moves scheduling server-side (Cloudflare Cron).
@@ -484,6 +637,15 @@ const SocialOS = (() => {
         case 'go-library':     navigate('library'); break;
         case 'go-projects':    navigate('projects'); break;
         case 'go-settings':    navigate('settings'); break;
+
+        // ── Landing page ───────────────────────────────
+        case 'start-onboarding':
+          navigate('onboarding');
+          break;
+
+        case 'scroll-how':
+          document.getElementById('how-it-works')?.scrollIntoView({ behavior: 'smooth' });
+          break;
 
         // ── Onboarding ─────────────────────────────────
         case 'ob-next':
@@ -720,6 +882,89 @@ const SocialOS = (() => {
         case 'add-content-manual':
           SocialOSUI.renderAddContent();
           break;
+
+        // ── Media sources: device upload + URL import ──
+        case 'upload-local': {
+          const input = /** @type {HTMLInputElement} */ (SocialOSUI.$('local-file-input'));
+          input?.click();
+          break;
+        }
+
+        case 'show-add-media-url':
+          SocialOSUI.renderAddMediaUrl();
+          break;
+
+        case 'save-media-url': {
+          const url = /** @type {HTMLInputElement} */ (SocialOSUI.$('media-url'))?.value?.trim();
+          const title = /** @type {HTMLInputElement} */ (SocialOSUI.$('media-url-title'))?.value?.trim();
+          const notes = /** @type {HTMLTextAreaElement} */ (SocialOSUI.$('media-url-desc'))?.value?.trim() || '';
+
+          if (!url || !/^https:\/\//i.test(url)) {
+            SocialOSUI.toast('Enter a valid https:// URL.', 'warning');
+            break;
+          }
+          if (!title) {
+            SocialOSUI.toast('Give it a title.', 'warning');
+            break;
+          }
+
+          SocialOSUI.loading(true, 'Analysing link...');
+          try {
+            const isImage = /\.(jpe?g|png|gif|webp|avif)(\?.*)?$/i.test(url);
+            const settings = await SocialOSDB.getSettings();
+            const scrubbed = SocialOSUtils.scrub(
+              `${title}\n${notes}`,
+              settings?.content_scrubbing?.custom_blocked_terms
+            );
+
+            // The CSP blocks fetching arbitrary hosts, so analysis runs on
+            // the title/notes text only; images still display via img-src.
+            let analysis;
+            try {
+              analysis = await SocialOSAI.analyseContent(scrubbed.text, title);
+            } catch (/** @type {any} */ err) {
+              analysis = {
+                rating: 'medium',
+                rating_reason: `AI analysis unavailable (${err.message}) — review manually.`,
+                tags: [],
+                angles: [],
+                platforms: ['linkedin'],
+                sensitivity_flags: []
+              };
+            }
+
+            /** @type {ContentItem} */
+            const item = {
+              id: SocialOSUtils.uuid(),
+              source: 'web_clip',
+              source_id: url,
+              type: isImage ? 'photo' : 'link',
+              title,
+              description: notes || analysis.rating_reason || '',
+              thumbnail_url: isImage ? url : null,
+              raw_content: url + (notes ? `\n\n${notes}` : ''),
+              tags: analysis.tags || [],
+              sensitivity_flags: analysis.sensitivity_flags || [],
+              scrubbed: true,
+              ai_rating: /** @type {any} */ (analysis.rating || 'medium'),
+              ai_rating_reason: analysis.rating_reason || '',
+              suggested_platforms: analysis.platforms || ['linkedin'],
+              suggested_angles: analysis.angles || [],
+              status: 'available',
+              post_history: [],
+              added_at: SocialOSUtils.now(),
+              last_used: null
+            };
+
+            await SocialOSDB.put(SocialOSDB.STORES.content, item);
+            SocialOSUI.toast('Added from URL!', 'success');
+            await renderLibrary();
+          } catch (/** @type {any} */ err) {
+            SocialOSUI.toast(`Error: ${err.message}`, 'error');
+          }
+          SocialOSUI.loading(false);
+          break;
+        }
 
         case 'back-to-library':
           await renderLibrary();
@@ -1350,6 +1595,16 @@ const SocialOS = (() => {
       }
     });
 
+    // ── Local file input ("Upload from device") ─────────────────────────
+
+    const fileInput = /** @type {HTMLInputElement} */ (SocialOSUI.$('local-file-input'));
+    fileInput?.addEventListener('change', async () => {
+      if (fileInput.files?.length) {
+        await importLocalFiles(fileInput.files);
+        fileInput.value = ''; // allow re-picking the same file
+      }
+    });
+
     // ── Nav tab clicks ──────────────────────────────────────────────────
 
     document.querySelectorAll('.nav-tab').forEach(tab => {
@@ -1434,7 +1689,13 @@ const SocialOS = (() => {
       if (settings.onboarding_step > 0) {
         state.onboardingStep = settings.onboarding_step;
       }
-      navigate('onboarding');
+      // Mid-onboarding (saved step or OAuth return) resumes the wizard;
+      // otherwise brand-new visitors see the landing page first.
+      if (settings.onboarding_step > 1 || savedData) {
+        navigate('onboarding');
+      } else {
+        navigate('landing');
+      }
     }
   }
 

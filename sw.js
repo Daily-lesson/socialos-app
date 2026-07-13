@@ -5,7 +5,7 @@
  * Paths are relative so the app works from a subpath (e.g. GitHub Pages).
  */
 
-const CACHE_NAME = 'socialos-v6'; // v6: Phase 5 Reddit direct posting (reddit.js added, LinkedIn relay generalized to social-relay)
+const CACHE_NAME = 'socialos-v7'; // v7: UI redesign — landing page, adaptive sidebar/bottom nav, local device upload + URL import
 const SHELL_ASSETS = [
   './',
   './index.html',
