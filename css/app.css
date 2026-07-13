@@ -276,16 +276,10 @@ img { max-width: 100%; height: auto; }
 
   .nav-brand-mark {
     display: inline-flex;
-    align-items: center;
-    justify-content: center;
     width: 34px;
     height: 34px;
     border-radius: 10px;
-    background: var(--grad-accent);
-    color: #fff;
-    font-family: var(--font-display);
-    font-weight: 700;
-    font-size: 1.1rem;
+    object-fit: contain;
     box-shadow: var(--glow-accent);
   }
 
@@ -438,14 +432,10 @@ img { max-width: 100%; height: auto; }
 
 .landing-logo .nav-brand-mark {
   display: inline-flex;
-  align-items: center;
-  justify-content: center;
   width: 34px;
   height: 34px;
   border-radius: 10px;
-  background: var(--grad-accent);
-  color: #fff;
-  font-size: 1.1rem;
+  object-fit: contain;
   box-shadow: var(--glow-accent);
 }
 
@@ -1047,14 +1037,10 @@ select.input {
 
 .ob-brand .nav-brand-mark {
   display: inline-flex;
-  align-items: center;
-  justify-content: center;
   width: 30px;
   height: 30px;
   border-radius: 9px;
-  background: var(--grad-accent);
-  color: #fff;
-  font-size: 0.95rem;
+  object-fit: contain;
 }
 
 .onboarding-progress {
@@ -1999,6 +1985,43 @@ select.input {
   display: flex;
   gap: var(--space-sm);
   margin-top: var(--space-lg);
+}
+
+/* ── Feedback FAB (persistent entry point, self-healing loop) ───────── */
+
+.feedback-fab {
+  position: fixed;
+  right: var(--space-md);
+  bottom: calc(var(--space-md) + var(--safe-bottom));
+  z-index: 150;
+  width: 48px;
+  height: 48px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: var(--radius-full);
+  background: var(--grad-accent);
+  color: #fff;
+  cursor: pointer;
+  box-shadow: var(--shadow-elevated);
+  transition: transform 0.2s;
+}
+
+.feedback-fab:hover { transform: scale(1.06); }
+
+.feedback-fab svg { width: 22px; height: 22px; }
+
+/* Sit above the mobile bottom nav when it's visible */
+body.nav-visible .feedback-fab {
+  bottom: calc(var(--nav-height) + var(--space-md) + var(--safe-bottom));
+}
+
+/* Desktop: nav is a left sidebar, not a bottom bar — no offset needed */
+@media (min-width: 1024px) {
+  body.nav-visible .feedback-fab {
+    bottom: var(--space-md);
+  }
 }
 
 .sheet-actions .btn {

@@ -5,7 +5,7 @@
  * Paths are relative so the app works from a subpath (e.g. GitHub Pages).
  */
 
-const CACHE_NAME = 'socialos-v7'; // v7: UI redesign — landing page, adaptive sidebar/bottom nav, local device upload + URL import
+const CACHE_NAME = 'socialos-v8'; // v8: self-healing error capture + feedback relay (js/self-healing.js)
 const SHELL_ASSETS = [
   './',
   './index.html',
@@ -18,6 +18,7 @@ const SHELL_ASSETS = [
   './js/linkedin.js',
   './js/reddit.js',
   './js/pm.js',
+  './js/self-healing.js',
   './js/ui.js',
   './js/utils.js',
   './manifest.json',

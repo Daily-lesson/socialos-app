@@ -647,6 +647,37 @@ const SocialOS = (() => {
           document.getElementById('how-it-works')?.scrollIntoView({ behavior: 'smooth' });
           break;
 
+        // ── Feedback (self-healing) ────────────────────
+        case 'open-feedback':
+          SocialOSUI.renderFeedback();
+          break;
+
+        case 'feedback-type': {
+          const group = actionEl.closest('.chip-group');
+          group?.querySelectorAll('.chip').forEach(c => c.classList.remove('selected'));
+          actionEl.classList.add('selected');
+          break;
+        }
+
+        case 'close-feedback':
+          SocialOSUI.closeSheet();
+          break;
+
+        case 'submit-feedback': {
+          const type = document.querySelector('#feedback-type-group .chip.selected')?.dataset?.value === 'idea' ? 'idea' : 'bug';
+          const message = /** @type {HTMLTextAreaElement} */ (SocialOSUI.$('feedback-message'))?.value?.trim();
+          if (!message) { SocialOSUI.toast('Add a few details first.', 'warning'); break; }
+
+          // Optimistic: close + toast immediately, submit best-effort in
+          // the background — a relay outage must never block the UI.
+          SocialOSUI.closeSheet();
+          SocialOSUI.toast('Thanks — we\'re on it.', 'success');
+          if (window.SelfHealing) {
+            SelfHealing.submitFeedback({ type, message }).catch(() => {});
+          }
+          break;
+        }
+
         // ── Onboarding ─────────────────────────────────
         case 'ob-next':
           collectOnboardingData();
@@ -1635,6 +1666,10 @@ const SocialOS = (() => {
   // ── Init ──────────────────────────────────────────────────────────────
 
   async function init() {
+    // Self-healing: install window.onerror/unhandledrejection capture
+    // first, before anything else can throw.
+    if (window.SelfHealing) SelfHealing.install();
+
     // Open database
     await SocialOSDB.open();
 
