@@ -5,7 +5,7 @@
  * Paths are relative so the app works from a subpath (e.g. GitHub Pages).
  */
 
-const CACHE_NAME = 'socialos-v11'; // v11: opaque full-bleed home-screen icons (no transparent corners)
+const CACHE_NAME = 'socialos-v12'; // v12: one-tap sign-in for LinkedIn/Reddit/TikTok + one-click approve-and-post
 const SHELL_ASSETS = [
   './',
   './index.html',

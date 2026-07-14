@@ -41,6 +41,10 @@ const SocialOS = (() => {
       case 'onboarding':
         SocialOSUI.showNav(false);
         SocialOSUI.showScreen('screen-onboarding');
+        // Step 1 shows per-platform sign-in buttons/connected badges —
+        // refresh the statuses so a return from an OAuth redirect renders
+        // "Connected as …" immediately.
+        if (state.onboardingStep === 1) await refreshOnboardingPlatformStatus();
         SocialOSUI.renderOnboardingStep(state.onboardingStep, state.onboardingData);
         break;
 
@@ -117,7 +121,13 @@ const SocialOS = (() => {
       tab: /** @type {any} */ (state.approvalsTab),
       posts,
       engagement,
-      engagementSubTab: /** @type {any} */ (state.engagementSubTab)
+      engagementSubTab: /** @type {any} */ (state.engagementSubTab),
+      // Platforms where approving publishes in the same tap (label the
+      // button honestly: "APPROVE & POST" vs plain "APPROVE").
+      directPlatforms: {
+        linkedin: await SocialOSLinkedIn.isConnected(),
+        reddit: await SocialOSReddit.isConnected()
+      }
     });
   }
 
@@ -129,6 +139,18 @@ const SocialOS = (() => {
   async function renderCalendar() {
     const slots = await SocialOSDB.getAllCalendarSlots();
     SocialOSUI.renderCalendar(slots, state.calendarFocusDate || undefined);
+  }
+
+  /**
+   * Populate state.onboardingData.platform_status for onboarding Step 1's
+   * per-platform sign-in buttons / "Connected as …" badges.
+   */
+  async function refreshOnboardingPlatformStatus() {
+    state.onboardingData.platform_status = {
+      linkedin: await SocialOSLinkedIn.getConnectionStatus(),
+      reddit: await SocialOSReddit.getConnectionStatus(),
+      tiktok: await SocialOSTikTok.getConnectionStatus()
+    };
   }
 
   async function renderSettings() {
@@ -722,6 +744,7 @@ const SocialOS = (() => {
         case 'ob-prev':
           collectOnboardingData();
           state.onboardingStep = Math.max(state.onboardingStep - 1, 1);
+          if (state.onboardingStep === 1) await refreshOnboardingPlatformStatus();
           SocialOSUI.renderOnboardingStep(state.onboardingStep, state.onboardingData);
           break;
 
@@ -729,6 +752,31 @@ const SocialOS = (() => {
           collectOnboardingData();
           await finishOnboarding();
           break;
+
+        // ── Platform sign-in from onboarding Step 1 — same save-progress-
+        // before-redirect dance as connect-google on Step 11 ──────────────
+        case 'connect-platform-ob': {
+          const platform = actionEl.dataset?.platform;
+          /** @type {Object<string, () => Promise<void>>} */
+          const flows = {
+            linkedin: () => SocialOSLinkedIn.startAuthFlow(),
+            reddit: () => SocialOSReddit.startAuthFlow(),
+            tiktok: () => SocialOSTikTok.startAuthFlow()
+          };
+          if (!platform || !flows[platform]) break;
+          collectOnboardingData();
+          const settings = await SocialOSDB.getOrCreateSettings();
+          settings.onboarding_step = state.onboardingStep;
+          await SocialOSDB.saveSettings(settings);
+          sessionStorage.setItem('socialos_onboarding_data', JSON.stringify(state.onboardingData));
+          try {
+            await flows[platform]();
+          } catch (err) {
+            sessionStorage.removeItem('socialos_onboarding_data');
+            SocialOSUI.toast(`Couldn't start ${platform} sign-in: ${err instanceof Error ? err.message : String(err)}`, 'error');
+          }
+          break;
+        }
 
         // ── Account linking (onboarding Step 1, js/linker.js) ──────────
         case 'analyze-profiles': {
@@ -873,31 +921,14 @@ const SocialOS = (() => {
           );
           break;
 
-        // ── Shared CORS relay (LinkedIn + Reddit, docs/ROADMAP.md §2) ──
-        case 'save-relay-url': {
-          const relayUrl = /** @type {HTMLInputElement} */ (SocialOSUI.$('set-social-relay-url'))?.value?.trim();
-          if (!relayUrl) { SocialOSUI.toast('Enter the CORS relay URL first.', 'warning'); break; }
-          const settings = await SocialOSDB.getOrCreateSettings();
-          settings.social_relay_url = relayUrl;
-          await SocialOSDB.saveSettings(settings);
-          SocialOSUI.toast('Relay URL saved.', 'success');
-          break;
-        }
-
-        // ── LinkedIn connect (Phase 5, BUILD_PLAN §7) ──────────────────
+        // ── LinkedIn connect — one tap to LinkedIn's sign-in page; the
+        // social-oauth broker handles everything secret-bearing ──────────
         case 'connect-linkedin': {
-          const clientId = /** @type {HTMLInputElement} */ (SocialOSUI.$('set-linkedin-client-id'))?.value?.trim();
-          const clientSecret = /** @type {HTMLInputElement} */ (SocialOSUI.$('set-linkedin-client-secret'))?.value?.trim();
-          if (!clientId || !clientSecret) { SocialOSUI.toast('Enter LinkedIn Client ID and Secret first.', 'warning'); break; }
-          const settings = await SocialOSDB.getOrCreateSettings();
-          if (!settings.social_relay_url && !settings.platform_connections.linkedin.relay_url) {
-            SocialOSUI.toast('Enter the shared CORS relay URL first — see docs/ROADMAP.md §2.', 'warning');
-            break;
+          try {
+            await SocialOSLinkedIn.startAuthFlow();
+          } catch (err) {
+            SocialOSUI.toast(`Couldn't start LinkedIn sign-in: ${err instanceof Error ? err.message : String(err)}`, 'error');
           }
-          settings.platform_connections.linkedin.client_id = clientId;
-          settings.platform_connections.linkedin.client_secret = clientSecret;
-          await SocialOSDB.saveSettings(settings);
-          await SocialOSLinkedIn.startAuthFlow(clientId);
           break;
         }
 
@@ -914,18 +945,13 @@ const SocialOS = (() => {
           );
           break;
 
-        // ── Reddit connect (Phase 5, BUILD_PLAN §7 / docs/ROADMAP.md §5) ──
+        // ── Reddit connect — one tap to Reddit's sign-in page ────────────
         case 'connect-reddit': {
-          const clientId = /** @type {HTMLInputElement} */ (SocialOSUI.$('set-reddit-client-id'))?.value?.trim();
-          if (!clientId) { SocialOSUI.toast('Enter Reddit Client ID first.', 'warning'); break; }
-          const settings = await SocialOSDB.getOrCreateSettings();
-          if (!settings.social_relay_url && !settings.platform_connections.linkedin.relay_url) {
-            SocialOSUI.toast('Enter the shared CORS relay URL first — see docs/ROADMAP.md §2.', 'warning');
-            break;
+          try {
+            await SocialOSReddit.startAuthFlow();
+          } catch (err) {
+            SocialOSUI.toast(`Couldn't start Reddit sign-in: ${err instanceof Error ? err.message : String(err)}`, 'error');
           }
-          settings.platform_connections.reddit.client_id = clientId;
-          await SocialOSDB.saveSettings(settings);
-          await SocialOSReddit.startAuthFlow(clientId);
           break;
         }
 
@@ -942,23 +968,13 @@ const SocialOS = (() => {
           );
           break;
 
-        // ── TikTok connect (js/tiktok.js — profile connect) ────────────
+        // ── TikTok connect — one tap to TikTok's sign-in page ────────────
         case 'connect-tiktok': {
-          const clientKey = /** @type {HTMLInputElement} */ (SocialOSUI.$('set-tiktok-client-key'))?.value?.trim();
-          const clientSecret = /** @type {HTMLInputElement} */ (SocialOSUI.$('set-tiktok-client-secret'))?.value?.trim();
-          if (!clientKey || !clientSecret) { SocialOSUI.toast('Enter TikTok Client Key and Secret first.', 'warning'); break; }
-          const settings = await SocialOSDB.getOrCreateSettings();
-          if (!settings.social_relay_url && !settings.platform_connections.linkedin.relay_url) {
-            SocialOSUI.toast('Enter the shared CORS relay URL first — see docs/ROADMAP.md §2.', 'warning');
-            break;
+          try {
+            await SocialOSTikTok.startAuthFlow();
+          } catch (err) {
+            SocialOSUI.toast(`Couldn't start TikTok sign-in: ${err instanceof Error ? err.message : String(err)}`, 'error');
           }
-          if (!settings.platform_connections.tiktok) {
-            settings.platform_connections.tiktok = /** @type {any} */ ({ connected: false, handle: null, access_token: null });
-          }
-          /** @type {any} */ (settings.platform_connections.tiktok).client_key = clientKey;
-          settings.platform_connections.tiktok.client_secret = clientSecret;
-          await SocialOSDB.saveSettings(settings);
-          await SocialOSTikTok.startAuthFlow(clientKey);
           break;
         }
 
@@ -1302,8 +1318,38 @@ const SocialOS = (() => {
           post.status = 'approved';
           post.approved_at = SocialOSUtils.now();
           await SocialOSDB.put(SocialOSDB.STORES.posts, post);
+
+          // One-click posting: when the post's platform is connected,
+          // approving IS publishing — no second tap. On failure (or for
+          // platforms without direct publish) fall back to the manual
+          // publish-flow screen with clipboard + deep link.
           const linkedinReady = post.platform === 'linkedin' && await SocialOSLinkedIn.isConnected();
           const redditReady = post.platform === 'reddit' && await SocialOSReddit.isConnected();
+
+          if (linkedinReady || redditReady) {
+            const platformName = linkedinReady ? 'LinkedIn' : 'Reddit';
+            SocialOSUI.toast(`Publishing to ${platformName}…`, 'info');
+            try {
+              if (linkedinReady) await SocialOSLinkedIn.linkedinPublish(post);
+              else await SocialOSReddit.redditPublish(post);
+
+              const content = await SocialOSDB.get(SocialOSDB.STORES.content, post.content_id);
+              if (content) {
+                content.status = 'posted';
+                content.last_used = SocialOSUtils.now();
+                content.post_history.push(post.id);
+                await SocialOSDB.put(SocialOSDB.STORES.content, content);
+              }
+
+              SocialOSUI.toast(`Published to ${platformName}!`, 'success');
+              await renderApprovals();
+              break;
+            } catch (err) {
+              SocialOSUI.toast(`${platformName} publish failed: ${err instanceof Error ? err.message : String(err)} — post it manually below, or fix and retry.`, 'error');
+              // Fall through to the manual flow, keeping the Publish Now
+              // button available for a retry.
+            }
+          }
           SocialOSUI.renderPublishFlow(post, linkedinReady, redditReady);
           break;
         }
@@ -1789,16 +1835,27 @@ const SocialOS = (() => {
     // Open database
     await SocialOSDB.open();
 
-    // One-time hygiene: earlier versions stored the Google OAuth client
-    // secret in local settings (the token exchange now happens server-side
-    // in the google-oauth broker) — scrub it from any previously saved
-    // settings so it no longer exists anywhere client-side.
+    // One-time hygiene: earlier versions stored OAuth client credentials in
+    // local settings (token exchanges now happen server-side in the
+    // google-oauth / social-oauth brokers) — scrub them from any previously
+    // saved settings so they no longer exist anywhere client-side.
     {
       const s = /** @type {any} */ (await SocialOSDB.getSettings());
-      if (s?.google_oauth && ('client_secret' in s.google_oauth || 'client_id' in s.google_oauth)) {
-        delete s.google_oauth.client_secret;
-        delete s.google_oauth.client_id;
-        await SocialOSDB.saveSettings(s);
+      if (s) {
+        let dirty = false;
+        if (s.google_oauth && ('client_secret' in s.google_oauth || 'client_id' in s.google_oauth)) {
+          delete s.google_oauth.client_secret;
+          delete s.google_oauth.client_id;
+          dirty = true;
+        }
+        for (const p of ['linkedin', 'reddit', 'tiktok']) {
+          const conn = s.platform_connections?.[p];
+          if (!conn) continue;
+          for (const field of ['client_id', 'client_secret', 'client_key']) {
+            if (field in conn) { delete conn[field]; dirty = true; }
+          }
+        }
+        if (dirty) await SocialOSDB.saveSettings(s);
       }
     }
 

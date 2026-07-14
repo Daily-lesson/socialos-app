@@ -187,12 +187,9 @@
  * @property {string|null} access_token
  * @property {string|null} [refresh_token] - LinkedIn: only present for Marketing Developer Platform apps; standard "Share on LinkedIn" apps get none (§API_KEYS_SETUP §4). Reddit: present whenever `duration=permanent` was requested (the default here) — Reddit issues refresh tokens to installed apps too, unlike LinkedIn.
  * @property {string|null} [expires_at] - ISO8601
- * @property {string|null} [client_id]
- * @property {string|null} [client_secret] - LinkedIn only. Reddit's "installed app" type is a public client and is issued no secret — see js/reddit.js file header.
  * @property {string|null} [member_urn] - LinkedIn only: `urn:li:person:{id}`, the `author` field required by /v2/ugcPosts.
- * @property {string|null} [client_key] - TikTok only: TikTok calls its OAuth client id a "client key" — stored under that name to match its docs (js/tiktok.js).
  * @property {string|null} [open_id] - TikTok only: the user's app-scoped open_id from the token response.
- * @property {string|null} [relay_url] - Legacy/deprecated per-connection CORS relay URL field (originally LinkedIn-only). Superseded by the shared top-level `social_relay_url` (see below) once the relay was generalized for Reddit too — kept only so pre-existing saved settings still resolve; new connects should populate `social_relay_url` instead.
+ * @property {string|null} [relay_url] - Legacy/deprecated per-connection CORS relay URL field. Superseded by the top-level `social_relay_url`, which is now baked in — scrubbed-at-boot along with the legacy client_id/client_secret/client_key fields that earlier versions stored here (OAuth client credentials now live server-side in the social-oauth broker).
  */
 
 /**
@@ -203,7 +200,8 @@
  * @property {{access_token: string|null, refresh_token: string|null, expires_at: string|null, scopes: string[]}} google_oauth - Tokens only. The OAuth client ID/secret live server-side in the `google-oauth` Edge Function (js/google.js header) — legacy client_id/client_secret fields in previously saved settings are scrubbed at boot (js/app.js init).
  * @property {string} [google_auth_url] - Google OAuth broker Edge Function URL. Baked-in default (DEFAULT_GOOGLE_AUTH_URL); overridable for local dev, like proxy_url.
  * @property {Object<string, PlatformConnection>} platform_connections
- * @property {string|null} social_relay_url - Shared stateless CORS relay Edge Function URL used by both js/linkedin.js and js/reddit.js (see docs/ROADMAP.md §2). Neither LinkedIn's nor Reddit's OAuth/REST endpoints send CORS headers for browser callers, so every call to either platform is relayed through this one function.
+ * @property {string|null} social_relay_url - Shared stateless CORS relay Edge Function URL for LinkedIn/Reddit/TikTok API calls (docs/ROADMAP.md §2). Baked-in default (DEFAULT_SOCIAL_RELAY_URL); overridable for local dev.
+ * @property {string} [social_oauth_url] - Social platform OAuth broker Edge Function URL (LinkedIn/Reddit/TikTok token grants). Baked-in default (DEFAULT_SOCIAL_OAUTH_URL); overridable for local dev.
  * @property {{approval_reminder_hours_before: number, engagement_batch_time: string, quiet_hours_start: string, quiet_hours_end: string}} notification_preferences
  * @property {Object<string, number>} posting_limits
  * @property {{remove_client_names: boolean, remove_facility_locations: boolean, remove_proprietary_specs: boolean, remove_financial_data: boolean, custom_blocked_terms: string[]}} content_scrubbing
@@ -392,12 +390,24 @@ const SocialOSDB = (() => {
   // the user just taps "Sign in with Google" (js/google.js header).
   const DEFAULT_GOOGLE_AUTH_URL = 'https://qjnvihdrzeyzkjbmzmyf.supabase.co/functions/v1/google-oauth';
 
+  // Social platform OAuth broker (LinkedIn/Reddit/TikTok) — the multi-
+  // provider sibling of google-oauth: holds each platform's client
+  // credentials server-side so every "Sign in with <platform>" is one tap
+  // (supabase/functions/social-oauth/index.ts).
+  const DEFAULT_SOCIAL_OAUTH_URL = 'https://qjnvihdrzeyzkjbmzmyf.supabase.co/functions/v1/social-oauth';
+
+  // Shared stateless CORS relay for post-auth LinkedIn/Reddit/TikTok API
+  // calls (publishing, userinfo, oEmbed) — deployed, origin-authorized,
+  // holds no secrets (supabase/functions/social-relay/index.ts).
+  const DEFAULT_SOCIAL_RELAY_URL = 'https://qjnvihdrzeyzkjbmzmyf.supabase.co/functions/v1/social-relay';
+
   /** @returns {AppSettings} */
   function defaultSettings() {
     return {
       proxy_url: DEFAULT_PROXY_URL,
       proxy_secret: '',
       google_auth_url: DEFAULT_GOOGLE_AUTH_URL,
+      social_oauth_url: DEFAULT_SOCIAL_OAUTH_URL,
       google_oauth: {
         access_token: null,
         refresh_token: null,
@@ -405,50 +415,42 @@ const SocialOSDB = (() => {
         scopes: []
       },
       platform_connections: {
-        // Phase 5 (LinkedIn + Reddit, see docs/ROADMAP.md §5): both extended
-        // with OAuth fields mirroring google_oauth. Populated by
-        // js/linkedin.js / js/reddit.js respectively.
+        // Tokens only — each platform's OAuth client credentials live
+        // server-side in the social-oauth broker Edge Function (see
+        // js/linkedin.js / js/reddit.js / js/tiktok.js headers). Legacy
+        // client_id/client_secret/client_key fields in previously saved
+        // settings are scrubbed at boot (js/app.js init).
         linkedin: {
           connected: false,
           handle: null,
           access_token: null,
           refresh_token: null,
           expires_at: null,
-          client_id: null,
-          client_secret: null,
-          member_urn: null,
-          relay_url: null
+          member_urn: null
         },
         facebook:  { connected: false, handle: null, access_token: null },
         instagram: { connected: false, handle: null, access_token: null },
-        // Reddit is a public "installed app" client (see js/reddit.js file
-        // header) — no client_secret field needed/issued, unlike LinkedIn.
         reddit: {
           connected: false,
           handle: null,
           access_token: null,
           refresh_token: null,
-          expires_at: null,
-          client_id: null
+          expires_at: null
         },
-        // TikTok (js/tiktok.js): confidential web client like LinkedIn,
-        // but TikTok names its client id "client key" — field named to
-        // match. Settings saved before TikTok shipped won't have this
-        // record; js/tiktok.js ensureConnection() backfills it.
+        // Settings saved before TikTok shipped won't have this record;
+        // js/tiktok.js ensureConnection() backfills it.
         tiktok: {
           connected: false,
           handle: null,
           access_token: null,
           refresh_token: null,
           expires_at: null,
-          client_key: null,
-          client_secret: null,
           open_id: null
         }
       },
-      // Shared CORS relay for LinkedIn + Reddit (docs/ROADMAP.md §2). One
-      // deploy, reused by both — see the AppSettings typedef above.
-      social_relay_url: null,
+      // Shared CORS relay for LinkedIn/Reddit/TikTok (docs/ROADMAP.md §2).
+      // Baked in like the AI proxy; overridable for local dev.
+      social_relay_url: DEFAULT_SOCIAL_RELAY_URL,
       notification_preferences: {
         approval_reminder_hours_before: 48,
         engagement_batch_time: '08:00',
@@ -616,6 +618,8 @@ const SocialOSDB = (() => {
   return {
     STORES,
     DEFAULT_GOOGLE_AUTH_URL,
+    DEFAULT_SOCIAL_OAUTH_URL,
+    DEFAULT_SOCIAL_RELAY_URL,
     open,
     get,
     put,

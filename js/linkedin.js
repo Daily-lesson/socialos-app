@@ -3,49 +3,37 @@
 /**
  * SocialOS — LinkedIn OAuth + direct posting (BUILD_PLAN §7 Phase 5, LinkedIn only)
  *
- * Mirrors js/google.js's shape (authorize → callback → token exchange →
- * refresh), but two things differ from Google's flow, both confirmed against
- * LinkedIn's current developer docs (2026-07):
+ * Auth model — same one-tap split as js/google.js (docs/API_KEYS_SETUP.md §4):
+ * the browser does the user-facing part (redirect to LinkedIn's own sign-in
+ * page + `state` CSRF check) and every secret-bearing token call — code
+ * exchange, refresh, revocation — happens server-side in the `social-oauth`
+ * Supabase Edge Function ("the broker"), which holds LINKEDIN_CLIENT_ID /
+ * LINKEDIN_CLIENT_SECRET as Supabase secrets. No credentials are typed into
+ * or stored by the app; tokens live only in this browser's IndexedDB.
  *
- * 1. No PKCE by default. LinkedIn only enables PKCE for apps that contact
- *    LinkedIn directly to request it — the standard 3-legged OAuth flow used
- *    here is a confidential-client flow: the client_secret is required at
- *    token exchange, not optional like it effectively is for Google's PKCE
- *    flow. Same client-side-secret-storage tradeoff as Google — see
- *    docs/API_KEYS_SETUP.md §4 and BUILD_PLAN §9.
+ * LinkedIn specifics, confirmed against its developer docs (2026-07):
+ *
+ * 1. No PKCE by default — LinkedIn only enables PKCE for apps that request
+ *    it specially; the standard 3-legged flow is confidential-client, which
+ *    is exactly why the exchange must be server-side.
  * 2. No silent refresh for a standard "Share on LinkedIn" app. LinkedIn only
- *    issues a `refresh_token` to apps approved for the Marketing Developer
- *    Platform; a standard app (all this needs — just `w_member_social`) gets
- *    a 60-day access token and NO refresh token. There is no silent-refresh
- *    path for this app type — when the token expires the user must tap
- *    "Reconnect" and go through the consent screen again. getAccessToken()
- *    below still attempts a refresh_token grant if one is ever present (e.g.
- *    a future MDP-approved app), but for the common case this is a dead
- *    branch by design, not a bug.
+ *    issues a `refresh_token` to Marketing Developer Platform apps; a
+ *    standard app gets a 60-day access token and NO refresh token — when it
+ *    expires the user taps "Reconnect". refreshToken() below still works if
+ *    a refresh token is ever present (future MDP app), via the broker.
  *
- * CORS — the reason relayFetch() exists:
- * LinkedIn's OAuth token endpoint (www.linkedin.com/oauth/v2/accessToken) and
- * its REST API (api.linkedin.com/v2/...) do not send
- * `Access-Control-Allow-Origin` headers — verified against LinkedIn's own
- * "exchange code for access token" guidance, which explicitly tells
- * developers the token exchange must happen server-side, not from a browser.
- * Every call in this file therefore goes through a small stateless Supabase
- * Edge Function relay (not yet deployed — see docs/ROADMAP.md §2) that
- * forwards the request and adds CORS headers. Originally built LinkedIn-only,
- * it was generalized when Reddit (js/reddit.js) hit the identical CORS
- * problem — it's the same `social-relay` function for both platforms now,
- * with a host allowlist covering LinkedIn's and Reddit's domains, configured
- * once via the shared `settings.social_relay_url` (see js/db.js). The relay
- * never sees or stores the client_secret or any token beyond the single
- * request it's relaying — those still live only in this browser's IndexedDB,
- * same accepted single-user risk model as Google's tokens (BUILD_PLAN §9).
+ * CORS — the reason relayFetch() exists for the *API* calls:
+ * LinkedIn's REST API (api.linkedin.com/v2/...) sends no
+ * `Access-Control-Allow-Origin`, so post-auth calls (userinfo, publish,
+ * media upload) go through the stateless `social-relay` Edge Function
+ * (supabase/functions/social-relay/index.ts — deployed), which forwards the
+ * request, adds CORS headers, holds no secrets, and persists nothing.
  */
 
 const SocialOSLinkedIn = (() => {
   'use strict';
 
   const AUTH_ENDPOINT = 'https://www.linkedin.com/oauth/v2/authorization';
-  const TOKEN_URL = 'https://www.linkedin.com/oauth/v2/accessToken';
   const USERINFO_URL = 'https://api.linkedin.com/v2/userinfo';
   const UGC_POSTS_URL = 'https://api.linkedin.com/v2/ugcPosts';
   const ASSETS_REGISTER_URL = 'https://api.linkedin.com/v2/assets?action=registerUpload';
@@ -56,31 +44,45 @@ const SocialOSLinkedIn = (() => {
   const SCOPES = 'openid profile w_member_social';
   const REDIRECT_URI = location.origin + location.pathname;
 
-  // ── Relay ─────────────────────────────────────────────────────────────
+  // ── Broker + relay plumbing ───────────────────────────────────────────
 
   /**
-   * Forward a request to LinkedIn via the shared CORS relay Edge Function.
-   * The relay is a stateless pass-through: it takes {url, method, headers,
-   * body, encoding}, performs that exact fetch server-side (where CORS
-   * doesn't apply), and mirrors LinkedIn's response — status, body, and a
-   * small allowlist of headers (including `x-restli-id`, needed after
-   * publish) — straight back, with CORS headers added. It holds no secrets
-   * and persists nothing between requests, and is shared with Reddit
-   * (js/reddit.js) — see docs/ROADMAP.md §2 for the deployed source and
-   * deploy steps.
+   * Call the social-oauth broker (token grants — the calls that need the
+   * client secret, which lives only on the server). Throws with the broker's
+   * error message so callers can surface something actionable.
+   * @param {Object<string, any>} payload
+   * @returns {Promise<any>}
+   */
+  async function brokerCall(payload) {
+    const settings = await SocialOSDB.getSettings();
+    /** @type {Object<string, string>} */
+    const headers = { 'Content-Type': 'application/json' };
+    if (settings?.proxy_secret) headers['X-SocialOS-Secret'] = settings.proxy_secret;
+
+    const response = await fetch(settings?.social_oauth_url || SocialOSDB.DEFAULT_SOCIAL_OAUTH_URL, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ provider: 'linkedin', ...payload })
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw new Error(data.error_description || data.error || `LinkedIn auth service error (${response.status})`);
+    }
+    return data;
+  }
+
+  /**
+   * Forward a post-auth API request to LinkedIn via the shared CORS relay
+   * Edge Function (stateless pass-through — takes {url, method, headers,
+   * body, encoding}, performs that exact fetch server-side, and mirrors
+   * LinkedIn's response including `x-restli-id`, needed after publish).
    * @param {string} targetUrl
    * @param {{method?: string, headers?: Object<string,string>, body?: string|null, encoding?: 'text'|'base64'}} [opts]
    * @returns {Promise<Response>}
    */
   async function relayFetch(targetUrl, opts = {}) {
     const settings = await SocialOSDB.getSettings();
-    // Prefer the shared relay URL; fall back to this connection's own
-    // (legacy, pre-generalization) relay_url field for anyone who configured
-    // it before the relay was shared with Reddit.
-    const relayUrl = settings?.social_relay_url || settings?.platform_connections?.linkedin?.relay_url;
-    if (!relayUrl) {
-      throw new Error('CORS relay URL not configured — set it in Settings > Platform Connections (see docs/ROADMAP.md §2).');
-    }
+    const relayUrl = settings?.social_relay_url || SocialOSDB.DEFAULT_SOCIAL_RELAY_URL;
 
     return fetch(relayUrl, {
       method: 'POST',
@@ -98,21 +100,24 @@ const SocialOSLinkedIn = (() => {
   // ── OAuth flow ────────────────────────────────────────────────────────
 
   /**
-   * Start the LinkedIn OAuth flow. Redirects the browser to LinkedIn's
-   * consent screen. Assumes client_id/client_secret and the shared
-   * social_relay_url have already been saved to settings by the caller
-   * (mirrors js/google.js's pattern).
-   * @param {string} clientId
+   * Start the LinkedIn OAuth flow: fetch the (public) client ID from the
+   * broker, then redirect the browser to LinkedIn's own sign-in/consent
+   * page. Throws if the broker is unreachable or LinkedIn isn't configured
+   * server-side — callers surface the message.
    * @returns {Promise<void>}
    */
-  async function startAuthFlow(clientId) {
+  async function startAuthFlow() {
+    const config = await brokerCall({ action: 'config' });
+    if (!config.configured || !config.client_id) {
+      throw new Error('LinkedIn sign-in isn\'t configured yet on the server — see docs/API_KEYS_SETUP.md §4.');
+    }
+
     const state = SocialOSUtils.uuid();
     sessionStorage.setItem('socialos_linkedin_state', state);
-    sessionStorage.setItem('socialos_linkedin_client_id', clientId);
 
     const params = new URLSearchParams({
       response_type: 'code',
-      client_id: clientId,
+      client_id: config.client_id,
       redirect_uri: REDIRECT_URI,
       state,
       scope: SCOPES
@@ -122,62 +127,49 @@ const SocialOSLinkedIn = (() => {
   }
 
   /**
-   * Handle the OAuth callback — exchange authorization code for tokens.
-   * Call this on page load alongside SocialOSGoogle.handleCallback(); the
-   * two are disambiguated by which flow's sessionStorage keys are present
-   * (only one OAuth flow is ever in-flight at a time), so calling both in
-   * sequence on every page load is safe.
+   * Handle the OAuth callback — verify state, then exchange the code for
+   * tokens via the broker. Call this on page load alongside the other
+   * platforms' handlers; flows are disambiguated by which sessionStorage
+   * keys are present (only one OAuth flow is ever in-flight at a time).
    * @returns {Promise<boolean>} true if tokens were obtained
    */
   async function handleCallback() {
     const params = new URLSearchParams(window.location.search);
     const storedState = sessionStorage.getItem('socialos_linkedin_state');
-    const clientId = sessionStorage.getItem('socialos_linkedin_client_id');
 
-    // Not a LinkedIn callback (either no code at all, or Google's flow owns
-    // this redirect) — bail without touching anything.
-    if (!storedState || !clientId) return false;
+    // Not a LinkedIn callback — bail without touching anything.
+    if (!storedState) return false;
 
     const code = params.get('code');
     const returnedState = params.get('state');
     const error = params.get('error');
 
-    // User denied consent, or something else went wrong on LinkedIn's side —
-    // clean up our half of the flow either way.
+    // One-shot: this callback attempt is consumed whatever happens next.
+    sessionStorage.removeItem('socialos_linkedin_state');
+
+    // User denied consent, something went wrong on LinkedIn's side, or the
+    // state doesn't match (CSRF/injected-code protection — do not exchange).
     if (error || !code || returnedState !== storedState) {
-      sessionStorage.removeItem('socialos_linkedin_state');
-      sessionStorage.removeItem('socialos_linkedin_client_id');
+      if (code || error) window.history.replaceState({}, document.title, REDIRECT_URI);
       return false;
     }
 
     try {
+      const tokens = await brokerCall({
+        action: 'exchange',
+        code,
+        redirect_uri: REDIRECT_URI
+      });
+      if (!tokens.access_token) return false;
+
       const settings = await SocialOSDB.getOrCreateSettings();
       const li = settings.platform_connections.linkedin;
-
-      const body = new URLSearchParams({
-        grant_type: 'authorization_code',
-        code,
-        redirect_uri: REDIRECT_URI,
-        client_id: clientId,
-        client_secret: li.client_secret || ''
-      }).toString();
-
-      const tokenRes = await relayFetch(TOKEN_URL, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        body
-      });
-
-      if (!tokenRes.ok) return false;
-      const tokens = await tokenRes.json();
-      if (!tokens.access_token) return false;
 
       li.access_token = tokens.access_token;
       // Almost always null for a standard "Share on LinkedIn" app — see the
       // file-level note above. Kept in case a future MDP-approved app issues one.
       li.refresh_token = tokens.refresh_token || null;
       li.expires_at = new Date(Date.now() + tokens.expires_in * 1000).toISOString();
-      li.client_id = clientId;
 
       // Resolve the member URN needed as `author` on every /v2/ugcPosts call.
       const meRes = await relayFetch(USERINFO_URL, {
@@ -193,8 +185,6 @@ const SocialOSLinkedIn = (() => {
       li.connected = !!(li.access_token && li.member_urn);
       await SocialOSDB.saveSettings(settings);
 
-      sessionStorage.removeItem('socialos_linkedin_state');
-      sessionStorage.removeItem('socialos_linkedin_client_id');
       window.history.replaceState({}, document.title, REDIRECT_URI);
 
       return li.connected;
@@ -204,35 +194,22 @@ const SocialOSLinkedIn = (() => {
   }
 
   /**
-   * Attempt a refresh_token grant. Only ever succeeds for apps that have
-   * been granted LinkedIn's Marketing Developer Platform product — a
-   * standard "Share on LinkedIn" app (all this feature needs) receives no
-   * refresh_token, so this is a best-effort no-op for the common case; see
-   * the file-level note above. UNVERIFIED end-to-end (no MDP-approved app
-   * available to test against).
+   * Attempt a refresh_token grant via the broker. Only ever succeeds for
+   * apps granted LinkedIn's Marketing Developer Platform product — a
+   * standard "Share on LinkedIn" app receives no refresh_token, so this is
+   * a best-effort no-op for the common case; see the file-level note above.
    * @returns {Promise<boolean>}
    */
   async function refreshToken() {
     const settings = await SocialOSDB.getSettings();
     const li = settings?.platform_connections?.linkedin;
-    if (!li?.refresh_token || !li.client_id) return false;
+    if (!li?.refresh_token) return false;
 
     try {
-      const body = new URLSearchParams({
-        grant_type: 'refresh_token',
-        refresh_token: li.refresh_token,
-        client_id: li.client_id,
-        client_secret: li.client_secret || ''
-      }).toString();
-
-      const response = await relayFetch(TOKEN_URL, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        body
+      const tokens = await brokerCall({
+        action: 'refresh',
+        refresh_token: li.refresh_token
       });
-      if (!response.ok) return false;
-
-      const tokens = await response.json();
       if (!tokens.access_token) return false;
 
       li.access_token = tokens.access_token;
@@ -297,25 +274,26 @@ const SocialOSLinkedIn = (() => {
   }
 
   /**
-   * Disconnect LinkedIn (clear stored credentials). Mirrors
-   * SocialOSGoogle.disconnect() — clears the OAuth client credentials too,
-   * so reconnecting means re-entering them (same tradeoff Google's flow makes).
+   * Disconnect LinkedIn: revoke the grant at LinkedIn (best-effort, via the
+   * broker), then clear everything locally. Local clearing happens
+   * regardless, so "Disconnect" always leaves the app signed out even if
+   * the revoke call fails offline.
    * @returns {Promise<void>}
    */
   async function disconnect() {
     const settings = await SocialOSDB.getOrCreateSettings();
+    const li = settings.platform_connections.linkedin;
+    const token = li?.refresh_token || li?.access_token;
+    if (token) {
+      try { await brokerCall({ action: 'revoke', token }); } catch { /* best-effort */ }
+    }
     settings.platform_connections.linkedin = {
       connected: false,
       handle: null,
       access_token: null,
       refresh_token: null,
       expires_at: null,
-      client_id: null,
-      client_secret: null,
-      member_urn: null,
-      // Relay URL is infra config, not a per-connection credential — keep it
-      // so reconnecting doesn't require redeploying/re-pasting the relay.
-      relay_url: settings.platform_connections.linkedin?.relay_url || null
+      member_urn: null
     };
     await SocialOSDB.saveSettings(settings);
   }
