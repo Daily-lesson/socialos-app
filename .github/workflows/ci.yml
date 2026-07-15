@@ -1,0 +1,58 @@
+name: CI
+
+# Static PWA — no build step and no package.json. These checks catch the mistakes
+# that actually break a static site: a JS syntax error, malformed JSON (manifest,
+# config), or a missing PWA core file. Fully dependency-free and fast.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: Validate static site
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Check JavaScript syntax
+        run: |
+          set -euo pipefail
+          mapfile -d '' files < <(find . -name '*.js' -not -path './node_modules/*' -print0)
+          if [ ${#files[@]} -eq 0 ]; then echo "No JS files found."; exit 0; fi
+          for f in "${files[@]}"; do
+            echo "check $f"
+            node --check "$f"
+          done
+
+      - name: Validate JSON files
+        run: |
+          set -euo pipefail
+          mapfile -d '' files < <(find . -name '*.json' -not -path './node_modules/*' -print0)
+          for f in "${files[@]}"; do
+            echo "validate $f"
+            node -e "JSON.parse(require('fs').readFileSync(process.argv[1], 'utf8'))" "$f"
+          done
+
+      - name: Verify PWA essentials exist
+        run: |
+          set -euo pipefail
+          for f in index.html manifest.json sw.js; do
+            if [ -f "$f" ]; then echo "found $f"; else echo "missing $f"; exit 1; fi
+          done
