@@ -11,7 +11,7 @@ const SocialOS = (() => {
 
   /**
    * In-memory working state.
-   * @type {{currentScreen: string, onboardingStep: number, onboardingData: Object<string, any>, calendarFocusDate: string|null, approvalsTab: string, engagementSubTab: string}}
+   * @type {{currentScreen: string, onboardingStep: number, onboardingData: Object<string, any>, calendarFocusDate: string|null, approvalsTab: string, engagementSubTab: string, composer: {mode: string, text: string, link: string, selected: string[]|null, oneTap: boolean, posts: any[], results: any[]|null, replyPlatform: string, comment: string, postSummary: string, reply: {reply: string, alternative: string}|null}}}
    */
   const state = {
     currentScreen: 'landing',
@@ -19,7 +19,21 @@ const SocialOS = (() => {
     onboardingData: {},
     calendarFocusDate: null,
     approvalsTab: 'posts',
-    engagementSubTab: 'likes'
+    engagementSubTab: 'likes',
+    // Quick Composer (js/composer.js) view state — all ephemeral, never persisted.
+    composer: {
+      mode: 'post',        // 'post' | 'reply'
+      text: '',
+      link: '',
+      selected: null,      // string[] of platforms, or null = default to connected direct
+      oneTap: false,
+      posts: [],           // drafted ScheduledPosts awaiting post
+      results: null,       // per-platform publish outcomes
+      replyPlatform: 'linkedin',
+      comment: '',
+      postSummary: '',
+      reply: null
+    }
   };
 
   // ── Router ────────────────────────────────────────────────────────────
@@ -52,6 +66,12 @@ const SocialOS = (() => {
         SocialOSUI.showNav(true);
         SocialOSUI.showScreen('screen-dashboard');
         await renderDashboard();
+        break;
+
+      case 'compose':
+        SocialOSUI.showNav(true);
+        SocialOSUI.showScreen('screen-compose');
+        await renderComposer();
         break;
 
       case 'approvals':
@@ -112,6 +132,106 @@ const SocialOS = (() => {
   async function renderProjects() {
     const projects = await SocialOSPM.getAllProjects();
     SocialOSUI.renderProjects(projects);
+  }
+
+  async function renderComposer() {
+    const c = state.composer;
+    const cap = await SocialOSComposer.capabilities();
+    // First visit (selected === null): default the selection to whatever posts
+    // automatically, so the common case is genuinely one tap.
+    if (c.selected === null) c.selected = cap.direct.slice();
+    SocialOSUI.renderComposer({
+      cap,
+      mode: /** @type {'post'|'reply'} */ (c.mode),
+      text: c.text,
+      link: c.link,
+      selected: c.selected,
+      oneTap: c.oneTap,
+      posts: c.posts,
+      results: c.results,
+      replyPlatform: c.replyPlatform,
+      comment: c.comment,
+      postSummary: c.postSummary,
+      reply: c.reply
+    });
+  }
+
+  /**
+   * Pull the live values out of the composer DOM into state before a
+   * re-render, so typed text / edits survive. Safe to call when fields
+   * aren't present (returns silently).
+   */
+  function syncComposerInputsFromDOM() {
+    const c = state.composer;
+    const text = /** @type {HTMLTextAreaElement} */ (document.getElementById('composer-text'));
+    const link = /** @type {HTMLInputElement} */ (document.getElementById('composer-link'));
+    const comment = /** @type {HTMLTextAreaElement} */ (document.getElementById('composer-comment'));
+    const summary = /** @type {HTMLInputElement} */ (document.getElementById('composer-postsummary'));
+    if (text) c.text = text.value;
+    if (link) c.link = link.value;
+    if (comment) c.comment = comment.value;
+    if (summary) c.postSummary = summary.value;
+    // Capture any inline edits to drafted posts so they survive a re-render.
+    (c.posts || []).forEach(p => {
+      const ta = /** @type {HTMLTextAreaElement} */ (document.getElementById(`cdraft-${p.id}`));
+      if (ta) { p.selected_alternative = 0; p.draft.text = ta.value; }
+    });
+  }
+
+  /**
+   * Turn a composer error into a human message. A raw "Failed to fetch" means
+   * the AI proxy / relay Edge Function couldn't be reached — almost always
+   * because the app is being opened on an origin the backend isn't configured
+   * for (e.g. a Vercel preview link) rather than the live app, or it's offline.
+   * @param {unknown} err
+   * @returns {string}
+   */
+  function composerErrMsg(err) {
+    const m = err instanceof Error ? err.message : String(err);
+    if (/failed to fetch|networkerror|load failed|ERR_|fetch/i.test(m)) {
+      return "can't reach the AI service. You're likely on a preview link or offline — open the live app (the installed / Add-to-Home-Screen URL), which is the origin the backend is configured for.";
+    }
+    return m;
+  }
+
+  /**
+   * Publish every drafted composer post as far as each platform allows,
+   * persisting any inline edits first. Direct platforms post automatically;
+   * assisted platforms come back as copy-and-open. Updates state + re-renders.
+   */
+  async function postAllComposer() {
+    const c = state.composer;
+    if (!c.posts || !c.posts.length) return;
+
+    SocialOSUI.loading(true, 'Posting…');
+    try {
+      // Persist any inline edits so publishOne (which reads from the DB) sends
+      // the text the user actually sees.
+      for (const p of c.posts) {
+        await SocialOSComposer.editDraft(p.id, p.draft.text);
+      }
+      const results = [];
+      for (const p of c.posts) {
+        results.push(await SocialOSComposer.publishOne(p.id));
+      }
+      c.results = results;
+
+      const posted = results.filter(r => r.mode === 'published').length;
+      const copy = results.filter(r => r.mode === 'assisted').length;
+      const failed = results.filter(r => r.mode === 'failed').length;
+      SocialOSUI.loading(false);
+
+      const parts = [];
+      if (posted) parts.push(`${posted} posted`);
+      if (copy) parts.push(`${copy} to copy & open`);
+      if (failed) parts.push(`${failed} failed`);
+      SocialOSUI.toast(parts.join(' · ') || 'Done.', failed ? 'warning' : 'success');
+      await renderComposer();
+      await updateBadge();
+    } catch (err) {
+      SocialOSUI.loading(false);
+      SocialOSUI.toast(`Posting error — ${composerErrMsg(err)}`, 'error', 6000);
+    }
   }
 
   async function renderApprovals() {
@@ -687,11 +807,129 @@ const SocialOS = (() => {
       switch (action) {
         // ── Navigation ─────────────────────────────────
         case 'go-dashboard':   navigate('dashboard'); break;
+        case 'go-compose':     navigate('compose'); break;
         case 'go-approvals':   navigate('approvals'); break;
         case 'go-calendar':    navigate('calendar'); break;
         case 'go-library':     navigate('library'); break;
         case 'go-projects':    navigate('projects'); break;
         case 'go-settings':    navigate('settings'); break;
+
+        // ── Quick Composer (js/composer.js) ────────────
+        case 'composer-mode': {
+          syncComposerInputsFromDOM();
+          state.composer.mode = actionEl.dataset?.mode === 'reply' ? 'reply' : 'post';
+          await renderComposer();
+          break;
+        }
+
+        case 'composer-toggle-platform': {
+          syncComposerInputsFromDOM();
+          const p = actionEl.dataset?.platform;
+          if (p) {
+            const sel = state.composer.selected || [];
+            const i = sel.indexOf(p);
+            if (i >= 0) sel.splice(i, 1); else sel.push(p);
+            state.composer.selected = sel;
+          }
+          await renderComposer();
+          break;
+        }
+
+        case 'composer-toggle-onetap': {
+          const cb = /** @type {HTMLInputElement} */ (actionEl);
+          state.composer.oneTap = !!cb.checked;
+          break; // no re-render — keep the user's typing intact
+        }
+
+        case 'composer-draft': {
+          syncComposerInputsFromDOM();
+          const c = state.composer;
+          const onetapEl = /** @type {HTMLInputElement} */ (document.getElementById('composer-onetap'));
+          if (onetapEl) c.oneTap = !!onetapEl.checked;
+          if (!c.text.trim()) { SocialOSUI.toast('Write something to share first.', 'warning'); break; }
+          if (!c.selected || !c.selected.length) { SocialOSUI.toast('Pick at least one platform.', 'warning'); break; }
+
+          SocialOSUI.loading(true, 'Drafting for ' + c.selected.join(', ') + '…');
+          try {
+            const { posts } = await SocialOSComposer.draftAll({ text: c.text, link: c.link, platforms: c.selected });
+            c.posts = posts;
+            c.results = null;
+            SocialOSUI.loading(false);
+
+            if (c.oneTap) {
+              await postAllComposer();   // publishes immediately, then re-renders
+            } else {
+              SocialOSUI.toast('Drafts ready — review and post.', 'success');
+              await renderComposer();
+            }
+          } catch (err) {
+            SocialOSUI.loading(false);
+            SocialOSUI.toast(`Couldn't draft — ${composerErrMsg(err)}`, 'error', 6000);
+          }
+          break;
+        }
+
+        case 'composer-post-all': {
+          syncComposerInputsFromDOM();
+          await postAllComposer();
+          break;
+        }
+
+        case 'composer-copy-open': {
+          if (!id) break;
+          const post = await SocialOSDB.get(SocialOSDB.STORES.posts, id);
+          if (!post) break;
+          const text = SocialOSComposer.activeText(post);
+          try {
+            await navigator.clipboard.writeText(text);
+            SocialOSUI.toast(`Copied — paste it into ${post.platform}.`, 'success');
+          } catch {
+            SocialOSUI.toast('Copy failed — select the text and copy manually.', 'warning');
+          }
+          const deepLink = SocialOSUI.PLATFORM_DEEP_LINKS[post.platform];
+          if (deepLink) window.open(deepLink, '_blank', 'noopener');
+          break;
+        }
+
+        case 'composer-reply-platform': {
+          syncComposerInputsFromDOM();
+          const p = actionEl.dataset?.platform;
+          if (p) state.composer.replyPlatform = p;
+          await renderComposer();
+          break;
+        }
+
+        case 'composer-reply-draft': {
+          syncComposerInputsFromDOM();
+          const c = state.composer;
+          if (!c.comment.trim()) { SocialOSUI.toast('Paste the comment you want to reply to.', 'warning'); break; }
+          SocialOSUI.loading(true, 'Drafting a reply…');
+          try {
+            c.reply = await SocialOSComposer.replyDraft({
+              platform: c.replyPlatform,
+              commentText: c.comment,
+              postSummary: c.postSummary
+            });
+            SocialOSUI.loading(false);
+            await renderComposer();
+          } catch (err) {
+            SocialOSUI.loading(false);
+            SocialOSUI.toast(`Couldn't draft reply — ${composerErrMsg(err)}`, 'error', 6000);
+          }
+          break;
+        }
+
+        case 'composer-copy-text': {
+          const raw = actionEl.dataset?.copy;
+          if (!raw) break;
+          try {
+            await navigator.clipboard.writeText(decodeURIComponent(raw));
+            SocialOSUI.toast('Copied!', 'success');
+          } catch {
+            SocialOSUI.toast('Copy failed — select the text and copy manually.', 'warning');
+          }
+          break;
+        }
 
         // ── Landing page ───────────────────────────────
         case 'start-onboarding':
@@ -1816,6 +2054,7 @@ const SocialOS = (() => {
   function screenToRoute(screenId) {
     const map = {
       'screen-dashboard': 'dashboard',
+      'screen-compose': 'compose',
       'screen-approvals': 'approvals',
       'screen-calendar': 'calendar',
       'screen-library': 'library',

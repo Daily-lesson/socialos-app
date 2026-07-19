@@ -2224,6 +2224,211 @@ body.nav-visible .feedback-fab {
   html { scroll-behavior: auto; }
 }
 
+/* ═══════════════════════════════════════════════════════════════════
+   Quick Composer (js/composer.js + renderComposer) + Home hero
+   ═══════════════════════════════════════════════════════════════════ */
+
+/* ── Home hero: the front door to Quick Post ───────────────────────── */
+.quickpost-hero {
+  position: relative;
+  display: block;
+  width: 100%;
+  text-align: left;
+  border: 1px solid var(--bg-border-strong);
+  border-radius: var(--radius-lg);
+  background: var(--bg-card);
+  padding: 0;
+  margin-bottom: var(--space-lg);
+  cursor: pointer;
+  overflow: hidden;
+  transition: transform 0.15s ease, box-shadow 0.2s ease, border-color 0.2s ease;
+}
+.quickpost-hero:hover { transform: translateY(-1px); box-shadow: var(--glow-accent); border-color: var(--accent); }
+.quickpost-hero:active { transform: translateY(0); }
+.quickpost-hero-glow {
+  position: absolute; inset: 0;
+  background: var(--grad-aurora);
+  opacity: 0.14;
+  pointer-events: none;
+}
+.quickpost-hero-body {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: var(--space-md);
+  padding: var(--space-lg);
+}
+.quickpost-hero-icon {
+  flex: 0 0 auto;
+  width: 44px; height: 44px;
+  display: grid; place-items: center;
+  border-radius: var(--radius-md);
+  background: var(--grad-accent);
+  color: #fff;
+  box-shadow: var(--glow-accent);
+}
+.quickpost-hero-icon svg { width: 22px; height: 22px; }
+.quickpost-hero-text { display: flex; flex-direction: column; min-width: 0; flex: 1; }
+.quickpost-hero-title { font-family: var(--font-display); font-weight: 600; font-size: 1.05rem; color: var(--text-primary); }
+.quickpost-hero-sub { color: var(--text-secondary); font-size: 0.85rem; }
+.quickpost-hero-cta {
+  flex: 0 0 auto;
+  font-family: var(--font-display); font-weight: 600; font-size: 0.85rem;
+  color: #fff;
+  background: var(--accent);
+  padding: 8px 14px;
+  border-radius: var(--radius-full);
+}
+
+/* ── Composer screen ───────────────────────────────────────────────── */
+.cmp-header { margin-bottom: var(--space-md); }
+.cmp-header h1 { font-size: 1.6rem; }
+.cmp-header .grad {
+  background: var(--grad-aurora);
+  -webkit-background-clip: text; background-clip: text;
+  -webkit-text-fill-color: transparent; color: transparent;
+}
+
+.cmp-modes {
+  display: inline-flex;
+  gap: 4px;
+  padding: 4px;
+  background: var(--bg-surface);
+  border: 1px solid var(--bg-border);
+  border-radius: var(--radius-full);
+  margin-bottom: var(--space-md);
+}
+.cmp-mode {
+  border: none; background: transparent; cursor: pointer;
+  font-family: var(--font-body); font-weight: 600; font-size: 0.9rem;
+  color: var(--text-secondary);
+  padding: 7px 20px; border-radius: var(--radius-full);
+  transition: background 0.15s ease, color 0.15s ease;
+}
+.cmp-mode.on { background: var(--grad-accent); color: #fff; box-shadow: var(--glow-accent); }
+
+.cmp-card { padding: var(--space-lg); }
+.cmp-field { margin-bottom: var(--space-md); }
+.cmp-label { display: block; font-size: 0.85rem; color: var(--text-secondary); margin-bottom: 6px; }
+
+.cmp-textarea, .cmp-input {
+  width: 100%;
+  font-family: var(--font-body); font-size: 1rem; line-height: 1.5;
+  color: var(--text-primary);
+  background: var(--bg-surface);
+  border: 1px solid var(--bg-border);
+  border-radius: var(--radius-md);
+  padding: var(--space-md);
+  resize: vertical;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+.cmp-textarea:focus, .cmp-input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(110, 123, 255, 0.18);
+}
+.cmp-textarea::placeholder, .cmp-input::placeholder { color: var(--text-faint); }
+
+.cmp-linkrow { position: relative; }
+.cmp-linkrow .cmp-input { padding-left: 44px; }
+.cmp-link-icon {
+  position: absolute; left: 14px; top: 50%; transform: translateY(-50%);
+  color: var(--text-faint); pointer-events: none;
+}
+.cmp-link-icon svg { width: 18px; height: 18px; display: block; }
+
+/* Platform chips */
+.cmp-chips { display: flex; flex-wrap: wrap; gap: var(--space-sm); margin-bottom: var(--space-sm); }
+.cmp-chip {
+  display: inline-flex; align-items: center; gap: 8px;
+  border: 1px solid var(--bg-border);
+  background: var(--bg-surface);
+  border-radius: var(--radius-full);
+  padding: 6px 12px 6px 6px;
+  cursor: pointer;
+  color: var(--text-secondary);
+  font-family: var(--font-body); font-weight: 500; font-size: 0.85rem;
+  transition: border-color 0.15s ease, background 0.15s ease, color 0.15s ease;
+}
+.cmp-chip.on { border-color: var(--accent); color: var(--text-primary); background: var(--bg-elevated); }
+.cmp-chip-badge {
+  width: 24px; height: 24px; border-radius: var(--radius-full);
+  display: grid; place-items: center;
+  font-family: var(--font-mono); font-size: 0.62rem; font-weight: 600; color: #fff;
+}
+.cmp-chip-tag {
+  font-family: var(--font-mono); font-size: 0.6rem; text-transform: uppercase; letter-spacing: 0.04em;
+  padding: 2px 6px; border-radius: var(--radius-full);
+}
+.cmp-chip-tag.auto { background: rgba(52, 211, 153, 0.16); color: var(--success); }
+.cmp-chip-tag.copy { background: rgba(251, 191, 36, 0.16); color: var(--warning); }
+
+.cmp-hint { font-size: 0.78rem; color: var(--text-faint); margin: 4px 0 var(--space-md); }
+.cmp-hint b { color: var(--text-secondary); font-weight: 600; }
+.cmp-warn { color: var(--warning); }
+
+.cmp-onetap {
+  display: flex; align-items: center; gap: 10px;
+  font-size: 0.85rem; color: var(--text-secondary);
+  margin-bottom: var(--space-md); cursor: pointer;
+}
+.cmp-onetap input { width: 16px; height: 16px; accent-color: var(--accent); }
+
+.cmp-cta { width: 100%; display: inline-flex; align-items: center; justify-content: center; gap: 8px; }
+.cmp-cta-icon { display: inline-flex; }
+.cmp-cta-icon svg { width: 18px; height: 18px; }
+
+/* Drafts review */
+.cmp-drafts { margin-top: var(--space-lg); border-top: 1px solid var(--bg-border); padding-top: var(--space-lg); }
+.cmp-drafts-head { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: var(--space-md); }
+.cmp-draft {
+  background: var(--bg-surface);
+  border: 1px solid var(--bg-border);
+  border-radius: var(--radius-md);
+  padding: var(--space-md);
+  margin-bottom: var(--space-md);
+}
+.cmp-draft-head { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+.cmp-draft-name { font-family: var(--font-display); font-weight: 600; font-size: 0.9rem; }
+.cmp-draft-text {
+  width: 100%;
+  font-family: var(--font-body); font-size: 0.92rem; line-height: 1.5;
+  color: var(--text-primary);
+  background: var(--bg-card);
+  border: 1px solid var(--bg-border);
+  border-radius: var(--radius-sm);
+  padding: var(--space-sm) var(--space-md);
+  resize: vertical;
+}
+.cmp-draft-text:focus { outline: none; border-color: var(--accent); }
+
+.cmp-out { margin-top: 10px; font-size: 0.85rem; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.cmp-out svg { width: 16px; height: 16px; vertical-align: -3px; }
+.cmp-out.ok { color: var(--success); }
+.cmp-out.copy { color: var(--warning); justify-content: space-between; }
+.cmp-out.err { color: var(--danger); }
+.cmp-out a { color: inherit; text-decoration: underline; }
+
+.cmp-postall { width: 100%; display: inline-flex; align-items: center; justify-content: center; gap: 8px; }
+.cmp-alldone {
+  display: flex; align-items: center; gap: 8px;
+  color: var(--success); font-weight: 600; font-size: 0.9rem;
+  background: rgba(52, 211, 153, 0.1);
+  border: 1px solid rgba(52, 211, 153, 0.25);
+  border-radius: var(--radius-md);
+  padding: var(--space-md);
+}
+.cmp-alldone svg { width: 18px; height: 18px; }
+
+/* Reply output */
+.cmp-reply-out { margin-top: var(--space-lg); border-top: 1px solid var(--bg-border); padding-top: var(--space-lg); }
+.cmp-reply-card {
+  background: var(--bg-surface); border: 1px solid var(--bg-border);
+  border-radius: var(--radius-md); padding: var(--space-md); margin-bottom: var(--space-md);
+}
+.cmp-reply-head { font-family: var(--font-display); font-weight: 600; font-size: 0.85rem; color: var(--text-secondary); margin-bottom: 8px; }
+.cmp-reply-text { color: var(--text-primary); font-size: 0.92rem; line-height: 1.55; margin-bottom: 10px; white-space: pre-wrap; }
+
 /* ── Content Security — no inline styles for sensitive elements ────── */
 
 /* CSP meta tag in index.html restricts inline scripts.

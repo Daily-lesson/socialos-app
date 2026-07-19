@@ -206,7 +206,9 @@ const SocialOSUI = (() => {
     star:     '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l2.6 5.3 5.9.8-4.3 4.1 1 5.8L12 16.3 6.8 19l1-5.8L3.5 9.1l5.9-.8L12 3z"/></svg>',
     spark:    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2l1.9 6.1L20 10l-6.1 1.9L12 18l-1.9-6.1L4 10l6.1-1.9L12 2z"/><path d="M19 15l.9 2.6L22.5 18l-2.6.9L19 21.5l-.9-2.6L15.5 18l2.6-.9L19 15z"/></svg>',
     shield:   '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-3.6 8-9.5V5.4L12 2 4 5.4v7.1C4 18.4 12 22 12 22z"/><path d="m9 11.5 2 2 4-4.5"/></svg>',
-    engage:   '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a8 8 0 0 1-8 8H4l2-3a8 8 0 1 1 15-5z"/><path d="M9 11h6M9 14h3"/></svg>'
+    engage:   '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a8 8 0 0 1-8 8H4l2-3a8 8 0 1 1 15-5z"/><path d="M9 11h6M9 14h3"/></svg>',
+    compose:  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/><path d="m5 3 1.5 3L9.5 7 6.5 8.5 5 11.5 3.5 8.5.5 7l3-1L5 3z" opacity=".7"/></svg>',
+    send:     '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M22 2 11 13"/><path d="M22 2 15 22l-4-9-9-4 20-7z"/></svg>'
   };
 
   // ── Landing page (signed-out / pre-onboarding) ────────────────────────
@@ -629,6 +631,18 @@ const SocialOSUI = (() => {
         <h1>${greeting}, <span class="grad">${escapeHtml(data.profile?.name?.split(' ')[0] || 'there')}</span></h1>
         <p class="text-secondary">Your social media command center</p>
       </div>
+
+      <button class="quickpost-hero" data-action="go-compose" aria-label="Open Quick Post">
+        <div class="quickpost-hero-glow" aria-hidden="true"></div>
+        <div class="quickpost-hero-body">
+          <div class="quickpost-hero-icon" aria-hidden="true">${ICONS.compose || '✎'}</div>
+          <div class="quickpost-hero-text">
+            <span class="quickpost-hero-title">Share an update</span>
+            <span class="quickpost-hero-sub">One box — draft &amp; post everywhere in a tap.</span>
+          </div>
+          <span class="quickpost-hero-cta">Quick&nbsp;Post</span>
+        </div>
+      </button>
 
       <div class="dash-cards">
         <div class="dash-card card-pending" data-action="go-approvals">
@@ -1818,6 +1832,210 @@ const SocialOSUI = (() => {
 
   // ── Public API ────────────────────────────────────────────────────────
 
+  // ── Quick Composer screen (js/composer.js orchestrates) ───────────────
+
+  /** Human labels for platforms in the composer. */
+  const PLATFORM_LABELS = {
+    linkedin: 'LinkedIn',
+    reddit: 'Reddit',
+    tiktok: 'TikTok',
+    facebook: 'Facebook',
+    instagram: 'Instagram'
+  };
+
+  /**
+   * Render the Quick Post composer. Two modes: Post (one box → tailored
+   * drafts → post everywhere) and Reply (paste a comment → AI-drafted reply
+   * to copy). All state is owned by app.js and passed in here.
+   *
+   * @param {{
+   *   cap: {direct: string[], assisted: string[], connected: Object<string, boolean>},
+   *   mode: 'post'|'reply',
+   *   text?: string,
+   *   link?: string,
+   *   selected?: string[],
+   *   oneTap?: boolean,
+   *   posts?: ScheduledPost[],
+   *   results?: Array<{platform: string, mode: string, text: string, url?: string|null, deepLink?: string, error?: string}>|null,
+   *   replyPlatform?: string,
+   *   comment?: string,
+   *   postSummary?: string,
+   *   reply?: {reply: string, alternative: string}|null
+   * }} data
+   */
+  function renderComposer(data) {
+    const container = $('compose-content');
+    if (!container) return;
+
+    const cap = data.cap || { direct: [], assisted: [], connected: {} };
+    const offer = [...cap.direct, ...cap.assisted]; // all offerable platforms, direct first
+    const selected = data.selected || cap.direct.slice();
+    const mode = data.mode || 'post';
+
+    const chip = (p) => {
+      const isDirect = cap.direct.includes(p);
+      const on = selected.includes(p);
+      return `
+        <button type="button"
+                class="cmp-chip ${on ? 'on' : ''}"
+                data-action="composer-toggle-platform" data-platform="${p}"
+                aria-pressed="${on}">
+          <span class="cmp-chip-badge" style="background:${PLATFORM_COLORS[p]}">${PLATFORM_ICONS[p]}</span>
+          <span class="cmp-chip-name">${PLATFORM_LABELS[p]}</span>
+          <span class="cmp-chip-tag ${isDirect ? 'auto' : 'copy'}">${isDirect ? 'auto' : 'copy'}</span>
+        </button>`;
+    };
+
+    const postMode = `
+      <div class="cmp-field">
+        <textarea id="composer-text" class="cmp-textarea" rows="5"
+                  placeholder="What do you want to share? A win, a lesson, a link…">${escapeHtml(data.text || '')}</textarea>
+      </div>
+      <div class="cmp-field cmp-linkrow">
+        <span class="cmp-link-icon" aria-hidden="true">${ICONS.link}</span>
+        <input id="composer-link" class="cmp-input" type="url" inputmode="url"
+               placeholder="Add a link (optional)" value="${escapeHtml(data.link || '')}">
+      </div>
+
+      <div class="cmp-chips" role="group" aria-label="Platforms">
+        ${offer.map(chip).join('')}
+      </div>
+      <p class="cmp-hint">
+        <b>auto</b> posts directly · <b>copy</b> drafts it and opens the app to paste
+        ${cap.direct.length ? '' : ' · <span class="cmp-warn">connect LinkedIn or Reddit in Settings for true one-tap posting</span>'}
+      </p>
+
+      <label class="cmp-onetap">
+        <input type="checkbox" id="composer-onetap" data-action="composer-toggle-onetap" ${data.oneTap ? 'checked' : ''}>
+        <span>Skip the preview — post the moment it's drafted</span>
+      </label>
+
+      <button class="btn btn-primary btn-lg cmp-cta" data-action="composer-draft">
+        <span class="cmp-cta-icon">${ICONS.spark}</span> Draft &amp; Post
+      </button>
+
+      ${(data.posts && data.posts.length) ? renderComposerDrafts(data.posts, data.results) : ''}
+    `;
+
+    const replyMode = `
+      <div class="cmp-field">
+        <label class="cmp-label">Which platform?</label>
+        <div class="cmp-chips" role="group" aria-label="Reply platform">
+          ${offer.map(p => `
+            <button type="button" class="cmp-chip ${data.replyPlatform === p ? 'on' : ''}"
+                    data-action="composer-reply-platform" data-platform="${p}" aria-pressed="${data.replyPlatform === p}">
+              <span class="cmp-chip-badge" style="background:${PLATFORM_COLORS[p]}">${PLATFORM_ICONS[p]}</span>
+              <span class="cmp-chip-name">${PLATFORM_LABELS[p]}</span>
+            </button>`).join('')}
+        </div>
+      </div>
+      <div class="cmp-field">
+        <label class="cmp-label">Paste the comment you're replying to</label>
+        <textarea id="composer-comment" class="cmp-textarea" rows="3"
+                  placeholder="Paste the comment here…">${escapeHtml(data.comment || '')}</textarea>
+      </div>
+      <div class="cmp-field">
+        <label class="cmp-label">What was your post about? (optional — helps the reply stay on point)</label>
+        <input id="composer-postsummary" class="cmp-input" type="text"
+               placeholder="One line of context" value="${escapeHtml(data.postSummary || '')}">
+      </div>
+
+      <button class="btn btn-primary btn-lg cmp-cta" data-action="composer-reply-draft">
+        <span class="cmp-cta-icon">${ICONS.spark}</span> Draft a reply
+      </button>
+
+      ${data.reply ? `
+        <div class="cmp-reply-out">
+          ${[['reply', data.reply.reply], ['alternative', data.reply.alternative]].map(([kind, txt], i) => `
+            <div class="cmp-reply-card">
+              <div class="cmp-reply-head"><span>${i === 0 ? 'Reply' : 'Alternative'}</span></div>
+              <div class="cmp-reply-text">${escapeHtml(String(txt))}</div>
+              <button class="btn btn-secondary btn-sm" data-action="composer-copy-text" data-copy="${encodeURIComponent(String(txt))}">Copy</button>
+            </div>`).join('')}
+          <p class="cmp-hint">Copy the one you like, then open the thread to paste it — SocialOS can't post comments for you yet.</p>
+        </div>
+      ` : ''}
+    `;
+
+    container.innerHTML = `
+      <div class="cmp-wrap">
+        <div class="cmp-header">
+          <h1><span class="grad">Quick Post</span></h1>
+          <p class="text-secondary">One box. Drafts tailored per platform, posted where it can be.</p>
+        </div>
+
+        <div class="cmp-modes" role="tablist">
+          <button class="cmp-mode ${mode === 'post' ? 'on' : ''}" data-action="composer-mode" data-mode="post" role="tab" aria-selected="${mode === 'post'}">Post</button>
+          <button class="cmp-mode ${mode === 'reply' ? 'on' : ''}" data-action="composer-mode" data-mode="reply" role="tab" aria-selected="${mode === 'reply'}">Reply</button>
+        </div>
+
+        <div class="card cmp-card">
+          ${mode === 'post' ? postMode : replyMode}
+        </div>
+      </div>
+    `;
+  }
+
+  /**
+   * The "review & post" block: an editable card per drafted platform, a single
+   * "Post all" button, and — once posted — an honest per-platform outcome
+   * (published link, copy-and-open for assisted platforms, or a retry on error).
+   * @param {ScheduledPost[]} posts
+   * @param {Array<{platform: string, mode: string, text: string, url?: string|null, deepLink?: string, error?: string}>|null} [results]
+   */
+  function renderComposerDrafts(posts, results) {
+    const byPlatform = {};
+    (results || []).forEach(r => { byPlatform[r.platform] = r; });
+
+    const cards = posts.map(post => {
+      const txt = post.selected_alternative === 0
+        ? post.draft.text
+        : (post.alternatives[post.selected_alternative - 1]?.text || post.draft.text);
+      const r = byPlatform[post.platform];
+
+      let outcome = '';
+      if (r) {
+        if (r.mode === 'published') {
+          outcome = `<div class="cmp-out ok">${ICONS.shield} Posted${r.url ? ` · <a href="${escapeHtml(String(r.url))}" target="_blank" rel="noopener">view</a>` : ''}</div>`;
+        } else if (r.mode === 'assisted') {
+          outcome = `<div class="cmp-out copy">
+              <span>Drafted — copy &amp; open ${PLATFORM_LABELS[post.platform]} to paste</span>
+              <button class="btn btn-accent btn-sm" data-action="composer-copy-open" data-id="${post.id}">Copy &amp; open</button>
+            </div>`;
+        } else {
+          outcome = `<div class="cmp-out err">Failed: ${escapeHtml(r.error || 'unknown error')}
+              <button class="btn btn-secondary btn-sm" data-action="composer-copy-open" data-id="${post.id}">Copy &amp; open instead</button>
+            </div>`;
+        }
+      }
+
+      return `
+        <div class="cmp-draft">
+          <div class="cmp-draft-head">
+            <span class="platform-badge" style="background:${PLATFORM_COLORS[post.platform]}">${PLATFORM_ICONS[post.platform]}</span>
+            <span class="cmp-draft-name">${PLATFORM_LABELS[post.platform]}</span>
+          </div>
+          <textarea class="cmp-draft-text" id="cdraft-${post.id}" rows="4">${escapeHtml(txt)}</textarea>
+          ${outcome}
+        </div>`;
+    }).join('');
+
+    const allDone = results && results.length && results.every(r => r.mode === 'published');
+
+    return `
+      <div class="cmp-drafts">
+        <div class="cmp-drafts-head"><h3>Review &amp; post</h3><span class="text-secondary">${posts.length} draft${posts.length > 1 ? 's' : ''}</span></div>
+        ${cards}
+        ${allDone ? `
+          <div class="cmp-alldone">${ICONS.shield} All set — posted to every connected platform.</div>
+        ` : `
+          <button class="btn btn-accent btn-lg cmp-postall" data-action="composer-post-all">
+            <span class="cmp-cta-icon">${ICONS.send}</span> Post all ${posts.length} now
+          </button>
+        `}
+      </div>`;
+  }
+
   return {
     $,
     setHTML,
@@ -1848,6 +2066,7 @@ const SocialOSUI = (() => {
     renderSettings,
     renderScanProgress,
     renderPickerProgress,
+    renderComposer,
     escapeHtml,
     updateApprovalBadge,
     PLATFORM_COLORS,
