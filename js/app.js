@@ -2365,8 +2365,13 @@ const SocialOS = (() => {
     // cloud state immediately (last-write-wins, js/sync.js).
     SocialOSSync.install();
     const accountCallback = await SocialOSAuth.handleCallback();
-    if (accountCallback && accountCallback.status === 'signedin') {
-      SocialOSUI.toast(`Signed in as ${accountCallback.email || 'your account'}!`, 'success');
+    // Routing below depends on these: a sign-in return trip must LAND
+    // somewhere visible (Settings' Account section, or the setup wizard),
+    // never fall through to the cold landing page — user #1's actual
+    // first-sign-in experience was "nothing happened".
+    const freshSignIn = !!(accountCallback && accountCallback.status === 'signedin');
+    if (freshSignIn) {
+      SocialOSUI.toast(`Signed in as ${accountCallback.email || 'your account'} — your settings now sync across devices.`, 'success', 8000);
       try {
         const outcome = await SocialOSSync.pullNow();
         if (outcome === 'applied') {
@@ -2412,16 +2417,22 @@ const SocialOS = (() => {
     checkApprovalReminders().catch(() => {});
 
     if (profile?.onboarding_complete) {
-      navigate('dashboard');
+      // A fresh sign-in return lands on Settings so the Account section's
+      // signed-in state is the first thing seen — not a 3s toast on the
+      // dashboard.
+      navigate(freshSignIn ? 'settings' : 'dashboard');
     } else {
       // Restore onboarding step if returning from redirect
       const settings = await SocialOSDB.getOrCreateSettings();
       if (settings.onboarding_step > 0) {
         state.onboardingStep = settings.onboarding_step;
       }
-      // Mid-onboarding (saved step or OAuth return) resumes the wizard;
-      // otherwise brand-new visitors see the landing page first.
-      if (settings.onboarding_step > 1 || savedData) {
+      // Mid-onboarding (saved step or OAuth return) resumes the wizard.
+      // A signed-in user (fresh return trip or a prior session) is never a
+      // cold visitor — take them straight into the setup wizard instead of
+      // the landing page. Brand-new signed-out visitors see the landing.
+      const alreadySignedIn = freshSignIn || await SocialOSAuth.isSignedIn().catch(() => false);
+      if (settings.onboarding_step > 1 || savedData || alreadySignedIn) {
         navigate('onboarding');
       } else {
         navigate('landing');
