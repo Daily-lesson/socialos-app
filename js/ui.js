@@ -234,7 +234,7 @@ const SocialOSUI = (() => {
               <img class="nav-brand-mark" src="icons/logo.svg" alt="" width="34" height="34">
               <span>Social<em>OS</em></span>
             </span>
-            <button class="btn btn-ghost btn-sm" data-action="start-onboarding">Sign in</button>
+            <button class="btn btn-ghost btn-sm" data-action="connect-linkedin">Sign in</button>
           </header>
 
           <section class="landing-hero">
