@@ -5,7 +5,7 @@
  * Paths are relative so the app works from a subpath (e.g. GitHub Pages).
  */
 
-const CACHE_NAME = 'socialos-v14'; // v14: add js/queue.js (Front Office approval queue)
+const CACHE_NAME = 'socialos-v15'; // v15: add js/auth.js + js/sync.js (SocialOS accounts + cloud sync)
 const SHELL_ASSETS = [
   './',
   './index.html',
@@ -14,6 +14,8 @@ const SHELL_ASSETS = [
   './css/app.css',
   './js/app.js',
   './js/ai.js',
+  './js/auth.js',
+  './js/sync.js',
   './js/composer.js',
   './js/db.js',
   './js/engagement.js',

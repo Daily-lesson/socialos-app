@@ -130,13 +130,15 @@ const SocialOS = (() => {
       : null;
 
     const pm = await SocialOSPM.portfolioSummary();
+    const account = await SocialOSAuth.accountStatus();
 
     SocialOSUI.renderDashboard({
       profile,
       pendingCount: pending.length,
       nextPost,
       contentCount: content.length,
-      pm
+      pm,
+      account
     });
   }
 
@@ -201,6 +203,20 @@ const SocialOS = (() => {
     const m = err instanceof Error ? err.message : String(err);
     if (/failed to fetch|networkerror|load failed|ERR_|fetch/i.test(m)) {
       return "can't reach the AI service. You're likely on a preview link or offline — open the live app (the installed / Add-to-Home-Screen URL), which is the origin the backend is configured for.";
+    }
+    return m;
+  }
+
+  /**
+   * Friendly error for SocialOS account/sync calls — same origin/offline
+   * diagnosis as composerErrMsg (CLAUDE.md gotcha 5), account wording.
+   * @param {unknown} err
+   * @returns {string}
+   */
+  function accountErrMsg(err) {
+    const m = err instanceof Error ? err.message : String(err);
+    if (/failed to fetch|networkerror|load failed|ERR_|fetch/i.test(m)) {
+      return "can't reach the account service. You're likely on a preview link or offline — open the live app (the installed / Add-to-Home-Screen URL), which is the origin the backend is configured for.";
     }
     return m;
   }
@@ -369,7 +385,8 @@ const SocialOS = (() => {
     const linkedinStatus = await SocialOSLinkedIn.getConnectionStatus();
     const redditStatus = await SocialOSReddit.getConnectionStatus();
     const tiktokStatus = await SocialOSTikTok.getConnectionStatus();
-    SocialOSUI.renderSettings(settings, profile, googleConnected, linkedinStatus, redditStatus, tiktokStatus);
+    const account = await SocialOSAuth.accountStatus();
+    SocialOSUI.renderSettings(settings, profile, googleConnected, linkedinStatus, redditStatus, tiktokStatus, account);
   }
 
   async function updateBadge() {
@@ -1314,6 +1331,61 @@ const SocialOS = (() => {
             async () => {
               await SocialOSTikTok.disconnect();
               SocialOSUI.toast('TikTok disconnected.', 'info');
+              await renderSettings();
+            }
+          );
+          break;
+
+        // ── SocialOS account (js/auth.js + js/sync.js) ───────────────────
+        case 'account-google': {
+          try {
+            await SocialOSAuth.signInWithGoogle();
+          } catch (err) {
+            SocialOSUI.toast(`Couldn't start sign-in — ${accountErrMsg(err)}`, 'error', 6000);
+          }
+          break;
+        }
+
+        case 'account-magiclink': {
+          const email = /** @type {HTMLInputElement} */ (SocialOSUI.$('set-account-email'))?.value?.trim() || '';
+          if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) {
+            SocialOSUI.toast('Enter a valid email address first.', 'warning');
+            break;
+          }
+          SocialOSUI.loading(true, 'Sending your sign-in link…');
+          try {
+            await SocialOSAuth.sendMagicLink(email);
+            SocialOSUI.loading(false);
+            SocialOSUI.toast(`Link sent to ${email} — open it on this device to finish signing in.`, 'success', 8000);
+          } catch (err) {
+            SocialOSUI.loading(false);
+            SocialOSUI.toast(`Couldn't send the link — ${accountErrMsg(err)}`, 'error', 6000);
+          }
+          break;
+        }
+
+        case 'account-sync-now': {
+          SocialOSUI.loading(true, 'Syncing…');
+          try {
+            const outcome = await SocialOSSync.pullNow();
+            SocialOSUI.loading(false);
+            SocialOSUI.toast(outcome === 'applied' ? 'Synced — newer settings pulled from your account.' : 'Synced.', 'success');
+            await renderSettings();
+          } catch (err) {
+            SocialOSUI.loading(false);
+            SocialOSUI.toast(`Sync failed — ${accountErrMsg(err)}`, 'error', 6000);
+          }
+          break;
+        }
+
+        case 'account-signout':
+          SocialOSUI.confirm(
+            'Sign out',
+            'This removes your account from this device. Everything stays here locally, and your synced copy stays in your account — sign back in anytime.',
+            'Sign out',
+            async () => {
+              await SocialOSAuth.signOut();
+              SocialOSUI.toast('Signed out.', 'info');
               await renderSettings();
             }
           );
@@ -2268,6 +2340,33 @@ const SocialOS = (() => {
     const tiktokOauthHandled = await SocialOSTikTok.handleCallback();
     if (tiktokOauthHandled) {
       SocialOSUI.toast('TikTok connected!', 'success');
+    }
+
+    // SocialOS account (js/auth.js): wrap saves for debounced cloud pushes,
+    // then check for a sign-in return trip (Google ?code= with our PKCE
+    // verifier, or a magic link's #access_token fragment — both distinct
+    // from the platform callbacks above). On a fresh sign-in, reconcile
+    // cloud state immediately (last-write-wins, js/sync.js).
+    SocialOSSync.install();
+    const accountCallback = await SocialOSAuth.handleCallback();
+    if (accountCallback && accountCallback.status === 'signedin') {
+      SocialOSUI.toast(`Signed in as ${accountCallback.email || 'your account'}!`, 'success');
+      try {
+        const outcome = await SocialOSSync.pullNow();
+        if (outcome === 'applied') {
+          SocialOSUI.toast('Your synced settings are on this device now.', 'info');
+        }
+      } catch { /* local-first: sync failure never blocks boot */ }
+    } else if (accountCallback && accountCallback.status === 'denied') {
+      SocialOSUI.toast('Sign-in was cancelled — you can sign in later in Settings.', 'info');
+    } else if (accountCallback) {
+      SocialOSUI.toast(`Sign-in didn't complete — ${accountCallback.reason || 'please try again'}.`, 'error', 6000);
+    } else {
+      // Already signed in from a previous visit? Reconcile in the
+      // background — never blocks first paint.
+      SocialOSAuth.isSignedIn().then((signedIn) => {
+        if (signedIn) SocialOSSync.pullNow().catch(() => {});
+      }).catch(() => {});
     }
 
     // Restore onboarding state if returning from OAuth redirect

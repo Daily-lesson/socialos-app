@@ -219,7 +219,8 @@ const SocialOSDB = (() => {
   const DB_NAME = 'socialos';
   // v2 added socialos_archive (BUILD_PLAN §14) on one line of history and
   // socialos_projects (PM capability) on another; v3 unifies both.
-  const DB_VERSION = 3;
+  // v4 adds socialos_auth (SocialOS account session — js/auth.js).
+  const DB_VERSION = 4;
 
   /** Store names map 1:1 to section 4 keys */
   const STORES = {
@@ -231,7 +232,8 @@ const SocialOSDB = (() => {
     calendar:   'socialos_calendar',
     projects:   'socialos_projects',
     settings:   'socialos_settings',
-    archive:    'socialos_archive'
+    archive:    'socialos_archive',
+    auth:       'socialos_auth'
   };
 
   /** @type {IDBDatabase|null} */
@@ -412,6 +414,15 @@ const SocialOSDB = (() => {
   // IndexedDB-only — never shipped in this public client code).
   const DEFAULT_MKT_QUEUE_URL = 'https://ehgnxblgiyqtxypkoioc.supabase.co/functions/v1/mkt-queue';
 
+  // SocialOS accounts (js/auth.js + js/sync.js) — Supabase Auth + PostgREST
+  // on the same Off_Races project that hosts the Edge Functions above.
+  // The anon key is PUBLIC BY DESIGN (it's shipped to every browser in every
+  // Supabase app; all real protection is Row Level Security on the server —
+  // see supabase/migrations/0001_socialos_accounts.sql). Baking it here is
+  // safe and deliberate; the service-role key must never appear client-side.
+  const DEFAULT_SUPABASE_URL = 'https://qjnvihdrzeyzkjbmzmyf.supabase.co';
+  const DEFAULT_SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InFqbnZpaGRyemV5emtqYm16bXlmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODM4MjA4NDAsImV4cCI6MjA5OTM5Njg0MH0.HvM4wNcHFr7x9Q0vtNjc7784fzYLK8iBjk0ijID6URM';
+
   /** @returns {AppSettings} */
   function defaultSettings() {
     return {
@@ -568,6 +579,38 @@ const SocialOSDB = (() => {
     }
   }
 
+  // ── SocialOS account session (js/auth.js) ─────────────────────────────
+
+  /**
+   * The stored Supabase Auth session for the signed-in SocialOS account.
+   * Lives in its own store so `resetAll()` signs the user out too and the
+   * settings sync payload can never accidentally include itself.
+   * @typedef {Object} AuthSession
+   * @property {string} access_token - Supabase user JWT (short-lived)
+   * @property {string} refresh_token
+   * @property {number} expires_at - epoch ms when access_token expires
+   * @property {{id: string, email: string}} user
+   * @property {string|null} last_sync_at - ISO8601 of the last successful cloud sync (js/sync.js)
+   */
+
+  /** @returns {Promise<AuthSession|null>} */
+  async function getAuthSession() {
+    return get(STORES.auth, 'session');
+  }
+
+  /**
+   * @param {AuthSession} session
+   * @returns {Promise<void>}
+   */
+  async function saveAuthSession(session) {
+    return put(STORES.auth, { ...session, id: 'session' });
+  }
+
+  /** @returns {Promise<void>} */
+  async function clearAuthSession() {
+    return del(STORES.auth, 'session');
+  }
+
   // ── Archival (BUILD_PLAN §14 — soft delete, archive never purged) ─────
 
   /**
@@ -638,6 +681,8 @@ const SocialOSDB = (() => {
     DEFAULT_SOCIAL_OAUTH_URL,
     DEFAULT_SOCIAL_RELAY_URL,
     DEFAULT_MKT_QUEUE_URL,
+    DEFAULT_SUPABASE_URL,
+    DEFAULT_SUPABASE_ANON_KEY,
     open,
     get,
     put,
@@ -660,6 +705,9 @@ const SocialOSDB = (() => {
     saveProject,
     deleteProject,
     getPendingPosts,
+    getAuthSession,
+    saveAuthSession,
+    clearAuthSession,
     resetAll,
     moveToArchive,
     archiveStaleRecords

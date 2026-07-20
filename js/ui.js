@@ -630,6 +630,12 @@ const SocialOSUI = (() => {
       <div class="dash-header">
         <h1>${greeting}, <span class="grad">${escapeHtml(data.profile?.name?.split(' ')[0] || 'there')}</span></h1>
         <p class="text-secondary">Your social media command center</p>
+        <button class="tag" data-action="go-settings"
+          title="${data.account?.signedIn ? 'Synced to your SocialOS account' : 'Sign in to sync across devices'}"
+          style="margin-top:6px;cursor:pointer;border:none;display:inline-flex;align-items:center;gap:6px">
+          <span style="width:8px;height:8px;border-radius:50%;background:${data.account?.signedIn ? 'var(--success, #22c55e)' : 'var(--text-secondary, #888)'}"></span>
+          ${data.account?.signedIn ? escapeHtml(data.account.email || 'Signed in') + ' · synced' : 'Local only — sign in to sync'}
+        </button>
       </div>
 
       <button class="quickpost-hero" data-action="go-compose" aria-label="Open Quick Post">
@@ -1441,17 +1447,52 @@ const SocialOSUI = (() => {
    * @param {{connected: boolean, needsReconnect: boolean, handle: string|null}} [linkedinStatus]
    * @param {{connected: boolean, needsReconnect: boolean, handle: string|null}} [redditStatus]
    * @param {{connected: boolean, needsReconnect: boolean, handle: string|null}} [tiktokStatus]
+   * @param {{signedIn: boolean, email: string|null, lastSyncAt: string|null}} [account] - SocialOS account (js/auth.js)
    */
-  function renderSettings(settings, profile, googleConnected, linkedinStatus, redditStatus, tiktokStatus) {
+  function renderSettings(settings, profile, googleConnected, linkedinStatus, redditStatus, tiktokStatus, account) {
     const container = $('settings-content');
     if (!container) return;
 
     const liStatus = linkedinStatus || { connected: false, needsReconnect: false, handle: null };
     const rdStatus = redditStatus || { connected: false, needsReconnect: false, handle: null };
     const tkStatus = tiktokStatus || { connected: false, needsReconnect: false, handle: null };
+    const acct = account || { signedIn: false, email: null, lastSyncAt: null };
 
     container.innerHTML = `
       <h2 class="screen-title">Settings</h2>
+
+      <div class="settings-section">
+        <h3>SocialOS Account <span class="text-secondary" style="font-weight:400">(sync across devices)</span></h3>
+        <div class="connection-status ${acct.signedIn ? 'connected' : 'disconnected'}">
+          ${acct.signedIn ? `Signed in${acct.email ? ' as ' + escapeHtml(acct.email) : ''}` : 'Not signed in'}
+        </div>
+        <p class="text-secondary" style="margin:8px 0">
+          Optional — everything works without an account, stored on this
+          device. Signing in adds cross-device sync of your preferences,
+          profile, and Front Office access to your own private cloud row.
+          Platform connections (Google Drive, LinkedIn, Reddit, TikTok)
+          always stay on-device.
+        </p>
+        ${acct.signedIn ? `
+          <p class="text-secondary" style="margin:8px 0">
+            Last synced: ${acct.lastSyncAt ? SocialOSUtils.formatDate(acct.lastSyncAt) + ' ' + SocialOSUtils.formatTime(acct.lastSyncAt) : 'not yet'}
+          </p>
+          <div style="display:flex;gap:8px;flex-wrap:wrap">
+            <button class="btn btn-secondary btn-sm" data-action="account-sync-now">Sync now</button>
+            <button class="btn btn-danger btn-sm" data-action="account-signout">Sign out</button>
+          </div>
+        ` : `
+          <a href="#" class="btn btn-google" data-action="account-google" style="display:inline-flex;align-items:center;justify-content:center;gap:8px;text-decoration:none">
+            ${GOOGLE_G_ICON}
+            <span>Sign in with Google</span>
+          </a>
+          <div class="form-group" style="margin-top:12px">
+            <label for="set-account-email">Or sign in with just your email — no password, no Google needed</label>
+            <input type="email" id="set-account-email" class="input" placeholder="you@example.com" autocomplete="email">
+          </div>
+          <button class="btn btn-secondary btn-sm" data-action="account-magiclink">Email me a sign-in link</button>
+        `}
+      </div>
 
       <div class="settings-section">
         <h3>AI Engine</h3>
