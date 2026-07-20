@@ -2024,6 +2024,38 @@ body.nav-visible .feedback-fab {
   }
 }
 
+/* ── App version badge ─────────────────────────────────────────────────
+   Small, muted SemVer indicator (https://semver.org) pinned bottom-right,
+   sitting just left of the feedback FAB so the two never overlap. Mirrors
+   the FAB's vertical offset rules (lifts above the mobile bottom nav; sits
+   in the corner on desktop where the nav is a left sidebar). */
+.version-badge {
+  position: fixed;
+  right: calc(var(--space-md) + 56px);
+  bottom: calc(var(--space-md) + var(--safe-bottom));
+  z-index: 140;
+  font-family: var(--font-mono, ui-monospace, "SFMono-Regular", Menlo, monospace);
+  font-size: 10px;
+  line-height: 1;
+  letter-spacing: 0.04em;
+  color: var(--text-secondary);
+  opacity: 0.7;
+  text-decoration: none;
+  transition: opacity 0.2s, color 0.2s;
+}
+
+.version-badge:hover { opacity: 1; color: var(--text-primary); }
+
+body.nav-visible .version-badge {
+  bottom: calc(var(--nav-height) + var(--space-md) + var(--safe-bottom));
+}
+
+@media (min-width: 1024px) {
+  body.nav-visible .version-badge {
+    bottom: var(--space-md);
+  }
+}
+
 .sheet-actions .btn {
   flex: 1;
 }
