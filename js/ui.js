@@ -194,6 +194,59 @@ const SocialOSUI = (() => {
     sheet.classList.add('open');
   }
 
+  /**
+   * Human-readable build/version line, shown on the landing footer and in
+   * Settings → About. Reads the single source of truth exposed by
+   * js/self-healing.js (APP_VERSION mirrors sw.js CACHE_NAME; version is
+   * the ALYS self-healing kit's semver) — guarded so a missing module can
+   * never break rendering.
+   * @returns {string}
+   */
+  function versionLabel() {
+    const sh = /** @type {any} */ (window).SelfHealing;
+    const app = (sh?.appVersion || '').replace(/^socialos-/, '');
+    const alys = sh?.version || '';
+    if (!app && !alys) return '';
+    return `SocialOS ${app ? 'build ' + app : ''}${app && alys ? ' · ' : ''}${alys ? 'self-healing ' + alys : ''}`;
+  }
+
+  /**
+   * Show the SocialOS account sign-in bottom sheet (landing page "Sign in").
+   * Offers every account sign-in method — Google (PKCE) and an email
+   * magic link — via js/auth.js. This is the *SocialOS account*, not a
+   * platform connection: LinkedIn/Reddit/TikTok connects live in
+   * onboarding Step 1 and Settings. Buttons are data-action cases handled
+   * by app.js's global event delegation, same as the feedback sheet.
+   */
+  function renderSigninSheet() {
+    const sheet = $('bottom-sheet');
+    if (!sheet) return;
+
+    setHTML('bottom-sheet-content', `
+      <h3>Sign in to SocialOS</h3>
+      <p class="text-secondary">
+        Optional — everything works without an account. Signing in adds
+        cross-device sync of your preferences and profile. Connecting your
+        social platforms (LinkedIn, Reddit, TikTok…) happens later, during
+        setup or in Settings.
+      </p>
+      <a href="#" class="btn btn-google" data-action="account-google" style="display:inline-flex;align-items:center;justify-content:center;gap:8px;text-decoration:none;margin-top:8px">
+        ${GOOGLE_G_ICON}
+        <span>Sign in with Google</span>
+      </a>
+      <div class="form-group" style="margin-top:16px">
+        <label for="landing-account-email">Or sign in with just your email — no password, no Google needed</label>
+        <input type="email" id="landing-account-email" class="input" placeholder="you@example.com" autocomplete="email">
+      </div>
+      <div class="sheet-actions">
+        <button class="btn btn-secondary" data-action="close-signin">Cancel</button>
+        <button class="btn btn-primary" data-action="landing-magiclink">Email me a sign-in link</button>
+      </div>
+    `);
+
+    sheet.classList.add('open');
+  }
+
   // ── Inline SVG icon set (CSP-safe: no external assets) ───────────────
 
   const ICONS = {
@@ -234,7 +287,7 @@ const SocialOSUI = (() => {
               <img class="nav-brand-mark" src="icons/logo.svg" alt="" width="34" height="34">
               <span>Social<em>OS</em></span>
             </span>
-            <button class="btn btn-ghost btn-sm" data-action="connect-linkedin">Sign in</button>
+            <button class="btn btn-ghost btn-sm" data-action="landing-signin">Sign in</button>
           </header>
 
           <section class="landing-hero">
@@ -330,7 +383,8 @@ const SocialOSUI = (() => {
 
           <footer class="landing-footer">
             SocialOS — your personal social media operating system. All data stays on your device.<br>
-            <a href="privacy.html">Privacy Policy</a> &nbsp;&#183;&nbsp; <a href="terms.html">Terms of Use</a>
+            <a href="privacy.html">Privacy Policy</a> &nbsp;&#183;&nbsp; <a href="terms.html">Terms of Use</a><br>
+            <span class="text-secondary">${versionLabel()}</span>
           </footer>
 
         </div>
@@ -1657,6 +1711,15 @@ const SocialOSUI = (() => {
         <button class="btn btn-danger" data-action="reset-all">Reset All Data</button>
         <p class="text-secondary" style="margin-top:8px">This will delete all content, posts, settings, and start fresh.</p>
       </div>
+
+      <div class="settings-section">
+        <h3>About</h3>
+        <p class="text-secondary">
+          ${versionLabel() || 'Version unavailable'}<br>
+          "build" matches the service worker cache tag; "self-healing" is the
+          ALYS error-monitoring kit's version.
+        </p>
+      </div>
     `;
   }
 
@@ -2246,6 +2309,7 @@ const SocialOSUI = (() => {
     confirm,
     closeSheet,
     renderFeedback,
+    renderSigninSheet,
     renderLanding,
     renderOnboardingStep,
     renderDashboard,

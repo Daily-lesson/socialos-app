@@ -5,7 +5,7 @@
  * Paths are relative so the app works from a subpath (e.g. GitHub Pages).
  */
 
-const CACHE_NAME = 'socialos-v15'; // v15: add js/auth.js + js/sync.js (SocialOS accounts + cloud sync)
+const CACHE_NAME = 'socialos-v16'; // v16: landing sign-in sheet (account, not LinkedIn) + visible version in UI
 const SHELL_ASSETS = [
   './',
   './index.html',

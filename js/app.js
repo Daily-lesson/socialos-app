@@ -1047,6 +1047,17 @@ const SocialOS = (() => {
           document.getElementById('how-it-works')?.scrollIntoView({ behavior: 'smooth' });
           break;
 
+        // Landing "Sign in" → SocialOS account sheet (Google + email magic
+        // link, js/auth.js) — NOT a platform connect; this button used to
+        // start the LinkedIn OAuth flow by mistake.
+        case 'landing-signin':
+          SocialOSUI.renderSigninSheet();
+          break;
+
+        case 'close-signin':
+          SocialOSUI.closeSheet();
+          break;
+
         // ── Feedback (self-healing) ────────────────────
         case 'open-feedback':
           SocialOSUI.renderFeedback();
@@ -1346,8 +1357,12 @@ const SocialOS = (() => {
           break;
         }
 
-        case 'account-magiclink': {
-          const email = /** @type {HTMLInputElement} */ (SocialOSUI.$('set-account-email'))?.value?.trim() || '';
+        case 'account-magiclink':
+        case 'landing-magiclink': {
+          // Same flow from two surfaces: Settings ('set-account-email') and
+          // the landing sign-in sheet ('landing-account-email').
+          const inputId = action === 'landing-magiclink' ? 'landing-account-email' : 'set-account-email';
+          const email = /** @type {HTMLInputElement} */ (SocialOSUI.$(inputId))?.value?.trim() || '';
           if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) {
             SocialOSUI.toast('Enter a valid email address first.', 'warning');
             break;
@@ -1356,6 +1371,7 @@ const SocialOS = (() => {
           try {
             await SocialOSAuth.sendMagicLink(email);
             SocialOSUI.loading(false);
+            if (action === 'landing-magiclink') SocialOSUI.closeSheet();
             SocialOSUI.toast(`Link sent to ${email} — open it on this device to finish signing in.`, 'success', 8000);
           } catch (err) {
             SocialOSUI.loading(false);
