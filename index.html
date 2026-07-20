@@ -80,6 +80,11 @@
       <div id="approvals-content"></div>
     </div>
 
+    <!-- ═══ Front Office Queue Screen (agent drafts awaiting review) ═══ -->
+    <div id="screen-queue" class="screen">
+      <div id="queue-content"></div>
+    </div>
+
     <!-- ═══ Calendar Screen ═══ -->
     <div id="screen-calendar" class="screen">
       <div id="calendar-content"></div>
@@ -126,6 +131,12 @@
           </span>
           <span class="nav-tab-label">Approvals</span>
           <span class="nav-badge" id="approval-badge">0</span>
+        </button>
+        <button class="nav-tab" data-screen="screen-queue">
+          <span class="nav-tab-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-6l-2 3h-4l-2-3H2"/><path d="M5.5 5.1 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.5-6.9A2 2 0 0 0 16.7 4H7.3a2 2 0 0 0-1.8 1.1z"/></svg>
+          </span>
+          <span class="nav-tab-label">Queue</span>
         </button>
         <button class="nav-tab" data-screen="screen-calendar">
           <span class="nav-tab-icon">
@@ -211,6 +222,7 @@
   <script src="js/pm.js"></script>
   <script src="js/engagement.js"></script>
   <script src="js/composer.js"></script>
+  <script src="js/queue.js"></script>
   <script src="js/ui.js"></script>
   <script src="js/app.js"></script>
 

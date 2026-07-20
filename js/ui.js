@@ -1591,11 +1591,170 @@ const SocialOSUI = (() => {
       </div>
 
       <div class="settings-section">
+        <h3>Front Office Queue <span class="text-secondary" style="font-weight:400">(agent drafts)</span></h3>
+        <div class="connection-status ${settings.front_office_secret ? 'connected' : 'disconnected'}">
+          ${settings.front_office_secret ? 'Connected' : 'Not connected'}
+        </div>
+        <p class="text-secondary" style="margin:8px 0">
+          The Queue screen reviews post drafts written by your Front Office
+          agents. Paste the shared secret from the mkt-queue Edge Function
+          (Supabase project settings) — it's stored only on this device.
+        </p>
+        <div class="form-group">
+          <label for="set-fo-secret">Shared secret</label>
+          <input type="password" id="set-fo-secret" class="input" value="${escapeHtml(settings.front_office_secret || '')}" autocomplete="off">
+        </div>
+        <div class="form-group">
+          <label for="set-fo-url">Queue function URL <span class="text-secondary">(leave as-is unless developing locally)</span></label>
+          <input type="text" id="set-fo-url" class="input" value="${escapeHtml(settings.mkt_queue_url || SocialOSDB.DEFAULT_MKT_QUEUE_URL)}">
+        </div>
+        <button class="btn btn-primary btn-sm" data-action="save-frontoffice-settings">Save Front Office Settings</button>
+      </div>
+
+      <div class="settings-section">
         <h3>Data</h3>
         <button class="btn btn-danger" data-action="reset-all">Reset All Data</button>
         <p class="text-secondary" style="margin-top:8px">This will delete all content, posts, settings, and start fresh.</p>
       </div>
     `;
+  }
+
+  // ── Front Office Queue (Phase 2 Cockpit — js/queue.js) ────────────────
+
+  /** Product labels for mkt_drafts.product (alys marketing schema). */
+  const QUEUE_PRODUCT_LABELS = {
+    resumai: 'ResumAI',
+    prism: 'PRISM',
+    off_races: 'Off_Races',
+    socialos: 'SocialOS',
+    portfolio: 'Portfolio'
+  };
+
+  /**
+   * Channel badge — reuse the platform colors where the channel IS a
+   * platform; neutral for blog/x/email.
+   * @param {string} channel
+   * @returns {string}
+   */
+  function queueChannelBadge(channel) {
+    const ch = (channel || '').toLowerCase();
+    if (PLATFORM_COLORS[ch]) {
+      return `<span class="platform-badge" style="background:${PLATFORM_COLORS[ch]}">${PLATFORM_ICONS[ch]}</span>`;
+    }
+    return `<span class="tag">${escapeHtml(ch || '?')}</span>`;
+  }
+
+  /**
+   * Render one queued Front Office draft card.
+   * @param {import('./queue.js').MktDraft} draft
+   * @param {boolean} composerCapable - channel maps to a Quick Composer platform
+   * @returns {string}
+   */
+  function renderQueueCard(draft, composerCapable) {
+    return `
+      <div class="card approval-card" data-draft-id="${draft.id}">
+        <div class="card-header">
+          ${queueChannelBadge(draft.channel)}
+          <span>${QUEUE_PRODUCT_LABELS[draft.product] || escapeHtml(draft.product)}</span>
+          <span class="tag">${escapeHtml(draft.agent)}</span>
+          <span class="text-secondary" style="margin-left:auto">${SocialOSUtils.formatDate(draft.created_at)}</span>
+        </div>
+        <h4 style="margin:4px 0 8px">${escapeHtml(draft.title)}</h4>
+        <div class="post-text">${escapeHtml(draft.body)}</div>
+        ${draft.scheduled_for ? `<p class="text-secondary" style="font-size:0.8rem;margin-top:8px">Planned for ${SocialOSUtils.formatDate(draft.scheduled_for)}</p>` : ''}
+        ${draft.notes ? `<p class="text-secondary" style="font-size:0.8rem;margin-top:4px">${escapeHtml(draft.notes)}</p>` : ''}
+        <div class="card-actions">
+          <button class="btn btn-secondary btn-sm" data-action="queue-edit" data-id="${draft.id}">Edit</button>
+          <button class="btn btn-danger btn-sm" data-action="queue-reject" data-id="${draft.id}">Reject</button>
+          <button class="btn btn-success btn-lg" data-action="queue-approve" data-id="${draft.id}">
+            ${composerCapable ? 'APPROVE &#8594; COMPOSER' : 'APPROVE'}
+          </button>
+        </div>
+        ${composerCapable
+          ? ''
+          : `<p class="text-secondary" style="font-size:0.75rem;margin-top:6px">SocialOS doesn't publish ${escapeHtml((draft.channel || '').toLowerCase())} — approving marks it approved and copies the text for you to place.</p>`}
+      </div>`;
+  }
+
+  /**
+   * Render the Front Office approval queue screen.
+   * @param {{configured: boolean, drafts: import('./queue.js').MktDraft[], error: string|null}} data
+   */
+  function renderQueue(data) {
+    const container = $('queue-content');
+    if (!container) return;
+
+    let html = `
+      <div class="screen-title-row" style="display:flex;align-items:center;gap:12px">
+        <h2 class="screen-title" style="margin:0">Front Office Queue</h2>
+        ${data.configured ? `<button class="btn btn-secondary btn-sm" data-action="queue-refresh" style="margin-left:auto">Refresh</button>` : ''}
+      </div>
+      <p class="text-secondary" style="margin:4px 0 16px">
+        Drafts your agents queued for review. Approving hands post drafts to
+        the Quick Composer — nothing is published without you.
+      </p>`;
+
+    if (!data.configured) {
+      html += `
+        <div class="empty-state">
+          <h2>Not connected</h2>
+          <p class="text-secondary">Add the Front Office shared secret in Settings to load the queue.</p>
+          <button class="btn btn-primary" data-action="go-settings" style="margin-top:12px">Open Settings</button>
+        </div>`;
+    } else if (data.error) {
+      html += `
+        <div class="empty-state">
+          <h2>Couldn't load the queue</h2>
+          <p class="text-secondary">${escapeHtml(data.error)}</p>
+          <button class="btn btn-primary" data-action="queue-refresh" style="margin-top:12px">Try Again</button>
+        </div>`;
+    } else if (!data.drafts.length) {
+      html += `
+        <div class="empty-state">
+          <h2>All caught up</h2>
+          <p class="text-secondary">No drafts waiting for review. The agents will queue more as they work.</p>
+        </div>`;
+    } else {
+      html += `
+        <div class="approval-list">
+          ${data.drafts.map(d => renderQueueCard(d, SocialOSQueue.isComposerChannel(d))).join('')}
+        </div>`;
+    }
+
+    container.innerHTML = html;
+  }
+
+  /**
+   * Edit-then-approve view for one queued draft (same shape as
+   * renderPostEdit). Saving approves with the edited body; the agent's
+   * original_body stays frozen server-side for edit-rate diffing.
+   * @param {import('./queue.js').MktDraft} draft
+   */
+  function renderQueueEdit(draft) {
+    const container = $('queue-content');
+    if (!container) return;
+
+    container.innerHTML = `
+      <div class="edit-view">
+        <button class="btn btn-secondary btn-sm" data-action="queue-refresh">&#8592; Back to queue</button>
+        <h2 style="margin-top:12px">Edit Draft</h2>
+        <div class="card-header" style="margin:8px 0">
+          ${queueChannelBadge(draft.channel)}
+          <span>${QUEUE_PRODUCT_LABELS[draft.product] || escapeHtml(draft.product)}</span>
+          <span class="tag">${escapeHtml(draft.agent)}</span>
+        </div>
+        <h4>${escapeHtml(draft.title)}</h4>
+        <div class="form-group" style="margin-top:12px">
+          <label for="queue-edit-text">Post text</label>
+          <textarea id="queue-edit-text" class="input textarea" rows="10">${escapeHtml(draft.body)}</textarea>
+        </div>
+        <div class="card-actions">
+          <button class="btn btn-secondary btn-sm" data-action="queue-refresh">Cancel</button>
+          <button class="btn btn-success btn-lg" data-action="queue-save-approve" data-id="${draft.id}">
+            SAVE &amp; APPROVE
+          </button>
+        </div>
+      </div>`;
   }
 
   // ── Projects (Program Manager) ────────────────────────────────────────
@@ -2064,6 +2223,8 @@ const SocialOSUI = (() => {
     renderProjectDetail,
     renderAddProject,
     renderSettings,
+    renderQueue,
+    renderQueueEdit,
     renderScanProgress,
     renderPickerProgress,
     renderComposer,

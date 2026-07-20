@@ -11,7 +11,7 @@ const SocialOS = (() => {
 
   /**
    * In-memory working state.
-   * @type {{currentScreen: string, onboardingStep: number, onboardingData: Object<string, any>, calendarFocusDate: string|null, approvalsTab: string, engagementSubTab: string, composer: {mode: string, text: string, link: string, selected: string[]|null, oneTap: boolean, posts: any[], results: any[]|null, replyPlatform: string, comment: string, postSummary: string, reply: {reply: string, alternative: string}|null}}}
+   * @type {{currentScreen: string, onboardingStep: number, onboardingData: Object<string, any>, calendarFocusDate: string|null, approvalsTab: string, engagementSubTab: string, queue: {drafts: any[]}, composer: {mode: string, text: string, link: string, selected: string[]|null, oneTap: boolean, posts: any[], results: any[]|null, replyPlatform: string, comment: string, postSummary: string, reply: {reply: string, alternative: string}|null}}}
    */
   const state = {
     currentScreen: 'landing',
@@ -20,6 +20,11 @@ const SocialOS = (() => {
     calendarFocusDate: null,
     approvalsTab: 'posts',
     engagementSubTab: 'likes',
+    // Front Office queue (js/queue.js) view state — drafts cached from the
+    // last fetch so edit/approve can work off in-memory copies.
+    queue: {
+      /** @type {any[]} */ drafts: []
+    },
     // Quick Composer (js/composer.js) view state — all ephemeral, never persisted.
     composer: {
       mode: 'post',        // 'post' | 'reply'
@@ -78,6 +83,12 @@ const SocialOS = (() => {
         SocialOSUI.showNav(true);
         SocialOSUI.showScreen('screen-approvals');
         await renderApprovals();
+        break;
+
+      case 'queue':
+        SocialOSUI.showNav(true);
+        SocialOSUI.showScreen('screen-queue');
+        await renderQueue();
         break;
 
       case 'calendar':
@@ -254,6 +265,84 @@ const SocialOS = (() => {
   async function renderLibrary() {
     const items = await SocialOSDB.getAllContent();
     SocialOSUI.renderLibrary(items);
+  }
+
+  /**
+   * Friendly error for Front Office queue calls — same origin/offline
+   * diagnosis as composerErrMsg (CLAUDE.md gotcha 5), queue wording.
+   * @param {unknown} err
+   * @returns {string}
+   */
+  function queueErrMsg(err) {
+    const m = err instanceof Error ? err.message : String(err);
+    if (/failed to fetch|networkerror|load failed|ERR_|fetch/i.test(m)) {
+      return "can't reach the queue service. You're likely on a preview link or offline — open the live app (the installed / Add-to-Home-Screen URL), which is the origin the backend is configured for.";
+    }
+    return m;
+  }
+
+  /**
+   * Load + render the Front Office approval queue (js/queue.js).
+   */
+  async function renderQueue() {
+    if (!(await SocialOSQueue.isConfigured())) {
+      SocialOSUI.renderQueue({ configured: false, drafts: [], error: null });
+      return;
+    }
+    SocialOSUI.loading(true, 'Loading the queue…');
+    try {
+      const drafts = await SocialOSQueue.fetchQueue();
+      state.queue.drafts = drafts;
+      SocialOSUI.renderQueue({ configured: true, drafts, error: null });
+    } catch (err) {
+      SocialOSUI.renderQueue({ configured: true, drafts: [], error: queueErrMsg(err) });
+    }
+    SocialOSUI.loading(false);
+  }
+
+  /**
+   * Approve a Front Office draft (optionally with Scot's edited body) and
+   * route the approved text onward. Composer-capable channels hand the body
+   * into the Quick Composer (the existing engine — Scot still reviews and
+   * posts from there); other channels (blog/x/email) copy the text.
+   * Approved ≠ posted — the composer keeps its honest direct/assisted
+   * reporting, and nothing here ever claims a post landed.
+   * @param {string} id
+   * @param {string} [bodyOverride]
+   */
+  async function approveQueueDraft(id, bodyOverride) {
+    SocialOSUI.loading(true, 'Approving…');
+    try {
+      const draft = await SocialOSQueue.approveDraft(id, bodyOverride);
+      state.queue.drafts = state.queue.drafts.filter(d => d.id !== id);
+
+      if (SocialOSQueue.isComposerChannel(draft)) {
+        const handoff = SocialOSQueue.composerHandoff(draft);
+        const c = state.composer;
+        c.mode = 'post';
+        c.text = handoff.text;
+        c.link = '';
+        if (handoff.platforms.length) c.selected = handoff.platforms.slice();
+        c.posts = [];
+        c.results = null;
+        SocialOSUI.loading(false);
+        SocialOSUI.toast('Approved — review and post it from the composer.', 'success');
+        await navigate('compose');
+      } else {
+        SocialOSUI.loading(false);
+        try {
+          await navigator.clipboard.writeText(draft.body || '');
+          SocialOSUI.toast(`Approved — text copied. SocialOS doesn't publish ${draft.channel} directly, so place it yourself.`, 'success', 5000);
+        } catch {
+          SocialOSUI.toast(`Approved. Copy the text from the ${draft.channel} draft manually.`, 'info', 5000);
+        }
+        await renderQueue();
+      }
+    } catch (err) {
+      SocialOSUI.loading(false);
+      SocialOSUI.toast(`Couldn't approve — ${queueErrMsg(err)}`, 'error', 6000);
+      await renderQueue();
+    }
   }
 
   async function renderCalendar() {
@@ -809,6 +898,7 @@ const SocialOS = (() => {
         case 'go-dashboard':   navigate('dashboard'); break;
         case 'go-compose':     navigate('compose'); break;
         case 'go-approvals':   navigate('approvals'); break;
+        case 'go-queue':       navigate('queue'); break;
         case 'go-calendar':    navigate('calendar'); break;
         case 'go-library':     navigate('library'); break;
         case 'go-projects':    navigate('projects'); break;
@@ -1236,6 +1326,15 @@ const SocialOS = (() => {
           settings.proxy_secret = /** @type {HTMLInputElement} */ (SocialOSUI.$('set-proxy-secret'))?.value?.trim() || '';
           await SocialOSDB.saveSettings(settings);
           SocialOSUI.toast('Proxy settings saved.', 'success');
+          break;
+        }
+
+        case 'save-frontoffice-settings': {
+          const settings = await SocialOSDB.getOrCreateSettings();
+          settings.front_office_secret = /** @type {HTMLInputElement} */ (SocialOSUI.$('set-fo-secret'))?.value?.trim() || '';
+          settings.mkt_queue_url = /** @type {HTMLInputElement} */ (SocialOSUI.$('set-fo-url'))?.value?.trim() || SocialOSDB.DEFAULT_MKT_QUEUE_URL;
+          await SocialOSDB.saveSettings(settings);
+          SocialOSUI.toast('Front Office settings saved.', 'success');
           break;
         }
 
@@ -1715,6 +1814,52 @@ const SocialOS = (() => {
           break;
         }
 
+        // ── Front Office Queue (Phase 2 Cockpit, js/queue.js) ──────────
+        case 'queue-refresh':
+          await renderQueue();
+          break;
+
+        case 'queue-edit': {
+          if (!id) break;
+          const draft = state.queue.drafts.find(d => d.id === id);
+          if (draft) SocialOSUI.renderQueueEdit(draft);
+          break;
+        }
+
+        case 'queue-save-approve': {
+          if (!id) break;
+          const ta = /** @type {HTMLTextAreaElement} */ (SocialOSUI.$('queue-edit-text'));
+          const text = ta?.value?.trim();
+          if (!text) { SocialOSUI.toast('The post text can\'t be empty.', 'warning'); break; }
+          await approveQueueDraft(id, text);
+          break;
+        }
+
+        case 'queue-approve': {
+          if (!id) break;
+          await approveQueueDraft(id);
+          break;
+        }
+
+        case 'queue-reject': {
+          if (!id) break;
+          SocialOSUI.confirm(
+            'Reject Draft',
+            'The draft goes back to the agents as rejected — they learn from what you turn down. This can\'t be undone from here.',
+            'Reject',
+            async () => {
+              try {
+                await SocialOSQueue.rejectDraft(id);
+                SocialOSUI.toast('Draft rejected.', 'info');
+              } catch (err) {
+                SocialOSUI.toast(`Couldn't reject — ${queueErrMsg(err)}`, 'error', 6000);
+              }
+              await renderQueue();
+            }
+          );
+          break;
+        }
+
         // ── Engagement Approvals (Phase 3, BUILD_PLAN §7/§12) ──────────
         case 'approvals-tab': {
           const tab = actionEl.dataset?.tab;
@@ -2056,6 +2201,7 @@ const SocialOS = (() => {
       'screen-dashboard': 'dashboard',
       'screen-compose': 'compose',
       'screen-approvals': 'approvals',
+      'screen-queue': 'queue',
       'screen-calendar': 'calendar',
       'screen-library': 'library',
       'screen-projects': 'projects',

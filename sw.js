@@ -5,7 +5,7 @@
  * Paths are relative so the app works from a subpath (e.g. GitHub Pages).
  */
 
-const CACHE_NAME = 'socialos-v13'; // v13: precache js/composer.js (Quick Composer) — was missing from the shell
+const CACHE_NAME = 'socialos-v14'; // v14: add js/queue.js (Front Office approval queue)
 const SHELL_ASSETS = [
   './',
   './index.html',
@@ -23,6 +23,7 @@ const SHELL_ASSETS = [
   './js/tiktok.js',
   './js/linker.js',
   './js/pm.js',
+  './js/queue.js',
   './js/self-healing.js',
   './js/ui.js',
   './js/utils.js',
