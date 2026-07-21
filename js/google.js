@@ -853,12 +853,28 @@ const SocialOSGoogle = (() => {
    */
   async function pickPhotos(onProgress) {
     onProgress('Opening Google Photos picker…', 0, 0);
-    const session = await createPickerSession();
 
-    const pickerWindow = window.open(session.pickerUri, '_blank', 'noopener');
+    // Open the popup SYNCHRONOUSLY, inside the user-gesture that invoked
+    // pickPhotos. A window.open() issued *after* the awaited
+    // createPickerSession() below has lost the browser's transient user
+    // activation, so Safari and strict Chrome silently block it (reported:
+    // "popup blocked for Google photo picker"). We also must NOT pass
+    // 'noopener' here: with 'noopener', window.open() returns null even on
+    // success, which this code misread as a block. So we open a blank window
+    // now, create the session, then navigate the window to the picker URI.
+    const pickerWindow = window.open('about:blank', '_blank');
     if (!pickerWindow) {
       throw new Error('Popup blocked — allow popups for this site and try again.');
     }
+
+    let session;
+    try {
+      session = await createPickerSession();
+    } catch (err) {
+      try { pickerWindow.close(); } catch { /* best-effort cleanup */ }
+      throw err;
+    }
+    pickerWindow.location.href = session.pickerUri;
 
     onProgress('Waiting for you to pick photos…', 0, 0);
     const completed = await pollPickerSession(
