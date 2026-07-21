@@ -7,7 +7,7 @@
  * approval notifications with one-tap actions and routes taps into the app.
  */
 
-const CACHE_NAME = 'socialos-v19'; // v19: web push one-click approvals + scheduling
+const CACHE_NAME = 'socialos-v20'; // v20: zero-tap auto-post of approved scheduled posts
 const SHELL_ASSETS = [
   './',
   './index.html',
@@ -40,6 +40,21 @@ const SHELL_ASSETS = [
 ];
 
 const FONT_HOSTS = ['fonts.googleapis.com', 'fonts.gstatic.com'];
+
+// ── Auto-post modules ────────────────────────────────────────────────────
+// The app modules below are window-free on their publish paths (OAuth
+// helpers touch window/sessionStorage but are never called here), so the
+// SW can reuse them to publish an APPROVED scheduled post the moment its
+// "time to post" push arrives — zero taps. Guarded: if any module ever
+// grows a top-level DOM reference, auto-post silently degrades to the
+// interactive "Post now" notification instead of breaking the SW.
+let SW_MODULES_OK = false;
+try {
+  importScripts('js/utils.js', 'js/db.js', 'js/linkedin.js', 'js/reddit.js');
+  SW_MODULES_OK = true;
+} catch (e) {
+  // Offline shell + notifications still work; only auto-post is off.
+}
 
 // Install — cache the app shell
 self.addEventListener('install', (event) => {
@@ -191,10 +206,91 @@ async function swOpenApp(route) {
   await self.clients.openWindow('./' + (route ? '#' + route : ''));
 }
 
-self.addEventListener('push', (event) => {
-  let data = {};
-  try { data = event.data ? event.data.json() : {}; } catch { /* non-JSON push */ }
+/**
+ * Zero-tap publish of an approved, scheduled post when its reminder push
+ * arrives. Opt-in via the `auto_post_scheduled` setting. Only direct
+ * platforms (LinkedIn/Reddit) can auto-post; the post record only exists
+ * in the IndexedDB of the device that scheduled it, so no other
+ * subscribed device can double-post.
+ * @returns {Promise<{ok: boolean, platform?: string, already?: boolean, error?: string}|null>}
+ *   null = auto-post doesn't apply (off / other device / assisted platform)
+ */
+async function swAutoPostDue(data) {
+  if (!SW_MODULES_OK || !data.postId) return null;
+  try {
+    const settings = await SocialOSDB.getSettings();
+    if (!settings || !settings.auto_post_scheduled) return null;
+
+    const post = await SocialOSDB.get(SocialOSDB.STORES.posts, data.postId);
+    if (!post) return null; // scheduled on a different device — it will post
+    if (post.status === 'published') {
+      return { ok: true, platform: post.platform, already: true };
+    }
+
+    let published;
+    if (post.platform === 'linkedin') {
+      published = await SocialOSLinkedIn.linkedinPublish(post);
+    } else if (post.platform === 'reddit') {
+      published = await SocialOSReddit.redditPublish(post);
+    } else {
+      return null; // assisted platform — the human copy step is required
+    }
+
+    // Same bookkeeping as the composer's publishOne.
+    post.status = 'published';
+    post.published_time = new Date().toISOString();
+    if (published && published.platform_post_id) post.platform_post_id = published.platform_post_id;
+    await SocialOSDB.put(SocialOSDB.STORES.posts, post);
+    if (post.content_id) {
+      const content = await SocialOSDB.get(SocialOSDB.STORES.content, post.content_id);
+      if (content) {
+        content.status = 'posted';
+        content.last_used = new Date().toISOString();
+        content.post_history.push(post.id);
+        await SocialOSDB.put(SocialOSDB.STORES.content, content);
+      }
+    }
+    return { ok: true, platform: post.platform };
+  } catch (err) {
+    return { ok: false, error: (err && err.message) || String(err) };
+  }
+}
+
+async function swHandlePush(data) {
   const type = data.type || 'info';
+  const base = {
+    icon: './icons/icon-192.png',
+    badge: './icons/icon-192.png',
+    renotify: false
+  };
+
+  // A due scheduled post: try to publish it right now, no tap needed.
+  if (type === 'due' && data.postId) {
+    const auto = await swAutoPostDue(data);
+    if (auto && auto.ok) {
+      return self.registration.showNotification(
+        auto.already ? 'Already posted ✓' : `Posted to ${auto.platform} ✓`,
+        {
+          ...base,
+          body: auto.already
+            ? 'This scheduled post already went out.'
+            : 'Your scheduled post published itself — nothing to do.',
+          tag: 'due-' + data.postId,
+          data: { type: 'info', url: 'approvals' }
+        }
+      );
+    }
+    // Fall back to the interactive "Post now" card (auto-post off, another
+    // device, assisted platform, or the publish failed).
+    const hint = auto && auto.ok === false ? ` — auto-post failed: ${auto.error}` : '';
+    return self.registration.showNotification(data.title || 'SocialOS', {
+      ...base,
+      body: (data.body || '') + hint,
+      tag: data.tag || 'due-' + data.postId,
+      data,
+      actions: [{ action: 'post', title: '🚀 Post now' }]
+    });
+  }
 
   let actions = [];
   if (type === 'draft' && data.draftId) {
@@ -203,19 +299,21 @@ self.addEventListener('push', (event) => {
       { action: 'edit', title: '✏️ Edit' },
       { action: 'deny', title: '❌ Deny' }
     ];
-  } else if (type === 'due' && data.postId) {
-    actions = [{ action: 'post', title: '🚀 Post now' }];
   }
 
-  event.waitUntil(self.registration.showNotification(data.title || 'SocialOS', {
+  return self.registration.showNotification(data.title || 'SocialOS', {
+    ...base,
     body: data.body || '',
-    icon: './icons/icon-192.png',
-    badge: './icons/icon-192.png',
     tag: data.tag || (data.draftId ? 'draft-' + data.draftId : (data.postId ? 'due-' + data.postId : undefined)),
-    renotify: false,
     data,
     actions
-  }));
+  });
+}
+
+self.addEventListener('push', (event) => {
+  let data = {};
+  try { data = event.data ? event.data.json() : {}; } catch { /* non-JSON push */ }
+  event.waitUntil(swHandlePush(data));
 });
 
 self.addEventListener('notificationclick', (event) => {

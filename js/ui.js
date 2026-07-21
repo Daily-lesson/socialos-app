@@ -955,7 +955,7 @@ const SocialOSUI = (() => {
 
     html += data.tab === 'engagement'
       ? renderEngagementTabContent(data.engagement, data.engagementSubTab)
-      : renderPostsTabContent(data.posts, data.directPlatforms || {}, data.scheduled || []);
+      : renderPostsTabContent(data.posts, data.directPlatforms || {}, data.scheduled || [], !!data.autoPost);
 
     container.innerHTML = html;
   }
@@ -964,9 +964,10 @@ const SocialOSUI = (() => {
    * @param {ScheduledPost[]} posts
    * @param {Object<string, boolean>} directPlatforms - platform → connected for direct publish (approve = post, one tap)
    * @param {ScheduledPost[]} [scheduled] - approved posts waiting on their scheduled time
+   * @param {boolean} [autoPost] - settings.auto_post_scheduled: due posts publish themselves
    * @returns {string}
    */
-  function renderPostsTabContent(posts, directPlatforms, scheduled) {
+  function renderPostsTabContent(posts, directPlatforms, scheduled, autoPost) {
     const sched = scheduled || [];
     let html = '';
 
@@ -974,7 +975,7 @@ const SocialOSUI = (() => {
       html += `
         <h3 style="margin:12px 0 8px">Scheduled</h3>
         <div class="approval-list">
-          ${sched.map(post => renderScheduledCard(post, !!directPlatforms[post.platform])).join('')}
+          ${sched.map(post => renderScheduledCard(post, !!directPlatforms[post.platform], !!autoPost)).join('')}
         </div>
         ${posts.length ? '<h3 style="margin:16px 0 8px">Waiting for approval</h3>' : ''}`;
     }
@@ -999,12 +1000,14 @@ const SocialOSUI = (() => {
   /**
    * One approved-and-scheduled post: shows its slot, flags it when due, and
    * offers the honest one-tap action (post now for direct platforms, copy &
-   * open for assisted ones).
+   * open for assisted ones). With auto-post on, direct posts advertise that
+   * they'll send themselves.
    * @param {ScheduledPost} post
    * @param {boolean} direct
+   * @param {boolean} [autoPost]
    * @returns {string}
    */
-  function renderScheduledCard(post, direct) {
+  function renderScheduledCard(post, direct, autoPost) {
     const txt = post.selected_alternative === 0
       ? post.draft.text
       : (post.alternatives[post.selected_alternative - 1]?.text || post.draft.text);
@@ -1028,8 +1031,10 @@ const SocialOSUI = (() => {
           </button>
         </div>
         <p class="text-secondary" style="font-size:0.75rem;margin-top:6px">
-          Already approved — ${direct ? 'it posts with one tap.' : `SocialOS can't auto-post to ${post.platform}, so one tap copies it and opens the app.`}
-          ${due ? '' : 'A reminder arrives at the scheduled time (push notification, if enabled in Settings).'}
+          Already approved — ${direct
+            ? (autoPost ? 'it posts <b>itself</b> at the scheduled time (auto-post is on).' : 'it posts with one tap.')
+            : `SocialOS can't auto-post to ${post.platform}, so one tap copies it and opens the app.`}
+          ${due || (direct && autoPost) ? '' : 'A reminder arrives at the scheduled time (push notification, if enabled in Settings).'}
         </p>
       </div>`;
   }
@@ -1907,7 +1912,16 @@ const SocialOSUI = (() => {
                 ? `<button class="btn btn-secondary btn-sm" data-action="push-test">Send a test</button>
                    <button class="btn btn-danger btn-sm" data-action="push-disable">Turn off</button>`
                 : `<button class="btn btn-primary btn-sm" data-action="push-enable" ${ps.supported && ps.hasSecret ? '' : 'disabled'}>Enable push on this device</button>`}
-            </div>`;
+            </div>
+            <label class="toggle-row" style="margin-top:12px">
+              <input type="checkbox" data-action="toggle-autopost" ${settings.auto_post_scheduled ? 'checked' : ''}>
+              <span>Auto-post scheduled posts — once you approve one, it publishes
+              <b>itself</b> at the scheduled time and you get a "Posted ✓"
+              notification instead of a "Post now" button. LinkedIn/Reddit only
+              (others still need the copy step), and only from the device that
+              scheduled it. Posting happens when the reminder push arrives or
+              the next time the app opens.</span>
+            </label>`;
         })()}
       </div>
 

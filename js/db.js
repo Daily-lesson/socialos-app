@@ -205,6 +205,7 @@
  * @property {string} [mkt_queue_url] - Front Office approval-queue Edge Function URL (js/queue.js). Baked-in default (DEFAULT_MKT_QUEUE_URL); overridable for local dev. NB: hosted in project ehgnxblgiyqtxypkoioc (where the mkt_ schema lives), not Off_Races like the others.
  * @property {string} [front_office_secret] - Shared secret for the mkt-queue Edge Function (X-FrontOffice-Secret). Entered once in Settings, lives only in IndexedDB — NEVER baked into client code (this repo mirrors to a public repo). Empty until Scot sets it.
  * @property {boolean} [push_enabled] - Web push notifications enabled on THIS device (js/push.js). Per-device (each device has its own push subscription) — deliberately NOT in sync.js SYNCED_SETTINGS_KEYS.
+ * @property {boolean} [auto_post_scheduled] - Zero-tap mode: approved scheduled posts publish themselves when their reminder arrives (sw.js swAutoPostDue) or on app open (checkDuePosts). Direct platforms only; per-device (the post records live in this device's IndexedDB) — NOT synced.
  * @property {{approval_reminder_hours_before: number, engagement_batch_time: string, quiet_hours_start: string, quiet_hours_end: string}} notification_preferences
  * @property {Object<string, number>} posting_limits
  * @property {{remove_client_names: boolean, remove_facility_locations: boolean, remove_proprietary_specs: boolean, remove_financial_data: boolean, custom_blocked_terms: string[]}} content_scrubbing
@@ -482,6 +483,8 @@ const SocialOSDB = (() => {
       front_office_secret: '',
       // Web push (js/push.js) — per-device, so not cloud-synced.
       push_enabled: false,
+      // Zero-tap: approved scheduled posts publish themselves (sw.js).
+      auto_post_scheduled: false,
       notification_preferences: {
         approval_reminder_hours_before: 48,
         engagement_batch_time: '08:00',

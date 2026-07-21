@@ -271,10 +271,12 @@ const SocialOS = (() => {
     const posts = await SocialOSDB.getPendingPosts();
     const scheduled = await SocialOSDB.getScheduledPosts();
     const engagement = await SocialOSEngagement.getQueues();
+    const settings = await SocialOSDB.getSettings();
     SocialOSUI.renderApprovals({
       tab: /** @type {any} */ (state.approvalsTab),
       posts,
       scheduled,
+      autoPost: !!settings?.auto_post_scheduled,
       engagement,
       engagementSubTab: /** @type {any} */ (state.engagementSubTab),
       // Platforms where approving publishes in the same tap (label the
@@ -338,10 +340,13 @@ const SocialOS = (() => {
       c.link = '';
       c.schedule = { show: false, time: '' };
       SocialOSUI.loading(false);
+      const autoOn = (await SocialOSDB.getSettings())?.auto_post_scheduled;
       SocialOSUI.toast(
-        reminderSet
-          ? `Scheduled for ${label} — you'll get a push notification to post it in one tap.`
-          : `Scheduled for ${label} — it's under Approvals → Scheduled. Enable push in Settings to get a reminder.`,
+        autoOn && reminderSet
+          ? `Scheduled for ${label} — it'll post automatically then (you'll get a "Posted ✓" notification).`
+          : reminderSet
+            ? `Scheduled for ${label} — you'll get a push notification to post it in one tap.`
+            : `Scheduled for ${label} — it's under Approvals → Scheduled. Enable push in Settings to get a reminder.`,
         'success', 7000
       );
       await renderComposer();
@@ -579,10 +584,13 @@ const SocialOS = (() => {
 
       const label = `${SocialOSUtils.formatDate(when)} ${SocialOSUtils.formatTime(when)}`;
       SocialOSUI.loading(false);
+      const autoOn = (await SocialOSDB.getSettings())?.auto_post_scheduled;
       SocialOSUI.toast(
-        reminderSet
-          ? `Approved — posts ${label}. You'll get a push notification to send it in one tap.`
-          : `Approved & scheduled for ${label} (Approvals → Scheduled). Enable push in Settings to get the reminder.`,
+        autoOn && reminderSet && state.queue.direct[channel]
+          ? `Approved — posts itself ${label} (you'll get a "Posted ✓" notification).`
+          : reminderSet
+            ? `Approved — posts ${label}. You'll get a push notification to send it in one tap.`
+            : `Approved & scheduled for ${label} (Approvals → Scheduled). Enable push in Settings to get the reminder.`,
         'success', 8000
       );
       await renderQueue();
@@ -1228,18 +1236,48 @@ const SocialOS = (() => {
   }
 
   /**
-   * On app open: surface approved posts whose scheduled time has passed —
-   * they only need one tap (POST NOW) to go out. The push reminder is the
-   * primary nudge; this catches the push-disabled / missed-notification case.
+   * On app open: handle approved posts whose scheduled time has passed.
+   * With auto-post on (settings.auto_post_scheduled), due direct-platform
+   * posts publish themselves right here — the push reminder (sw.js
+   * swAutoPostDue) covers the app-closed case, this covers app-open and
+   * push-disabled. Otherwise they only need one tap (POST NOW).
    */
   async function checkDuePosts() {
     const due = (await SocialOSDB.getScheduledPosts())
       .filter(p => new Date(p.scheduled_time).getTime() <= Date.now());
     if (!due.length) return;
-    SocialOSUI.toast(
-      `${due.length} scheduled post${due.length > 1 ? 's are' : ' is'} due — Approvals → POST NOW.`,
-      'warning', 8000
-    );
+
+    const settings = await SocialOSDB.getSettings();
+    let remaining = due;
+
+    if (settings?.auto_post_scheduled) {
+      const direct = {
+        linkedin: await SocialOSLinkedIn.isConnected(),
+        reddit: await SocialOSReddit.isConnected()
+      };
+      let posted = 0;
+      remaining = [];
+      for (const p of due) {
+        if (direct[p.platform]) {
+          try {
+            const r = await SocialOSComposer.publishOne(p.id);
+            if (r.mode === 'published') { posted++; continue; }
+          } catch { /* fall through to the manual list */ }
+        }
+        remaining.push(p);
+      }
+      if (posted) {
+        SocialOSUI.toast(`${posted} scheduled post${posted > 1 ? 's' : ''} auto-posted ✓`, 'success', 6000);
+        await updateBadge();
+      }
+    }
+
+    if (remaining.length) {
+      SocialOSUI.toast(
+        `${remaining.length} scheduled post${remaining.length > 1 ? 's are' : ' is'} due — Approvals → POST NOW.`,
+        'warning', 8000
+      );
+    }
   }
 
   // ── Push / notification deep links (sw.js notificationclick) ──────────
@@ -1926,6 +1964,19 @@ const SocialOS = (() => {
           SocialOSUI.loading(false);
           SocialOSUI.toast('Push turned off on this device.', 'info');
           await renderSettings();
+          break;
+        }
+
+        case 'toggle-autopost': {
+          const settings = await SocialOSDB.getOrCreateSettings();
+          settings.auto_post_scheduled = !!(/** @type {HTMLInputElement} */ (actionEl)).checked;
+          await SocialOSDB.saveSettings(settings);
+          SocialOSUI.toast(
+            settings.auto_post_scheduled
+              ? 'Auto-post on — approved scheduled posts will publish themselves at their time (LinkedIn/Reddit, from this device).'
+              : 'Auto-post off — due posts wait for your "Post now" tap.',
+            'info', 7000
+          );
           break;
         }
 
