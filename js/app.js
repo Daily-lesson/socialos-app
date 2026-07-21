@@ -1732,6 +1732,7 @@ const SocialOS = (() => {
 
         // Toggle a file-type chip in the Drive scan scope sheet (multi-select).
         case 'drive-type':
+        case 'drive-owned-toggle':
           actionEl.classList.toggle('selected');
           break;
 
@@ -1754,11 +1755,12 @@ const SocialOS = (() => {
             /** @type {HTMLSelectElement} */ (SocialOSUI.$('drive-max'))?.value || '50', 10);
           const nameContains =
             /** @type {HTMLInputElement} */ (SocialOSUI.$('drive-name'))?.value?.trim() || '';
+          const ownedByMe = !!document.querySelector('#drive-owned .chip.selected');
 
           SocialOSUI.closeSheet();
           try {
             const items = await SocialOSGoogle.scanDrive(
-              { types, sinceDays, maxFiles, nameContains },
+              { types, sinceDays, maxFiles, nameContains, ownedByMe },
               (current, total, name) => SocialOSUI.renderScanProgress(current, total, name)
             );
             SocialOSUI.loading(false);

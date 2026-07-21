@@ -25,6 +25,9 @@
  *   (0 / omitted = any time)
  * @property {number} [maxFiles] - hard cap on how many files are fetched and
  *   analysed (newest-first); defaults to DEFAULT_SCAN_MAX_FILES
+ * @property {number} [maxFileBytes] - skip files larger than this many bytes
+ *   (books / large exports); defaults to DEFAULT_MAX_FILE_BYTES
+ * @property {boolean} [ownedByMe] - only include files the user owns
  * @property {string} [nameContains] - only files whose name contains this text
  */
 
@@ -329,6 +332,11 @@ const SocialOSGoogle = (() => {
   };
 
   const DEFAULT_SCAN_MAX_FILES = 50;
+  // Skip files larger than this (books, big exports) — they slow the scan and
+  // rarely make good short-form source material. ~10 MB.
+  const DEFAULT_MAX_FILE_BYTES = 10 * 1024 * 1024;
+  // How many files to fetch + analyse concurrently per batch.
+  const SCAN_BATCH_SIZE = 8;
 
   /**
    * Build a Drive `q` query string from scan options so filtering happens
@@ -363,6 +371,13 @@ const SocialOSGoogle = (() => {
     if (opts.sinceDays && opts.sinceDays > 0) {
       const cutoff = new Date(Date.now() - opts.sinceDays * 86400000).toISOString();
       clauses.push(`modifiedTime > '${cutoff}'`);
+    }
+
+    // Only files the user owns — skips books, shared reference docs, and
+    // other people's articles that happen to live in their Drive but weren't
+    // written by them. Cheaper (fewer files) and more relevant.
+    if (opts.ownedByMe) {
+      clauses.push("'me' in owners");
     }
 
     // Optional filename filter. Escape single quotes and backslashes so a
@@ -405,9 +420,19 @@ const SocialOSGoogle = (() => {
     return response.json();
   }
 
+  // We only ever keep the first ~2000 characters of a file for pre-filtering
+  // and Claude analysis, so there's no reason to pull a whole 40 MB book down
+  // the wire. Ask Drive for just the opening chunk via a Range request — big
+  // files then cost the same as small ones. 96 KB comfortably covers 2000
+  // chars even for multi-byte UTF-8.
+  const CONTENT_HEAD_BYTES = 96 * 1024;
+  const CONTENT_MAX_CHARS = 2000;
+
   /**
-   * Get file content from Google Drive.
-   * For Google Docs, exports as plain text. For others, downloads raw.
+   * Get the opening slice of a Drive file's text.
+   * For Google-native docs, exports as plain text (export ignores Range, but
+   * these are small). For everything else, downloads only the first
+   * CONTENT_HEAD_BYTES via a Range header instead of the whole file.
    * @param {string} fileId
    * @param {string} mimeType
    * @returns {Promise<string>}
@@ -416,24 +441,30 @@ const SocialOSGoogle = (() => {
     const token = await getAccessToken();
     if (!token) throw new Error('Google not connected');
 
-    let url;
     const isGoogleDoc = mimeType.startsWith('application/vnd.google-apps.');
+    /** @type {Object<string, string>} */
+    const headers = { Authorization: `Bearer ${token}` };
+    let url;
 
     if (isGoogleDoc) {
       url = `https://www.googleapis.com/drive/v3/files/${fileId}/export?mimeType=text/plain`;
     } else {
       url = `https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`;
+      // Only the opening chunk — Drive honours this for media downloads and
+      // replies 206 Partial Content. A server that ignores it just returns
+      // 200 with the full body, which we still slice, so this is safe.
+      headers.Range = `bytes=0-${CONTENT_HEAD_BYTES - 1}`;
     }
 
-    const response = await fetch(url, {
-      headers: { Authorization: `Bearer ${token}` }
-    });
+    const response = await fetch(url, { headers });
 
-    if (!response.ok) throw new Error(`Drive file fetch error: ${response.status}`);
+    // 206 Partial Content is the expected success for a ranged request.
+    if (!response.ok && response.status !== 206) {
+      throw new Error(`Drive file fetch error: ${response.status}`);
+    }
 
     const text = await response.text();
-    // Return first 2000 chars per spec
-    return text.slice(0, 2000);
+    return text.slice(0, CONTENT_MAX_CHARS);
   }
 
   /**
@@ -476,65 +507,81 @@ const SocialOSGoogle = (() => {
       pageToken = result.nextPageToken || null;
     } while (pageToken && allFiles.length < maxFiles);
 
-    // Hard cap the working set so a big Drive can't blow past the limit.
-    const files = allFiles.slice(0, maxFiles);
+    // Drop files bigger than the size cap before downloading anything —
+    // long books / large exports slow the scan and rarely make good short-
+    // form source material. `size` is bytes as a string, and is absent for
+    // Google-native docs (those have no fixed byte size), which we keep.
+    const maxFileBytes = opts.maxFileBytes || DEFAULT_MAX_FILE_BYTES;
+    const files = allFiles
+      .filter(f => !f.size || Number(f.size) <= maxFileBytes)
+      .slice(0, maxFiles); // hard cap so a big Drive can't blow past the limit
+
     const total = files.length;
     let current = 0;
 
-    // Process in batches of 10
-    for (let i = 0; i < files.length; i += 10) {
-      const batch = files.slice(i, i + 10);
+    // Read scrub settings once, not once per file.
+    const settings = await SocialOSDB.getSettings();
+    const blockedTerms = settings?.content_scrubbing?.custom_blocked_terms;
 
-      for (const file of batch) {
-        current++;
-        report(current, total, file.name);
+    /**
+     * Fetch, filter, analyse and store one file. Returns the stored item, or
+     * null if the file was skipped (low score / error). Kept side-effect-safe
+     * so a whole batch can run concurrently.
+     * @param {any} file
+     * @returns {Promise<ContentItem|null>}
+     */
+    async function processFile(file) {
+      report(++current, total, file.name);
+      try {
+        const text = await getDriveFileContent(file.id, file.mimeType);
 
-        try {
-          // Get content
-          const text = await getDriveFileContent(file.id, file.mimeType);
+        // Local pre-filter (Section 7) — cheap gate before spending a Claude call.
+        const score = SocialOSUtils.preFilterScore(text, file.mimeType);
+        if (score < 0.3) return null;
 
-          // Local pre-filter (Section 7)
-          const score = SocialOSUtils.preFilterScore(text, file.mimeType);
-          if (score < 0.3) continue; // Skip low-scoring files
+        const scrubbed = SocialOSUtils.scrub(text, blockedTerms);
+        const analysis = await SocialOSAI.analyseContent(scrubbed.text, file.name);
 
-          // Scrub before sending to Claude
-          const settings = await SocialOSDB.getSettings();
-          const scrubbed = SocialOSUtils.scrub(
-            text,
-            settings?.content_scrubbing?.custom_blocked_terms
-          );
+        /** @type {ContentItem} */
+        const item = {
+          id: SocialOSUtils.uuid(),
+          source: 'google_drive',
+          source_id: file.id,
+          type: 'document',
+          title: file.name,
+          description: analysis.rating_reason || '',
+          thumbnail_url: null,
+          raw_content: text,
+          tags: analysis.tags || [],
+          sensitivity_flags: analysis.sensitivity_flags || [],
+          scrubbed: true,
+          ai_rating: analysis.rating || 'medium',
+          ai_rating_reason: analysis.rating_reason || '',
+          suggested_platforms: analysis.platforms || ['linkedin'],
+          suggested_angles: analysis.angles || [],
+          status: 'available',
+          post_history: [],
+          added_at: SocialOSUtils.now(),
+          last_used: null
+        };
 
-          // Claude analysis
-          const analysis = await SocialOSAI.analyseContent(scrubbed.text, file.name);
+        await SocialOSDB.put(SocialOSDB.STORES.content, item);
+        return item;
+      } catch (err) {
+        console.warn(`Skipping file ${file.name}:`, err.message);
+        return null;
+      }
+    }
 
-          /** @type {ContentItem} */
-          const item = {
-            id: SocialOSUtils.uuid(),
-            source: 'google_drive',
-            source_id: file.id,
-            type: 'document',
-            title: file.name,
-            description: analysis.rating_reason || '',
-            thumbnail_url: null,
-            raw_content: text,
-            tags: analysis.tags || [],
-            sensitivity_flags: analysis.sensitivity_flags || [],
-            scrubbed: true,
-            ai_rating: analysis.rating || 'medium',
-            ai_rating_reason: analysis.rating_reason || '',
-            suggested_platforms: analysis.platforms || ['linkedin'],
-            suggested_angles: analysis.angles || [],
-            status: 'available',
-            post_history: [],
-            added_at: SocialOSUtils.now(),
-            last_used: null
-          };
-
-          await SocialOSDB.put(SocialOSDB.STORES.content, item);
-          items.push(item);
-        } catch (err) {
-          console.warn(`Skipping file ${file.name}:`, err.message);
-        }
+    // Process in concurrent batches — the per-file work is almost all network
+    // wait (Drive download + Claude call), so running a batch in parallel
+    // instead of one-at-a-time is the biggest single speed-up. Batching (vs.
+    // firing all at once) keeps us from hammering the Drive/Claude proxies.
+    for (let i = 0; i < files.length; i += SCAN_BATCH_SIZE) {
+      const batch = files.slice(i, i + SCAN_BATCH_SIZE);
+      const results = await Promise.all(batch.map(processFile));
+      for (const item of results) {
+        if (item) items.push(item);
       }
     }
 

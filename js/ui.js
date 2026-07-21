@@ -302,6 +302,17 @@ const SocialOSUI = (() => {
         <input type="text" id="drive-name" class="input" placeholder="e.g. proposal, 2026, case study">
       </div>
 
+      <div class="form-group">
+        <div class="chip-group" id="drive-owned">
+          <button type="button" class="chip selected" data-action="drive-owned-toggle">
+            Only files I own
+          </button>
+        </div>
+        <p class="text-secondary" style="font-size:0.85em;margin-top:4px">
+          Skips books, shared docs, and articles others put in your Drive.
+        </p>
+      </div>
+
       <div class="sheet-actions">
         <button class="btn btn-secondary" data-action="close-drive-scan">Cancel</button>
         <button class="btn btn-primary" data-action="run-drive-scan">Scan Drive</button>
