@@ -14,6 +14,20 @@
  * browser. Tokens live only in IndexedDB on this device.
  */
 
+/**
+ * Options controlling how much of Google Drive a scan pulls in. All fields
+ * are optional — an empty object scans all supported document types, newest
+ * first, up to the default cap.
+ * @typedef {Object} DriveScanOptions
+ * @property {string[]} [types] - DRIVE_TYPE_GROUPS keys to include
+ *   (e.g. ['documents','spreadsheets']); empty/omitted = all supported types
+ * @property {number} [sinceDays] - only files modified within this many days
+ *   (0 / omitted = any time)
+ * @property {number} [maxFiles] - hard cap on how many files are fetched and
+ *   analysed (newest-first); defaults to DEFAULT_SCAN_MAX_FILES
+ * @property {string} [nameContains] - only files whose name contains this text
+ */
+
 const SocialOSGoogle = (() => {
   'use strict';
 
@@ -273,19 +287,112 @@ const SocialOSGoogle = (() => {
 
   // ── Drive API ─────────────────────────────────────────────────────────
 
+  // Text-bearing Drive file types the scan can actually read and analyse.
+  // Grouped so the user picks *categories* ("Documents", "Spreadsheets") in
+  // the UI rather than raw MIME strings; each group maps to the concrete
+  // mimeTypes we turn into a Drive `q` filter. Photos and videos are NOT
+  // here on purpose — those come through the Google Photos picker, where the
+  // user hand-selects each item (js/google.js pickPhotos()); scanning raw
+  // image/video bytes as text yields nothing useful.
+  /** @type {Record<string, {label: string, mimeTypes: string[]}>} */
+  const DRIVE_TYPE_GROUPS = {
+    documents: {
+      label: 'Documents',
+      mimeTypes: [
+        'application/vnd.google-apps.document',
+        'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        'application/msword',
+        'application/rtf',
+        'text/plain',
+        'text/markdown'
+      ]
+    },
+    spreadsheets: {
+      label: 'Spreadsheets',
+      mimeTypes: [
+        'application/vnd.google-apps.spreadsheet',
+        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        'text/csv'
+      ]
+    },
+    presentations: {
+      label: 'Presentations',
+      mimeTypes: [
+        'application/vnd.google-apps.presentation',
+        'application/vnd.openxmlformats-officedocument.presentationml.presentation'
+      ]
+    },
+    pdfs: {
+      label: 'PDFs',
+      mimeTypes: ['application/pdf']
+    }
+  };
+
+  const DEFAULT_SCAN_MAX_FILES = 50;
+
   /**
-   * List files from Google Drive.
+   * Build a Drive `q` query string from scan options so filtering happens
+   * server-side — we only ever fetch the files that match, instead of
+   * listing the entire Drive and filtering in the browser.
+   * @param {DriveScanOptions} [options]
+   * @returns {string}
+   */
+  function buildDriveQuery(options) {
+    const opts = options || {};
+    // Always skip folders and trashed files.
+    const clauses = [
+      "mimeType != 'application/vnd.google-apps.folder'",
+      'trashed = false'
+    ];
+
+    // Restrict to the selected type groups. An empty/omitted selection means
+    // "all supported document types" (the broad / all-access scan).
+    const groupKeys = (Array.isArray(opts.types) && opts.types.length)
+      ? opts.types
+      : Object.keys(DRIVE_TYPE_GROUPS);
+    const mimeTypes = [];
+    for (const key of groupKeys) {
+      const group = DRIVE_TYPE_GROUPS[key];
+      if (group) mimeTypes.push(...group.mimeTypes);
+    }
+    if (mimeTypes.length) {
+      clauses.push('(' + mimeTypes.map(m => `mimeType = '${m}'`).join(' or ') + ')');
+    }
+
+    // Only files modified within the window (0 / null = any time).
+    if (opts.sinceDays && opts.sinceDays > 0) {
+      const cutoff = new Date(Date.now() - opts.sinceDays * 86400000).toISOString();
+      clauses.push(`modifiedTime > '${cutoff}'`);
+    }
+
+    // Optional filename filter. Escape single quotes and backslashes so a
+    // name can't break out of the quoted literal.
+    if (opts.nameContains && opts.nameContains.trim()) {
+      const safe = opts.nameContains.trim().replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+      clauses.push(`name contains '${safe}'`);
+    }
+
+    return clauses.join(' and ');
+  }
+
+  /**
+   * List files from Google Drive matching an optional server-side query.
+   * Newest-first so that when a scan is capped, the most recently touched
+   * (usually most relevant) files are the ones kept.
    * @param {string|null} [pageToken]
+   * @param {string} [query] - a Drive `q` expression; defaults to "all
+   *   non-folder, non-trashed files"
    * @returns {Promise<{files: any[], nextPageToken: string|null}>}
    */
-  async function listDriveFiles(pageToken) {
+  async function listDriveFiles(pageToken, query) {
     const token = await getAccessToken();
     if (!token) throw new Error('Google not connected');
 
     const params = new URLSearchParams({
-      q: "mimeType!='application/vnd.google-apps.folder'",
+      q: query || "mimeType != 'application/vnd.google-apps.folder' and trashed = false",
       fields: 'nextPageToken,files(id,name,mimeType,modifiedTime,size)',
-      pageSize: '100'
+      pageSize: '100',
+      orderBy: 'modifiedTime desc'
     });
     if (pageToken) params.set('pageToken', pageToken);
 
@@ -330,33 +437,57 @@ const SocialOSGoogle = (() => {
   }
 
   /**
-   * Scan Google Drive: list all files, pre-filter locally, send high-scoring
-   * files to Claude for analysis.
-   * @param {(current: number, total: number, fileName: string) => void} onProgress
+   * Scan Google Drive: list the files matching the user's scope (type +
+   * timeframe + optional name filter, capped to a maximum), pre-filter
+   * locally, then send high-scoring files to Claude for analysis.
+   *
+   * The scope is what stops a large Drive from flooding the scan: instead of
+   * listing every file and reading them all, the type/timeframe filters are
+   * pushed into the Drive `q` query and only up to `maxFiles` (newest-first)
+   * are ever fetched and analysed. Omitting `types`/`sinceDays` and raising
+   * `maxFiles` gives the broad "scan everything" behaviour.
+   *
+   * Back-compat: `scanDrive(onProgress)` (options omitted) still works and
+   * scans all supported document types, newest 50.
+   * @param {DriveScanOptions|((current: number, total: number, fileName: string) => void)} [options]
+   * @param {(current: number, total: number, fileName: string) => void} [onProgress]
    * @returns {Promise<ContentItem[]>}
    */
-  async function scanDrive(onProgress) {
+  async function scanDrive(options, onProgress) {
+    // Support the old single-argument signature scanDrive(onProgress).
+    if (typeof options === 'function') {
+      onProgress = /** @type {any} */ (options);
+      options = undefined;
+    }
+    const opts = /** @type {DriveScanOptions} */ (options || {});
+    const report = onProgress || (() => {});
+    const maxFiles = Math.max(1, opts.maxFiles || DEFAULT_SCAN_MAX_FILES);
+    const query = buildDriveQuery(opts);
+
     const items = [];
     let pageToken = null;
     const allFiles = [];
 
-    // Fetch all file metadata
+    // Fetch file metadata — but stop as soon as we have enough. Because the
+    // list is modifiedTime-desc, the first `maxFiles` are the newest matches.
     do {
-      const result = await listDriveFiles(pageToken);
+      const result = await listDriveFiles(pageToken, query);
       allFiles.push(...result.files);
       pageToken = result.nextPageToken || null;
-    } while (pageToken);
+    } while (pageToken && allFiles.length < maxFiles);
 
-    const total = allFiles.length;
+    // Hard cap the working set so a big Drive can't blow past the limit.
+    const files = allFiles.slice(0, maxFiles);
+    const total = files.length;
     let current = 0;
 
     // Process in batches of 10
-    for (let i = 0; i < allFiles.length; i += 10) {
-      const batch = allFiles.slice(i, i + 10);
+    for (let i = 0; i < files.length; i += 10) {
+      const batch = files.slice(i, i + 10);
 
       for (const file of batch) {
         current++;
-        onProgress(current, total, file.name);
+        report(current, total, file.name);
 
         try {
           // Get content
@@ -693,6 +824,8 @@ const SocialOSGoogle = (() => {
     listDriveFiles,
     getDriveFileContent,
     scanDrive,
-    pickPhotos
+    pickPhotos,
+    DRIVE_TYPE_GROUPS,
+    DEFAULT_SCAN_MAX_FILES
   };
 })();

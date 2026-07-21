@@ -247,6 +247,70 @@ const SocialOSUI = (() => {
     sheet.classList.add('open');
   }
 
+  /**
+   * Show the "Scan Google Drive" scope sheet. Lets the user pick which file
+   * types, how far back, and how many files to pull — so a large Drive
+   * doesn't flood the library — or opt into a broad scan by selecting all
+   * types with "Any time". Controls are plain form elements + chip toggles;
+   * the run/cancel buttons are data-action cases handled by app.js, which
+   * reads the chosen scope back off these elements at run time.
+   */
+  function renderDriveScanOptions() {
+    const sheet = $('bottom-sheet');
+    if (!sheet) return;
+
+    const groups = SocialOSGoogle.DRIVE_TYPE_GROUPS || {};
+    const typeChips = Object.keys(groups).map(key => `
+      <button type="button" class="chip selected" data-action="drive-type" data-value="${key}">
+        ${escapeHtml(groups[key].label)}
+      </button>`).join('');
+
+    setHTML('bottom-sheet-content', `
+      <h3>Scan Google Drive</h3>
+      <p class="text-secondary">
+        Choose what to bring in so a big Drive doesn't flood your library.
+        SocialOS only reads the files that match — nothing else.
+      </p>
+
+      <div class="form-group" style="margin-top:12px">
+        <label>File types</label>
+        <div class="chip-group" id="drive-types">${typeChips}</div>
+      </div>
+
+      <div class="form-group">
+        <label for="drive-since">Modified</label>
+        <select id="drive-since" class="input">
+          <option value="30">Last 30 days</option>
+          <option value="90" selected>Last 90 days</option>
+          <option value="365">Last year</option>
+          <option value="0">Any time</option>
+        </select>
+      </div>
+
+      <div class="form-group">
+        <label for="drive-max">Maximum files</label>
+        <select id="drive-max" class="input">
+          <option value="25">25 files</option>
+          <option value="50" selected>50 files</option>
+          <option value="100">100 files</option>
+          <option value="250">250 files (broad scan)</option>
+        </select>
+      </div>
+
+      <div class="form-group">
+        <label for="drive-name">Name contains (optional)</label>
+        <input type="text" id="drive-name" class="input" placeholder="e.g. proposal, 2026, case study">
+      </div>
+
+      <div class="sheet-actions">
+        <button class="btn btn-secondary" data-action="close-drive-scan">Cancel</button>
+        <button class="btn btn-primary" data-action="run-drive-scan">Scan Drive</button>
+      </div>
+    `);
+
+    sheet.classList.add('open');
+  }
+
   // ── Inline SVG icon set (CSP-safe: no external assets) ───────────────
 
   const ICONS = {
@@ -2353,6 +2417,7 @@ const SocialOSUI = (() => {
     closeSheet,
     renderFeedback,
     renderSigninSheet,
+    renderDriveScanOptions,
     renderLanding,
     renderOnboardingStep,
     renderDashboard,

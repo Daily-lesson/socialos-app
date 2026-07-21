@@ -1725,10 +1725,42 @@ const SocialOS = (() => {
             SocialOSUI.toast('Connect Google first in Settings.', 'warning');
             break;
           }
+          // Don't scan blind — let the user scope what gets pulled in first.
+          SocialOSUI.renderDriveScanOptions();
+          break;
+        }
+
+        // Toggle a file-type chip in the Drive scan scope sheet (multi-select).
+        case 'drive-type':
+          actionEl.classList.toggle('selected');
+          break;
+
+        case 'close-drive-scan':
+          SocialOSUI.closeSheet();
+          break;
+
+        // Read the chosen scope off the sheet, then run the scoped scan.
+        case 'run-drive-scan': {
+          const types = Array.from(
+            document.querySelectorAll('#drive-types .chip.selected')
+          ).map(c => /** @type {HTMLElement} */ (c).dataset.value);
+          if (!types.length) {
+            SocialOSUI.toast('Pick at least one file type to scan.', 'warning');
+            break;
+          }
+          const sinceDays = parseInt(
+            /** @type {HTMLSelectElement} */ (SocialOSUI.$('drive-since'))?.value || '0', 10);
+          const maxFiles = parseInt(
+            /** @type {HTMLSelectElement} */ (SocialOSUI.$('drive-max'))?.value || '50', 10);
+          const nameContains =
+            /** @type {HTMLInputElement} */ (SocialOSUI.$('drive-name'))?.value?.trim() || '';
+
+          SocialOSUI.closeSheet();
           try {
-            const items = await SocialOSGoogle.scanDrive((current, total, name) => {
-              SocialOSUI.renderScanProgress(current, total, name);
-            });
+            const items = await SocialOSGoogle.scanDrive(
+              { types, sinceDays, maxFiles, nameContains },
+              (current, total, name) => SocialOSUI.renderScanProgress(current, total, name)
+            );
             SocialOSUI.loading(false);
             SocialOSUI.toast(`Found ${items.length} content items from Drive!`, 'success');
             if (state.currentScreen === 'library') await renderLibrary();
