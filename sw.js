@@ -7,7 +7,7 @@
  * approval notifications with one-tap actions and routes taps into the app.
  */
 
-const CACHE_NAME = 'socialos-v20'; // v20: zero-tap auto-post of approved scheduled posts
+const CACHE_NAME = 'socialos-v21'; // v21: precache the nav/landing logo (icons/logo.svg)
 const SHELL_ASSETS = [
   './',
   './index.html',
@@ -36,7 +36,10 @@ const SHELL_ASSETS = [
   './icons/icon-192.png',
   './icons/icon-512.png',
   './icons/apple-touch-icon.png',
-  './icons/favicon-32.png'
+  './icons/favicon-32.png',
+  './icons/logo.svg' // the in-app brand mark (index.html nav + landing) — a
+                     // cache bump wipes the runtime cache, so it must be
+                     // precached or the logo 404s offline right after updates
 ];
 
 const FONT_HOSTS = ['fonts.googleapis.com', 'fonts.gstatic.com'];
