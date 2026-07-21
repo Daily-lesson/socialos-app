@@ -7,7 +7,7 @@
  * approval notifications with one-tap actions and routes taps into the app.
  */
 
-const CACHE_NAME = 'socialos-v21'; // v21: precache the nav/landing logo (icons/logo.svg)
+const CACHE_NAME = 'socialos-v22'; // v22: Visuals (media attach, quote cards, share bridge) + v21's logo.svg precache
 const SHELL_ASSETS = [
   './',
   './index.html',
@@ -23,6 +23,7 @@ const SHELL_ASSETS = [
   './js/engagement.js',
   './js/google.js',
   './js/linkedin.js',
+  './js/media.js',
   './js/reddit.js',
   './js/tiktok.js',
   './js/linker.js',

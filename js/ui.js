@@ -932,7 +932,8 @@ const SocialOSUI = (() => {
    *   posts: ScheduledPost[],
    *   engagement: {likes: EngagementAction[], replies: EngagementAction[], strategic: EngagementAction[]},
    *   engagementSubTab: 'likes'|'replies'|'strategic',
-   *   directPlatforms?: Object<string, boolean>
+   *   directPlatforms?: Object<string, boolean>,
+   *   thumbs?: Object<string, {url: string, title: string, flagged: boolean, contentId: string}>
    * }} data
    */
   function renderApprovals(data) {
@@ -955,7 +956,7 @@ const SocialOSUI = (() => {
 
     html += data.tab === 'engagement'
       ? renderEngagementTabContent(data.engagement, data.engagementSubTab)
-      : renderPostsTabContent(data.posts, data.directPlatforms || {}, data.scheduled || [], !!data.autoPost);
+      : renderPostsTabContent(data.posts, data.directPlatforms || {}, data.scheduled || [], !!data.autoPost, data.thumbs || {});
 
     container.innerHTML = html;
   }
@@ -965,9 +966,10 @@ const SocialOSUI = (() => {
    * @param {Object<string, boolean>} directPlatforms - platform → connected for direct publish (approve = post, one tap)
    * @param {ScheduledPost[]} [scheduled] - approved posts waiting on their scheduled time
    * @param {boolean} [autoPost] - settings.auto_post_scheduled: due posts publish themselves
+   * @param {Object<string, {url: string, title: string, flagged: boolean, contentId: string}>} [thumbs] - postId → attached-media thumbnail, pre-resolved by app.js (Visuals)
    * @returns {string}
    */
-  function renderPostsTabContent(posts, directPlatforms, scheduled, autoPost) {
+  function renderPostsTabContent(posts, directPlatforms, scheduled, autoPost, thumbs) {
     const sched = scheduled || [];
     let html = '';
 
@@ -975,7 +977,7 @@ const SocialOSUI = (() => {
       html += `
         <h3 style="margin:12px 0 8px">Scheduled</h3>
         <div class="approval-list">
-          ${sched.map(post => renderScheduledCard(post, !!directPlatforms[post.platform], !!autoPost)).join('')}
+          ${sched.map(post => renderScheduledCard(post, !!directPlatforms[post.platform], !!autoPost, thumbs?.[post.id])).join('')}
         </div>
         ${posts.length ? '<h3 style="margin:16px 0 8px">Waiting for approval</h3>' : ''}`;
     }
@@ -991,7 +993,7 @@ const SocialOSUI = (() => {
     if (posts.length) {
       html += `
         <div class="approval-list">
-          ${posts.map(post => renderApprovalCard(post, !!directPlatforms[post.platform])).join('')}
+          ${posts.map(post => renderApprovalCard(post, !!directPlatforms[post.platform], thumbs?.[post.id])).join('')}
         </div>`;
     }
     return html;
@@ -1005,13 +1007,22 @@ const SocialOSUI = (() => {
    * @param {ScheduledPost} post
    * @param {boolean} direct
    * @param {boolean} [autoPost]
+   * @param {{url: string, title: string, flagged: boolean, contentId: string}} [thumb] - attached-media thumbnail, pre-resolved by app.js (Visuals)
    * @returns {string}
    */
-  function renderScheduledCard(post, direct, autoPost) {
+  function renderScheduledCard(post, direct, autoPost, thumb) {
     const txt = post.selected_alternative === 0
       ? post.draft.text
       : (post.alternatives[post.selected_alternative - 1]?.text || post.draft.text);
     const due = post.scheduled_time && new Date(post.scheduled_time).getTime() <= Date.now();
+
+    const thumbHtml = thumb ? `
+      <div class="approval-thumb" data-action="view-content" data-id="${thumb.contentId}">
+        <img src="${thumb.url}" alt="${escapeHtml(thumb.title || 'Attached photo')}" loading="lazy">
+        ${thumb.flagged ? '<span class="face-flag" title="Faces visible">&#128100;</span>' : ''}
+      </div>
+      <span class="tag" style="margin:4px 0 0">${thumb.title === 'Quote card' ? 'quote card' : 'photo'}</span>` : '';
+    const withImageNote = thumb && (!direct || post.platform === 'reddit') ? ' (with the image to attach)' : '';
 
     return `
       <div class="card approval-card" data-post-id="${post.id}">
@@ -1022,6 +1033,7 @@ const SocialOSUI = (() => {
             ${due ? 'DUE NOW · ' : ''}${SocialOSUtils.formatDate(post.scheduled_time)} ${SocialOSUtils.formatTime(post.scheduled_time)}
           </span>
         </div>
+        ${thumbHtml}
         <div class="post-text">${escapeHtml(txt)}</div>
         <div class="card-actions">
           <button class="btn btn-secondary btn-sm" data-action="unschedule-post" data-id="${post.id}">Unschedule</button>
@@ -1033,7 +1045,7 @@ const SocialOSUI = (() => {
         <p class="text-secondary" style="font-size:0.75rem;margin-top:6px">
           Already approved — ${direct
             ? (autoPost ? 'it posts <b>itself</b> at the scheduled time (auto-post is on).' : 'it posts with one tap.')
-            : `SocialOS can't auto-post to ${post.platform}, so one tap copies it and opens the app.`}
+            : `SocialOS can't auto-post to ${post.platform}, so one tap copies it and opens the app.${withImageNote}`}
           ${due || (direct && autoPost) ? '' : 'A reminder arrives at the scheduled time (push notification, if enabled in Settings).'}
         </p>
       </div>`;
@@ -1285,12 +1297,21 @@ const SocialOSUI = (() => {
    * Render a single approval card.
    * @param {ScheduledPost} post
    * @param {boolean} [direct] - platform is connected: approving publishes in the same tap
+   * @param {{url: string, title: string, flagged: boolean, contentId: string}} [thumb] - attached-media thumbnail, pre-resolved by app.js (Visuals)
    * @returns {string}
    */
-  function renderApprovalCard(post, direct) {
+  function renderApprovalCard(post, direct, thumb) {
     const activeText = post.selected_alternative === 0
       ? post.draft.text
       : (post.alternatives[post.selected_alternative - 1]?.text || post.draft.text);
+
+    // Meaningful alt text (never empty) — this is a review surface, unlike
+    // the decorative alt="" thumbs in renderLibrary.
+    const thumbHtml = thumb ? `
+      <div class="approval-thumb" data-action="view-content" data-id="${thumb.contentId}">
+        <img src="${thumb.url}" alt="${escapeHtml(thumb.title || 'Attached photo')}" loading="lazy">
+        ${thumb.flagged ? '<span class="face-flag" title="Faces visible">&#128100;</span>' : ''}
+      </div>` : '';
 
     return `
       <div class="card approval-card" data-post-id="${post.id}">
@@ -1299,6 +1320,7 @@ const SocialOSUI = (() => {
           <span>${post.platform.charAt(0).toUpperCase() + post.platform.slice(1)}</span>
           ${post.scheduled_time ? `<span class="text-secondary">${SocialOSUtils.formatDate(post.scheduled_time)} ${SocialOSUtils.formatTime(post.scheduled_time)}</span>` : ''}
         </div>
+        ${thumbHtml}
 
         <div class="post-text" id="post-text-${post.id}">${escapeHtml(activeText)}</div>
 
@@ -1365,8 +1387,9 @@ const SocialOSUI = (() => {
    * @param {ScheduledPost} post
    * @param {boolean} [linkedinReady] - true when post.platform === 'linkedin' and it's currently connected
    * @param {boolean} [redditReady] - true when post.platform === 'reddit' and it's currently connected
+   * @param {{url: string, title: string, flagged: boolean, contentId: string}} [thumb] - attached-media thumbnail, pre-resolved by app.js (Visuals)
    */
-  function renderPublishFlow(post, linkedinReady, redditReady) {
+  function renderPublishFlow(post, linkedinReady, redditReady, thumb) {
     const container = $('approvals-content');
     if (!container) return;
 
@@ -1382,6 +1405,16 @@ const SocialOSUI = (() => {
         <p class="text-secondary">Copy the text and post it on ${post.platform}.</p>
 
         <div class="post-preview-box">${escapeHtml(activeText)}</div>
+
+        ${thumb ? `
+          <div class="approval-thumb" style="margin:8px 0" data-action="view-content" data-id="${thumb.contentId}">
+            <img src="${thumb.url}" alt="${escapeHtml(thumb.title || 'Attached photo')}" loading="lazy">
+            ${thumb.flagged ? '<span class="face-flag" title="Faces visible">&#128100;</span>' : ''}
+          </div>
+          <button class="btn btn-accent btn-lg" data-action="composer-copy-open" data-id="${post.id}" style="width:100%;margin:0 0 8px">
+            Share / download the image
+          </button>
+        ` : ''}
 
         ${linkedinReady ? `
           <button class="btn btn-accent btn-lg" data-action="publish-linkedin-now" data-id="${post.id}" style="width:100%;margin:16px 0 8px">
@@ -2378,7 +2411,11 @@ const SocialOSUI = (() => {
    *   replyPlatform?: string,
    *   comment?: string,
    *   postSummary?: string,
-   *   reply?: {reply: string, alternative: string}|null
+   *   reply?: {reply: string, alternative: string}|null,
+   *   attach?: {contentId: string, thumbUrl: string, title: string, flagged: boolean}|null,
+   *   attachPicker?: boolean,
+   *   gen?: {show: boolean, template: string, size: string, text: string, note: string},
+   *   mediaItems?: ContentItem[]
    * }} data
    */
   function renderComposer(data) {
@@ -2389,6 +2426,10 @@ const SocialOSUI = (() => {
     const offer = [...cap.direct, ...cap.assisted]; // all offerable platforms, direct first
     const selected = data.selected || cap.direct.slice();
     const mode = data.mode || 'post';
+    const attach = data.attach || null;
+    const attachPicker = !!data.attachPicker;
+    const gen = data.gen || { show: false, template: 'clean', size: 'square', text: '', note: '' };
+    const mediaItems = data.mediaItems || [];
 
     const chip = (p) => {
       const isDirect = cap.direct.includes(p);
@@ -2404,6 +2445,94 @@ const SocialOSUI = (() => {
         </button>`;
     };
 
+    // Visuals — attach row / attached preview, "From your library" picker,
+    // and the Generate-a-quote-card panel. All three are optional, inline,
+    // and sit below the link row, above the platform chips (UX §1/§2).
+    const attachBlock = attach ? `
+      <div class="cmp-field cmp-attach-row">
+        <div class="cmp-attach-preview">
+          <img src="${attach.thumbUrl}" alt="">
+          <span>${escapeHtml(attach.title || 'Attached photo')}</span>
+          ${attach.flagged ? '<span class="text-secondary">photo &middot; faces visible</span>' : ''}
+          <button type="button" class="btn btn-secondary btn-sm cmp-attach-remove" data-action="composer-attach-remove">Remove</button>
+        </div>
+      </div>
+    ` : `
+      <div class="cmp-field cmp-attach-row">
+        <button type="button" class="cmp-attach-btn" data-action="composer-attach-library">${ICONS.photos} Library</button>
+        <button type="button" class="cmp-attach-btn" data-action="composer-attach-device">${ICONS.upload} Device</button>
+        <button type="button" class="cmp-attach-btn" data-action="composer-gen-toggle">${ICONS.spark} Generate card</button>
+      </div>
+    `;
+
+    const genLen = (gen.text || '').length;
+    // SocialOSMedia.TEMPLATES is a Record<id, {id, label, description}> keyed
+    // by template id (js/media.js) — Object.values gives the 3-item list in
+    // declaration order (clean, bold, quote).
+    const genTemplates = (typeof SocialOSMedia !== 'undefined' && SocialOSMedia.TEMPLATES)
+      ? Object.values(SocialOSMedia.TEMPLATES)
+      : [{ id: 'clean', label: 'Clean' }, { id: 'bold', label: 'Bold' }, { id: 'quote', label: 'Quote' }];
+    const softLimit = (typeof SocialOSMedia !== 'undefined' && SocialOSMedia.QUOTE_SOFT_LIMIT) || 140;
+    const genPanel = gen.show ? `
+      <div class="cmp-field cmp-gen-panel">
+        <label class="cmp-label" for="composer-gen-text">The line to feature</label>
+        <textarea id="composer-gen-text" class="cmp-textarea" rows="3"
+                  placeholder="What should the card say?">${escapeHtml(gen.text || '')}</textarea>
+        <p class="cmp-hint" id="composer-gen-charcount">
+          ${genLen}/${softLimit}${genLen > softLimit ? ` &mdash; quote cards read best under ${softLimit} characters; longer lines get trimmed on the card.` : ''}
+        </p>
+        <p class="cmp-hint" id="composer-gen-note">${escapeHtml(gen.note || '')}</p>
+
+        <div class="cmp-chips cmp-gen-templates" role="group" aria-label="Template">
+          ${genTemplates.map(t => `
+            <button type="button" class="cmp-chip ${gen.template === t.id ? 'on' : ''}"
+                    data-action="composer-gen-template" data-template="${t.id}">${escapeHtml(t.label)}</button>
+          `).join('')}
+        </div>
+        <div class="cmp-chips" role="group" aria-label="Card size">
+          <button type="button" class="cmp-chip ${gen.size !== 'wide' ? 'on' : ''}" data-action="composer-gen-size" data-size="square">Square</button>
+          <button type="button" class="cmp-chip ${gen.size === 'wide' ? 'on' : ''}" data-action="composer-gen-size" data-size="wide">Wide</button>
+        </div>
+
+        ${typeof SocialOSMedia !== 'undefined' ? `
+          <img id="composer-gen-preview" class="cmp-gen-preview" alt="Card preview"
+               src="${SocialOSMedia.renderQuoteCard({ text: gen.text || '', template: gen.template, size: gen.size, byline: gen.byline || '' })}">
+        ` : ''}
+
+        <button type="button" class="btn btn-primary cmp-cta" data-action="composer-gen-create">Use this card</button>
+      </div>
+    ` : '';
+
+    const pickerBlock = attachPicker ? `
+      <div class="cmp-field cmp-attach-picker">
+        <div class="cmp-drafts-head"><h3>From your library</h3>
+          <button type="button" class="btn btn-secondary btn-sm" data-action="composer-attach-cancel">Cancel</button>
+        </div>
+        ${!mediaItems.length ? `
+          <div class="empty-state">
+            <h3>No photos yet</h3>
+            <p class="text-secondary">Upload one below, or generate a quote card from your text.</p>
+            <div class="btn-row" style="margin-top:16px;justify-content:center">
+              <button type="button" class="btn btn-secondary" data-action="composer-attach-device">Upload from device</button>
+              <button type="button" class="btn btn-secondary" data-action="composer-gen-toggle">Generate a quote card</button>
+            </div>
+          </div>
+        ` : `
+          <div class="content-grid">
+            ${mediaItems.map(item => `
+              <div class="card content-card" data-action="composer-attach-pick" data-id="${item.id}">
+                <div class="content-thumb">
+                  <img src="${item.thumbnail_url}" alt="" loading="lazy">
+                  ${item.sensitivity_flags?.includes('faces_visible') ? '<span class="face-flag" title="Faces visible">&#128100;</span>' : ''}
+                </div>
+                <h4 class="content-title">${escapeHtml(SocialOSUtils.truncate(item.title, 60))}</h4>
+              </div>
+            `).join('')}
+          </div>
+        `}
+      </div>
+    ` : '';
+
     const postMode = `
       <div class="cmp-field">
         <textarea id="composer-text" class="cmp-textarea" rows="5"
@@ -2414,6 +2543,10 @@ const SocialOSUI = (() => {
         <input id="composer-link" class="cmp-input" type="url" inputmode="url"
                placeholder="Add a link (optional)" value="${escapeHtml(data.link || '')}">
       </div>
+
+      ${attachBlock}
+      ${genPanel}
+      ${pickerBlock}
 
       <div class="cmp-chips" role="group" aria-label="Platforms">
         ${offer.map(chip).join('')}
@@ -2432,7 +2565,7 @@ const SocialOSUI = (() => {
         <span class="cmp-cta-icon">${ICONS.spark}</span> Draft &amp; Post
       </button>
 
-      ${(data.posts && data.posts.length) ? renderComposerDrafts(data.posts, data.results, data.schedule) : ''}
+      ${(data.posts && data.posts.length) ? renderComposerDrafts(data.posts, data.results, data.schedule, attach, !!data.link, cap) : ''}
     `;
 
     const replyMode = `
@@ -2495,6 +2628,23 @@ const SocialOSUI = (() => {
   }
 
   /**
+   * Feature-detect the Web Share L2 (files) bridge for the media-aware CTA
+   * label (UX §3: "Share to <Platform>" vs "Copy & download image"). Probes
+   * with a throwaway 1-byte File rather than the real attached image — we
+   * only need a yes/no, not to decode a potentially large data URI at
+   * render time.
+   * @returns {boolean}
+   */
+  function canShareMediaHere() {
+    if (typeof SocialOSMedia === 'undefined' || !SocialOSMedia.canShareFiles) return false;
+    try {
+      return SocialOSMedia.canShareFiles([new File(['x'], 'probe.png', { type: 'image/png' })]);
+    } catch {
+      return false;
+    }
+  }
+
+  /**
    * The "review & post" block: an editable card per drafted platform, a single
    * "Post all" button, and — once posted — an honest per-platform outcome
    * (published link, copy-and-open for assisted platforms, or a retry on error).
@@ -2504,31 +2654,89 @@ const SocialOSUI = (() => {
    * @param {ScheduledPost[]} posts
    * @param {Array<{platform: string, mode: string, text: string, url?: string|null, deepLink?: string, error?: string}>|null} [results]
    * @param {{show: boolean, time: string}} [schedule] - composer schedule view state
+   * @param {{contentId: string, thumbUrl: string, title: string, flagged: boolean}|null} [attach] - current attach state, for the "rides on every draft" preview row only (Visuals)
+   * @param {boolean} [hasLink] - whether the composer had a link (drives the LinkedIn ARTICLE-share copy)
+   * @param {{direct: string[], assisted: string[], connected: Object<string, boolean>}} [cap] - capability matrix (js/composer.js), for pre-post hints
    */
-  function renderComposerDrafts(posts, results, schedule) {
+  function renderComposerDrafts(posts, results, schedule, attach, hasLink, cap) {
     const byPlatform = {};
     (results || []).forEach(r => { byPlatform[r.platform] = r; });
+
+    // C1: outcome truth comes from each post's own media_content_id — the
+    // field publishOne actually reads — never from the ephemeral attach
+    // state, which can drift from what was drafted (add/remove after
+    // drafting, gotcha 6).
+    const canShareImg = canShareMediaHere();
+
+    // The "rides on every draft" preview row is only honest when every
+    // drafted post really does carry that attach's media right now.
+    const attachThumb = (attach && posts.every(p => !!p.media_content_id)) ? `
+      <div class="cmp-draft-thumb">
+        <img src="${attach.thumbUrl}" alt="">
+        <span class="text-secondary">${escapeHtml(attach.title || 'Attached photo')} rides on every draft below</span>
+      </div>` : '';
 
     const cards = posts.map(post => {
       const txt = post.selected_alternative === 0
         ? post.draft.text
         : (post.alternatives[post.selected_alternative - 1]?.text || post.draft.text);
       const r = byPlatform[post.platform];
+      const label = PLATFORM_LABELS[post.platform];
+      const postHasMedia = !!post.media_content_id;
+      const isDirect = (cap?.direct || []).includes(post.platform);
 
       let outcome = '';
       if (r) {
         if (r.mode === 'published') {
-          outcome = `<div class="cmp-out ok">${ICONS.shield} Posted${r.url ? ` · <a href="${escapeHtml(String(r.url))}" target="_blank" rel="noopener">view</a>` : ''}</div>`;
+          // Media-aware status per UX §3: an attached image beats an article
+          // link (matches linkedin.js's IMAGE-beats-ARTICLE precedence).
+          let statusText = 'Posted';
+          let extraHint = '';
+          if (post.platform === 'linkedin' && postHasMedia) {
+            statusText = 'Posted with your image';
+          } else if (post.platform === 'linkedin' && hasLink) {
+            statusText = 'Posted as a link card';
+            extraHint = '<p class="cmp-hint">LinkedIn builds the preview card from the page itself.</p>';
+          }
+          outcome = `<div class="cmp-out ok">${ICONS.shield} ${statusText}${r.url ? ` · <a href="${escapeHtml(String(r.url))}" target="_blank" rel="noopener">view</a>` : ''}</div>${extraHint}`;
         } else if (r.mode === 'assisted') {
-          outcome = `<div class="cmp-out copy">
-              <span>Drafted — copy &amp; open ${PLATFORM_LABELS[post.platform]} to paste</span>
-              <button class="btn btn-accent btn-sm" data-action="composer-copy-open" data-id="${post.id}">Copy &amp; open</button>
-            </div>`;
+          if (post.platform === 'reddit' && postHasMedia) {
+            // Reddit+image is the one behavioural change in the matrix: a
+            // connected Reddit account still gets reported assisted, not
+            // published, and the draft says why.
+            outcome = `<div class="cmp-out copy">
+                <span>Drafted — Reddit image posts aren't automatic yet</span>
+                <button class="btn btn-accent btn-sm" data-action="composer-copy-open" data-id="${post.id}">Copy &amp; open Reddit</button>
+              </div>
+              <p class="cmp-hint">Direct posting to Reddit works for text and links. For an image, this copies your text and opens Reddit so you can attach the photo yourself.</p>`;
+          } else if (postHasMedia) {
+            const cta = canShareImg ? `Share to ${label}` : 'Copy & download image';
+            outcome = `<div class="cmp-out copy">
+                <span>Drafted — hand the caption and image to ${label}</span>
+                <button class="btn btn-accent btn-sm" data-action="composer-copy-open" data-id="${post.id}">${cta}</button>
+              </div>`;
+          } else {
+            outcome = `<div class="cmp-out copy">
+                <span>Drafted — copy &amp; open ${label} to paste</span>
+                <button class="btn btn-accent btn-sm" data-action="composer-copy-open" data-id="${post.id}">Copy &amp; open</button>
+              </div>`;
+          }
         } else {
           outcome = `<div class="cmp-out err">Failed: ${escapeHtml(r.error || 'unknown error')}
               <button class="btn btn-secondary btn-sm" data-action="composer-copy-open" data-id="${post.id}">Copy &amp; open instead</button>
             </div>`;
         }
+      }
+
+      // opp 4: honest pre-post hint before Post-all is tapped, so the
+      // capability outcome isn't a surprise after the fact.
+      let prePost = '';
+      if (!r && postHasMedia) {
+        if (post.platform === 'linkedin' && isDirect) prePost = `<p class="cmp-hint">Posts to ${label} with your image.</p>`;
+        else if (post.platform === 'reddit') prePost = `<p class="cmp-hint">Reddit adds the image in one manual step — the text copies and Reddit opens.</p>`;
+        else prePost = `<p class="cmp-hint">${canShareImg ? `Hands the image and caption to ${label}'s share sheet.` : `Copies the caption and downloads the image for ${label}.`}</p>`;
+      } else if (!r && !postHasMedia && post.platform === 'linkedin' && isDirect && hasLink) {
+        prePost = `<p class="cmp-hint">LinkedIn builds a link-preview card from the page.</p>`;
       }
 
       return `
@@ -2539,6 +2747,7 @@ const SocialOSUI = (() => {
           </div>
           <textarea class="cmp-draft-text" id="cdraft-${post.id}" rows="4">${escapeHtml(txt)}</textarea>
           ${outcome}
+          ${prePost}
         </div>`;
     }).join('');
 
@@ -2572,6 +2781,7 @@ const SocialOSUI = (() => {
     return `
       <div class="cmp-drafts">
         <div class="cmp-drafts-head"><h3>Review &amp; post</h3><span class="text-secondary">${posts.length} draft${posts.length > 1 ? 's' : ''}</span></div>
+        ${attachThumb}
         ${cards}
         ${allDone ? `
           <div class="cmp-alldone">${ICONS.shield} All set — posted to every connected platform.</div>
@@ -2627,6 +2837,7 @@ const SocialOSUI = (() => {
     updateApprovalBadge,
     PLATFORM_COLORS,
     PLATFORM_ICONS,
-    PLATFORM_DEEP_LINKS
+    PLATFORM_DEEP_LINKS,
+    PLATFORM_LABELS
   };
 })();

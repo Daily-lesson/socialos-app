@@ -390,22 +390,46 @@ const SocialOSLinkedIn = (() => {
       settings?.content_scrubbing?.custom_blocked_terms
     ).text;
 
-    // Image variant: reuse the source content item's photo (already scrubbed
-    // and sensitivity-flagged during import — Phase 2, js/google.js
-    // pickPhotos()) rather than adding a new field to the post model.
+    // Image resolution precedence (Visuals, IMAGE beats ARTICLE):
+    //   1. an explicitly attached media_content_id (composer "Add media")
+    //   2. the legacy fallback — the backing content item itself is a photo
+    //   3. no image: if the backing content is a link, share it as an
+    //      ARTICLE (LinkedIn builds its own preview card from the URL)
+    //   4. NONE — text-only
+    // SW SAFETY: this function is importScripts'd into the service worker
+    // for zero-tap auto-post — reference only SocialOSDB/SocialOSUtils/
+    // uploadImageAsset here, never SocialOSMedia/document/navigator.
     let mediaAsset = null;
+    if (post.media_content_id) {
+      const media = await SocialOSDB.get(SocialOSDB.STORES.content, post.media_content_id);
+      if (media?.thumbnail_url) {
+        mediaAsset = await uploadImageAsset(token, li.member_urn, media.thumbnail_url);
+      }
+    }
     const content = post.content_id ? await SocialOSDB.get(SocialOSDB.STORES.content, post.content_id) : null;
-    if (content?.type === 'photo' && content.thumbnail_url) {
+    if (!mediaAsset && content?.type === 'photo' && content.thumbnail_url) {
       mediaAsset = await uploadImageAsset(token, li.member_urn, content.thumbnail_url);
+    }
+    let articleUrl = null;
+    if (!mediaAsset && content?.type === 'link' && typeof content.raw_content === 'string') {
+      const urls = content.raw_content.match(/https?:\/\/\S+/g);
+      if (urls && urls.length) {
+        // The composer appends the link last ("text\n\nlink"), so the LAST URL is
+        // the intended article; strip trailing sentence punctuation the greedy
+        // \S+ swallows. Pure string ops only — this runs inside the SW auto-post path.
+        articleUrl = urls[urls.length - 1].replace(/[)\].,;:!?'"]+$/, '');
+      }
     }
 
     /** @type {any} */
     const shareContent = {
       shareCommentary: { text: scrubbed },
-      shareMediaCategory: mediaAsset ? 'IMAGE' : 'NONE'
+      shareMediaCategory: mediaAsset ? 'IMAGE' : (articleUrl ? 'ARTICLE' : 'NONE')
     };
     if (mediaAsset) {
       shareContent.media = [{ status: 'READY', media: mediaAsset }];
+    } else if (articleUrl) {
+      shareContent.media = [{ status: 'READY', originalUrl: articleUrl }];
     }
 
     const body = {

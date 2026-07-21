@@ -11,7 +11,7 @@ const SocialOS = (() => {
 
   /**
    * In-memory working state.
-   * @type {{currentScreen: string, onboardingStep: number, onboardingData: Object<string, any>, calendarFocusDate: string|null, approvalsTab: string, engagementSubTab: string, queue: {drafts: any[], direct: Object<string, boolean>}, composer: {mode: string, text: string, link: string, selected: string[]|null, oneTap: boolean, posts: any[], results: any[]|null, schedule: {show: boolean, time: string}, replyPlatform: string, comment: string, postSummary: string, reply: {reply: string, alternative: string}|null}}}
+   * @type {{currentScreen: string, onboardingStep: number, onboardingData: Object<string, any>, calendarFocusDate: string|null, approvalsTab: string, engagementSubTab: string, queue: {drafts: any[], direct: Object<string, boolean>}, composer: {mode: string, text: string, link: string, selected: string[]|null, oneTap: boolean, posts: any[], results: any[]|null, schedule: {show: boolean, time: string}, replyPlatform: string, comment: string, postSummary: string, reply: {reply: string, alternative: string}|null, attach: {contentId: string, thumbUrl: string, title: string, flagged: boolean}|null, attachPicker: boolean, gen: {show: boolean, template: string, size: string, text: string, autoText: string, note: string, byline: string}}}}
    */
   const state = {
     currentScreen: 'landing',
@@ -40,9 +40,18 @@ const SocialOS = (() => {
       replyPlatform: 'linkedin',
       comment: '',
       postSummary: '',
-      reply: null
+      reply: null,
+      // Visuals attach — ephemeral, mirrors onto every draft's media_content_id.
+      attach: null,        // { contentId, thumbUrl, title, flagged } | null
+      attachPicker: false, // "From your library" grid open?
+      // Generate-a-quote-card panel state (js/media.js renderQuoteCard).
+      gen: { show: false, template: 'clean', size: 'square', text: '', autoText: '', note: '', byline: '' }
     }
   };
+
+  // Debounce handle for the live gen-panel preview (opp 1 / C5) — module-scoped
+  // so repeated keystrokes clear the previous pending refresh.
+  let genPreviewTimer = null;
 
   // ── Router ────────────────────────────────────────────────────────────
 
@@ -156,6 +165,12 @@ const SocialOS = (() => {
     // First visit (selected === null): default the selection to whatever posts
     // automatically, so the common case is genuinely one tap.
     if (c.selected === null) c.selected = cap.direct.slice();
+    // The "From your library" grid only needs a DB read while it's open.
+    let mediaItems = [];
+    if (c.attachPicker) {
+      const all = await SocialOSDB.getAllContent();
+      mediaItems = all.filter(i => i.type === 'photo' && i.thumbnail_url);
+    }
     SocialOSUI.renderComposer({
       cap,
       mode: /** @type {'post'|'reply'} */ (c.mode),
@@ -169,7 +184,11 @@ const SocialOS = (() => {
       replyPlatform: c.replyPlatform,
       comment: c.comment,
       postSummary: c.postSummary,
-      reply: c.reply
+      reply: c.reply,
+      attach: c.attach,
+      attachPicker: c.attachPicker,
+      gen: c.gen,
+      mediaItems
     });
   }
 
@@ -190,6 +209,8 @@ const SocialOS = (() => {
     if (summary) c.postSummary = summary.value;
     const schedTime = /** @type {HTMLInputElement} */ (document.getElementById('composer-schedule-time'));
     if (schedTime) c.schedule.time = schedTime.value;
+    const genText = /** @type {HTMLTextAreaElement} */ (document.getElementById('composer-gen-text'));
+    if (genText) c.gen.text = genText.value;
     // Capture any inline edits to drafted posts so they survive a re-render.
     (c.posts || []).forEach(p => {
       const ta = /** @type {HTMLTextAreaElement} */ (document.getElementById(`cdraft-${p.id}`));
@@ -228,14 +249,57 @@ const SocialOS = (() => {
   }
 
   /**
+   * One-time gate before a publish/schedule action proceeds when the
+   * attached media is flagged faces_visible (UX §4). Resolves from the
+   * ContentItem rather than the ephemeral state.composer.attach.flagged so
+   * it stays correct even if attach state has moved on since drafting. Not
+   * flagged: runs `onProceed` immediately. Flagged: one SocialOSUI.confirm
+   * sheet — cancel leaves the review screen untouched and sends nothing.
+   * Once per action, never per platform.
+   * @param {ScheduledPost[]} posts
+   * @param {() => Promise<void>} onProceed
+   * @returns {Promise<void>}
+   */
+  async function withSensitivityConfirm(posts, onProceed) {
+    const contentIds = new Set((posts || []).map(p => p.media_content_id).filter(Boolean));
+    let flagged = false;
+    for (const contentId of contentIds) {
+      const item = await SocialOSDB.get(SocialOSDB.STORES.content, contentId);
+      if (item?.sensitivity_flags?.includes('faces_visible')) { flagged = true; break; }
+    }
+    if (!flagged) { await onProceed(); return; }
+
+    // Reddit+image is forced assisted regardless of connection (see
+    // composer.js publishOne) — factor that into the confirm label so "all
+    // selected platforms are assisted" is accurate, not just cap.direct.
+    const cap = await SocialOSComposer.capabilities();
+    const willBeAssisted = (/** @type {ScheduledPost} */ p) =>
+      !cap.direct.includes(p.platform) || (p.platform === 'reddit' && !!p.media_content_id);
+    const allAssisted = posts.every(willBeAssisted);
+
+    SocialOSUI.confirm(
+      'A face is visible',
+      "The image on this post shows someone's face. Post it as-is?",
+      allAssisted ? 'Copy & open' : 'Post it',
+      () => { onProceed(); }
+    );
+  }
+
+  /**
    * Publish every drafted composer post as far as each platform allows,
    * persisting any inline edits first. Direct platforms post automatically;
    * assisted platforms come back as copy-and-open. Updates state + re-renders.
+   * Gated once by withSensitivityConfirm if the attached media shows a face.
    */
   async function postAllComposer() {
     const c = state.composer;
     if (!c.posts || !c.posts.length) return;
+    await withSensitivityConfirm(c.posts, doPostAllComposer);
+  }
 
+  /** The actual publish-all work, run after any sensitivity confirm passes. */
+  async function doPostAllComposer() {
+    const c = state.composer;
     SocialOSUI.loading(true, 'Posting…');
     try {
       // Persist any inline edits so publishOne (which reads from the DB) sends
@@ -267,11 +331,229 @@ const SocialOS = (() => {
     }
   }
 
+  /**
+   * The first sentence of a block of text — used to pre-fill the quote-card
+   * field instantly (UX §2) so it's never empty while the AI suggestion is
+   * still in flight.
+   * @param {string} text
+   * @returns {string}
+   */
+  function firstSentenceOf(text) {
+    const t = (text || '').trim();
+    if (!t) return '';
+    const m = t.match(/^[^.!?\n]+[.!?]?/);
+    return (m ? m[0] : t).trim();
+  }
+
+  /**
+   * Regenerate the live quote-card preview in place — never re-renders the
+   * composer, so it can't steal focus from #composer-gen-text (opp 1 / C5).
+   */
+  function refreshGenPreview() {
+    if (typeof SocialOSMedia === 'undefined') return;
+    const img = document.getElementById('composer-gen-preview');
+    if (!img) return;
+    const g = state.composer.gen;
+    /** @type {HTMLImageElement} */ (img).src =
+      SocialOSMedia.renderQuoteCard({ text: g.text || '', template: g.template, size: g.size, byline: g.byline || '' });
+  }
+
+  /**
+   * Patch the gen textarea value only when the user isn't in it (C5 — never
+   * move their caret).
+   * @param {string} value
+   */
+  function patchGenTextarea(value) {
+    const ta = document.getElementById('composer-gen-text');
+    if (ta && document.activeElement !== ta) /** @type {HTMLTextAreaElement} */ (ta).value = value;
+  }
+
+  /**
+   * Set the gen panel's quiet note line in place (C5).
+   * @param {string} text
+   */
+  function setGenNote(text) {
+    const el = document.getElementById('composer-gen-note');
+    if (el) el.textContent = text || '';
+  }
+
+  /**
+   * C1 write-through: when drafts already exist, mirror the current attach
+   * onto every draft (state + DB), so post.media_content_id — the thing
+   * publishOne reads — always matches what the review screen shows. Clears
+   * stale results so a post-hoc media change re-posts truthfully.
+   */
+  async function applyAttachToExistingDrafts() {
+    const c = state.composer;
+    if (!c.posts || !c.posts.length) return;
+    const mediaId = c.attach?.contentId || null;
+    let changed = false;
+    for (const p of c.posts) {
+      if ((p.media_content_id || null) === mediaId) continue;
+      p.media_content_id = mediaId;
+      const dbPost = await SocialOSDB.get(SocialOSDB.STORES.posts, p.id);
+      if (dbPost) { dbPost.media_content_id = mediaId; await SocialOSDB.put(SocialOSDB.STORES.posts, dbPost); }
+      changed = true;
+    }
+    if (changed) c.results = null;
+  }
+
+  /**
+   * The one assisted-platform handoff (C2/C3): Web Share L2 image+caption on
+   * mobile, clipboard + image download + deep link on desktop. Consumes a
+   * publishOne result's mediaDataUri. Single source of truth for composer
+   * copy-open, due-post, queue-approve, and approvals.
+   * @param {{text: string, deepLink?: string|null, mediaDataUri?: string|null, label: string}} opts
+   */
+  async function assistedHandoff({ text, deepLink, mediaDataUri, label }) {
+    if (mediaDataUri && typeof SocialOSMedia !== 'undefined') {
+      const filename = SocialOSMedia.filenameForDataUri(mediaDataUri, 'socialos');
+      const res = await SocialOSMedia.shareMedia({ text, dataUri: mediaDataUri, filename });
+      if (res.shared) { SocialOSUI.toast(`Opened the share sheet with your image — pick ${label} to finish.`, 'success'); return; }
+      if (res.reason === 'cancelled') return;
+      if (res.reason === 'retry') {
+        try { await navigator.clipboard.writeText(text); } catch { /* manual */ }
+        SocialOSUI.toast(`Tap Share again to hand the image to ${label}.`, 'info', 6000);
+        return;
+      }
+      // 'unsupported' → clipboard + download + deep link below
+    }
+    let copied = false;
+    try { await navigator.clipboard.writeText(text); copied = true; } catch { /* manual */ }
+    SocialOSUI.toast(
+      copied
+        ? (mediaDataUri ? `Text copied, image downloading — open ${label} and attach it.` : `Copied — paste it into ${label}.`)
+        : 'Copy failed — select the text and copy it manually.',
+      copied ? 'success' : 'warning'
+    );
+    if (mediaDataUri && typeof SocialOSMedia !== 'undefined') {
+      const a = document.createElement('a');
+      a.href = mediaDataUri;
+      a.download = SocialOSMedia.filenameForDataUri(mediaDataUri, 'socialos');
+      a.click();
+    }
+    if (deepLink) window.open(deepLink, '_blank', 'noopener');
+  }
+
+  /**
+   * Fire-and-forget: while the Generate-card panel is already showing the
+   * first-sentence fallback, ask Claude for a punchier line (UX §2). Only
+   * swaps the field in if the user hasn't typed something else in the
+   * meantime — never clobbers an edit, never blocks the UI, and on failure
+   * (offline / proxy down, gotcha 5) leaves a single quiet line instead of
+   * an error toast. Patches the textarea/note in place (C5) instead of a
+   * full renderComposer() — a re-render 1-3s after opening would steal
+   * focus/caret mid-typing.
+   */
+  async function fetchQuoteSuggestion() {
+    const c = state.composer;
+    const askedFor = c.gen.autoText;
+    try {
+      const suggestion = await SocialOSAI.suggestQuoteLine(c.text);
+      syncComposerInputsFromDOM(); // capture any edit made while we waited
+      if (!suggestion || !c.gen.show || c.gen.text !== askedFor) return;
+      c.gen.text = suggestion;
+      c.gen.autoText = suggestion;
+      c.gen.note = '';
+      patchGenTextarea(suggestion);
+      setGenNote('');
+      refreshGenPreview();
+    } catch {
+      syncComposerInputsFromDOM();
+      if (!c.gen.show || c.gen.text !== askedFor) return;
+      c.gen.note = 'Used the first line of your post — the AI suggestion needs the live app and a connection.';
+      setGenNote(c.gen.note);
+    }
+  }
+
+  /**
+   * Render the quote card (js/media.js — synchronous, app-local, no network),
+   * save it to the Library as a normal 'photo' ContentItem tagged 'generated',
+   * and attach it to the composer draft in progress (TECH_PLAN C4).
+   * @param {string} hookText
+   * @param {string} template
+   * @param {string} size
+   */
+  async function saveGeneratedCard(hookText, template, size) {
+    const text = (hookText || '').trim();
+    if (!text) { SocialOSUI.toast('Add a line to feature first.', 'warning'); return; }
+
+    const settings = await SocialOSDB.getSettings();
+    const scrubbed = SocialOSUtils.scrub(text, settings?.content_scrubbing?.custom_blocked_terms).text;
+    const profile = await SocialOSDB.getProfile();
+
+    if (typeof SocialOSMedia !== 'undefined' && SocialOSMedia.ensureFonts) await SocialOSMedia.ensureFonts(); // risk 4
+    const dataUri = SocialOSMedia.renderQuoteCard({
+      text: scrubbed,
+      template,
+      size,
+      byline: profile?.name || ''
+    });
+
+    /** @type {ContentItem} */
+    const item = {
+      id: SocialOSUtils.uuid(),
+      source: 'manual',
+      source_id: null,
+      type: 'photo',
+      title: SocialOSUtils.truncate(scrubbed, 60),
+      description: 'Generated quote card',
+      thumbnail_url: dataUri,
+      raw_content: null,
+      tags: ['generated'],
+      sensitivity_flags: [],
+      scrubbed: true,
+      ai_rating: 'medium',
+      ai_rating_reason: 'Generated quote card',
+      suggested_platforms: [],
+      suggested_angles: [],
+      status: 'available',
+      post_history: [],
+      added_at: SocialOSUtils.now(),
+      last_used: null
+    };
+    await SocialOSDB.put(SocialOSDB.STORES.content, item);
+
+    const c = state.composer;
+    c.attach = { contentId: item.id, thumbUrl: dataUri, title: 'Quote card', flagged: false };
+    c.gen.show = false;
+    await renderComposer();
+    SocialOSUI.toast('Quote card attached.', 'success');
+  }
+
+  /**
+   * Pre-resolve postId -> thumbnail info for the Approvals list, so ui.js
+   * render functions can stay synchronous (cross-cutting risk 2). Prefers an
+   * attached media_content_id; falls back to the post's own content_id when
+   * that item is itself a photo. Anything else (video, link, text-only,
+   * missing/archived content) gets no thumb.
+   * @param {ScheduledPost[]} posts
+   * @returns {Promise<Object<string, {url: string, title: string, flagged: boolean, contentId: string}>>}
+   */
+  async function resolvePostThumbnails(posts) {
+    /** @type {Object<string, {url: string, title: string, flagged: boolean, contentId: string}>} */
+    const thumbs = {};
+    for (const post of posts) {
+      const contentId = post.media_content_id || post.content_id;
+      if (!contentId) continue;
+      const item = await SocialOSDB.get(SocialOSDB.STORES.content, contentId);
+      if (!item || item.type !== 'photo' || !item.thumbnail_url) continue;
+      thumbs[post.id] = {
+        url: item.thumbnail_url,
+        title: item.tags?.includes('generated') ? 'Quote card' : item.title,
+        flagged: !!item.sensitivity_flags?.includes('faces_visible'),
+        contentId: item.id
+      };
+    }
+    return thumbs;
+  }
+
   async function renderApprovals() {
     const posts = await SocialOSDB.getPendingPosts();
     const scheduled = await SocialOSDB.getScheduledPosts();
     const engagement = await SocialOSEngagement.getQueues();
     const settings = await SocialOSDB.getSettings();
+    const thumbs = await resolvePostThumbnails([...posts, ...scheduled]);
     SocialOSUI.renderApprovals({
       tab: /** @type {any} */ (state.approvalsTab),
       posts,
@@ -284,7 +566,8 @@ const SocialOS = (() => {
       directPlatforms: {
         linkedin: await SocialOSLinkedIn.isConnected(),
         reddit: await SocialOSReddit.isConnected()
-      }
+      },
+      thumbs
     });
   }
 
@@ -292,7 +575,9 @@ const SocialOS = (() => {
    * Schedule every drafted composer post for the picked time instead of
    * posting now: persist inline edits, mark the posts approved with the
    * scheduled slot, and ask the server for a push reminder so posting is
-   * one tap when the time comes. Nothing publishes here.
+   * one tap when the time comes. Nothing publishes here. Gated once by
+   * withSensitivityConfirm if the attached media shows a face — a flagged
+   * image shouldn't go out unattended via auto-post (UX §4).
    */
   async function scheduleAllComposer() {
     syncComposerInputsFromDOM();
@@ -310,6 +595,15 @@ const SocialOS = (() => {
       return;
     }
 
+    await withSensitivityConfirm(c.posts, () => doScheduleAllComposer(when));
+  }
+
+  /**
+   * The actual schedule-all work, run after any sensitivity confirm passes.
+   * @param {Date} when
+   */
+  async function doScheduleAllComposer(when) {
+    const c = state.composer;
     SocialOSUI.loading(true, 'Scheduling…');
     try {
       const iso = when.toISOString();
@@ -514,8 +808,9 @@ const SocialOS = (() => {
       }
 
       if (result.mode === 'assisted') {
-        let copied = false;
-        try { await navigator.clipboard.writeText(result.text); copied = true; } catch { /* needs the button tap */ }
+        // C2/C3: route through the shared handoff so an image
+        // (result.mediaDataUri) rides along, then still land in the
+        // composer so the approved draft is reviewable there.
         const c = state.composer;
         c.mode = 'post';
         c.text = '';
@@ -523,11 +818,8 @@ const SocialOS = (() => {
         c.selected = [channel];
         c.posts = [post];
         c.results = [result];
-        SocialOSUI.toast(
-          copied ? `Approved & copied — paste it in ${channel}.` : 'Approved — tap "Copy & open" to place it.',
-          'success', 6000
-        );
-        if (copied && result.deepLink) window.open(result.deepLink, '_blank');
+        const label = SocialOSUI.PLATFORM_LABELS[channel] || channel;
+        await assistedHandoff({ text: result.text, deepLink: result.deepLink, mediaDataUri: result.mediaDataUri, label });
         await navigate('compose');
         return;
       }
@@ -629,15 +921,10 @@ const SocialOS = (() => {
       if (result.mode === 'published') {
         SocialOSUI.toast(`Posted to ${result.platform} ✓`, 'success', 5000);
       } else if (result.mode === 'assisted') {
-        let copied = false;
-        try { await navigator.clipboard.writeText(result.text); copied = true; } catch { /* manual copy below */ }
-        SocialOSUI.toast(
-          copied
-            ? `Copied — paste it in ${result.platform}, then Mark posted.`
-            : `SocialOS can't auto-post to ${result.platform} — copy the text from the card, then Mark posted.`,
-          'info', 8000
-        );
-        if (copied && result.deepLink) window.open(result.deepLink, '_blank');
+        // C2: route through the shared handoff so a scheduled/due post's
+        // image (result.mediaDataUri) rides along instead of being dropped.
+        const label = SocialOSUI.PLATFORM_LABELS[result.platform] || result.platform;
+        await assistedHandoff({ text: result.text, deepLink: result.deepLink, mediaDataUri: result.mediaDataUri, label });
       } else {
         SocialOSUI.toast(`Posting failed — ${result.error || 'unknown error'}. Tap POST NOW to retry.`, 'error', 8000);
       }
@@ -1083,12 +1370,15 @@ const SocialOS = (() => {
    * Mirrors the Google Photos import path (js/google.js pickPhotos()):
    * scrub filename → AI analyse (photos only) → scrub description → save.
    * @param {FileList} files
+   * @returns {Promise<Array<{id: string, thumbnail_url: string|null, sensitivity_flags: string[]}>>} saved items (additive — existing callers ignore the return value)
    */
   async function importLocalFiles(files) {
     const list = Array.from(files);
-    if (!list.length) return;
+    if (!list.length) return [];
 
     let saved = 0;
+    /** @type {Array<{id: string, thumbnail_url: string|null, sensitivity_flags: string[]}>} */
+    const savedItems = [];
     for (let i = 0; i < list.length; i++) {
       const file = list[i];
       const isVideo = file.type.startsWith('video/');
@@ -1171,6 +1461,7 @@ const SocialOS = (() => {
 
         await SocialOSDB.put(SocialOSDB.STORES.content, item);
         saved++;
+        savedItems.push({ id: item.id, thumbnail_url: item.thumbnail_url, sensitivity_flags: item.sensitivity_flags });
       } catch (/** @type {any} */ err) {
         console.warn(`Skipping local file ${file.name}:`, err.message);
       }
@@ -1183,6 +1474,7 @@ const SocialOS = (() => {
     );
     if (state.currentScreen === 'library') await renderLibrary();
     if (state.currentScreen === 'dashboard') await renderDashboard();
+    return savedItems;
   }
 
   // ── Notifications (BUILD_PLAN §7 notification_scheduler, §12 triggers) ─
@@ -1463,7 +1755,7 @@ const SocialOS = (() => {
 
           SocialOSUI.loading(true, 'Drafting for ' + c.selected.join(', ') + '…');
           try {
-            const { posts } = await SocialOSComposer.draftAll({ text: c.text, link: c.link, platforms: c.selected });
+            const { posts } = await SocialOSComposer.draftAll({ text: c.text, link: c.link, platforms: c.selected, mediaContentId: c.attach?.contentId || null });
             c.posts = posts;
             c.results = null;
             SocialOSUI.loading(false);
@@ -1499,6 +1791,109 @@ const SocialOS = (() => {
           break;
         }
 
+        // ── Composer attach / Generate-card (Visuals) ──────────────────
+        case 'composer-attach-device': {
+          syncComposerInputsFromDOM();
+          const input = /** @type {HTMLInputElement} */ (SocialOSUI.$('local-file-input'));
+          input?.click();
+          break;
+        }
+
+        case 'composer-attach-library': {
+          syncComposerInputsFromDOM();
+          state.composer.attachPicker = true;
+          await renderComposer();
+          break;
+        }
+
+        case 'composer-attach-pick': {
+          syncComposerInputsFromDOM();
+          if (!id) break;
+          const mediaItem = await SocialOSDB.get(SocialOSDB.STORES.content, id);
+          if (!mediaItem || mediaItem.type !== 'photo' || !mediaItem.thumbnail_url) {
+            SocialOSUI.toast("That item can't be attached.", 'warning');
+            break;
+          }
+          const c = state.composer;
+          c.attach = {
+            contentId: mediaItem.id,
+            thumbUrl: mediaItem.thumbnail_url,
+            title: mediaItem.tags?.includes('generated') ? 'Quote card' : mediaItem.title,
+            flagged: !!mediaItem.sensitivity_flags?.includes('faces_visible')
+          };
+          c.attachPicker = false;
+          await applyAttachToExistingDrafts(); // C1 write-through
+          await renderComposer();
+          break;
+        }
+
+        case 'composer-attach-remove': {
+          syncComposerInputsFromDOM();
+          state.composer.attach = null;
+          await applyAttachToExistingDrafts(); // C1 write-through
+          await renderComposer();
+          break;
+        }
+
+        case 'composer-attach-cancel': {
+          syncComposerInputsFromDOM();
+          state.composer.attachPicker = false;
+          await renderComposer();
+          break;
+        }
+
+        case 'composer-gen-toggle': {
+          syncComposerInputsFromDOM();
+          const c = state.composer;
+          const opening = !c.gen.show;
+          c.gen.show = opening;
+          if (opening) {
+            if (!c.gen.text.trim()) {
+              const first = firstSentenceOf(c.text);
+              c.gen.text = first;
+              c.gen.autoText = first;
+              c.gen.note = '';
+            }
+            const sel = c.selected || [];
+            c.gen.size = (sel.length === 1 && sel[0] === 'linkedin') ? 'wide' : 'square'; // opp 2
+            c.gen.byline = (await SocialOSDB.getProfile())?.name || '';
+            if (typeof SocialOSMedia !== 'undefined' && SocialOSMedia.ensureFonts) await SocialOSMedia.ensureFonts(); // risk 4
+          }
+          await renderComposer();
+          if (opening) fetchQuoteSuggestion(); // fire-and-forget — UX §2
+          break;
+        }
+
+        case 'composer-gen-template': {
+          syncComposerInputsFromDOM();
+          const t = actionEl.dataset?.template;
+          if (t) state.composer.gen.template = t;
+          await renderComposer();
+          break;
+        }
+
+        case 'composer-gen-size': {
+          syncComposerInputsFromDOM();
+          const s = actionEl.dataset?.size;
+          if (s) state.composer.gen.size = s;
+          await renderComposer();
+          break;
+        }
+
+        case 'composer-gen-create': {
+          syncComposerInputsFromDOM();
+          const c = state.composer;
+          SocialOSUI.loading(true, 'Creating card…');
+          try {
+            await saveGeneratedCard(c.gen.text, c.gen.template, c.gen.size);
+          } catch (err) {
+            SocialOSUI.toast(`Couldn't create the card — ${composerErrMsg(err)}`, 'error', 6000);
+          } finally {
+            SocialOSUI.loading(false);
+          }
+          break;
+        }
+
         // ── Scheduled posts (Approvals → Scheduled rail) ───────────────
         case 'post-scheduled-now': {
           if (!id) break;
@@ -1524,14 +1919,17 @@ const SocialOS = (() => {
           const post = await SocialOSDB.get(SocialOSDB.STORES.posts, id);
           if (!post) break;
           const text = SocialOSComposer.activeText(post);
-          try {
-            await navigator.clipboard.writeText(text);
-            SocialOSUI.toast(`Copied — paste it into ${post.platform}.`, 'success');
-          } catch {
-            SocialOSUI.toast('Copy failed — select the text and copy manually.', 'warning');
+          const label = SocialOSUI.PLATFORM_LABELS[post.platform] || post.platform;
+
+          // Attached media (Visuals) — prefer the Web Share L2 bridge so the
+          // image rides along with the caption in one tap (UX §3 matrix).
+          let mediaDataUri = null;
+          if (post.media_content_id) {
+            const media = await SocialOSDB.get(SocialOSDB.STORES.content, post.media_content_id);
+            if (media?.thumbnail_url) mediaDataUri = media.thumbnail_url;
           }
-          const deepLink = SocialOSUI.PLATFORM_DEEP_LINKS[post.platform];
-          if (deepLink) window.open(deepLink, '_blank', 'noopener');
+
+          await assistedHandoff({ text, deepLink: SocialOSUI.PLATFORM_DEEP_LINKS[post.platform], mediaDataUri, label });
           break;
         }
 
@@ -2354,42 +2752,53 @@ const SocialOS = (() => {
           if (!id) break;
           const post = await SocialOSDB.get(SocialOSDB.STORES.posts, id);
           if (!post) break;
-          post.status = 'approved';
-          post.approved_at = SocialOSUtils.now();
-          await SocialOSDB.put(SocialOSDB.STORES.posts, post);
 
-          // One-click posting: when the post's platform is connected,
-          // approving IS publishing — no second tap. On failure (or for
-          // platforms without direct publish) fall back to the manual
-          // publish-flow screen with clipboard + deep link.
           const linkedinReady = post.platform === 'linkedin' && await SocialOSLinkedIn.isConnected();
           const redditReady = post.platform === 'reddit' && await SocialOSReddit.isConnected();
+          const label = SocialOSUI.PLATFORM_LABELS[post.platform] || post.platform;
 
-          if (linkedinReady || redditReady) {
-            const platformName = linkedinReady ? 'LinkedIn' : 'Reddit';
-            SocialOSUI.toast(`Publishing to ${platformName}…`, 'info');
+          // C3: one publish path everywhere (composer / due / queue /
+          // approvals) — the capability matrix (incl. reddit+image →
+          // assisted) and the media handoff live in publishOne +
+          // assistedHandoff, never duplicated here. Gated once by the
+          // faces_visible confirm (UX §4). The approved status is written
+          // only inside the confirmed path — a cancelled confirm must leave
+          // the post pending_approval, still visible in the queue.
+          await withSensitivityConfirm([post], async () => {
+            post.status = 'approved';
+            post.approved_at = SocialOSUtils.now();
+            await SocialOSDB.put(SocialOSDB.STORES.posts, post);
+
+            SocialOSUI.loading(true, 'Publishing…');
+            let result;
             try {
-              if (linkedinReady) await SocialOSLinkedIn.linkedinPublish(post);
-              else await SocialOSReddit.redditPublish(post);
-
-              const content = await SocialOSDB.get(SocialOSDB.STORES.content, post.content_id);
-              if (content) {
-                content.status = 'posted';
-                content.last_used = SocialOSUtils.now();
-                content.post_history.push(post.id);
-                await SocialOSDB.put(SocialOSDB.STORES.content, content);
-              }
-
-              SocialOSUI.toast(`Published to ${platformName}!`, 'success');
-              await renderApprovals();
-              break;
+              result = await SocialOSComposer.publishOne(post.id);
             } catch (err) {
-              SocialOSUI.toast(`${platformName} publish failed: ${err instanceof Error ? err.message : String(err)} — post it manually below, or fix and retry.`, 'error');
-              // Fall through to the manual flow, keeping the Publish Now
-              // button available for a retry.
+              SocialOSUI.loading(false);
+              SocialOSUI.toast(`${label} publish hit an error — ${composerErrMsg(err)}. Post it manually below.`, 'error');
+              const t = await resolvePostThumbnails([post]);
+              SocialOSUI.renderPublishFlow(post, linkedinReady, redditReady, t[post.id]);
+              return;
             }
-          }
-          SocialOSUI.renderPublishFlow(post, linkedinReady, redditReady);
+            SocialOSUI.loading(false);
+            if (result.mode === 'published') {
+              SocialOSUI.toast(`Posted to ${label} ✓`, 'success');
+              await renderApprovals();
+              return;
+            }
+            if (result.mode === 'assisted') {
+              await assistedHandoff({ text: result.text, deepLink: result.deepLink, mediaDataUri: result.mediaDataUri, label });
+              // Assisted posts aren't published yet — keep them actionable on
+              // the publish flow ("I've Posted It" completes them) instead of
+              // dropping an approved-but-unscheduled post out of both rails.
+              const t = await resolvePostThumbnails([post]);
+              SocialOSUI.renderPublishFlow(post, linkedinReady, redditReady, t[post.id]);
+              return;
+            }
+            SocialOSUI.toast(`Couldn't post to ${label} — ${result.error || 'unknown error'}. Post it manually below, or fix and retry.`, 'error');
+            const t = await resolvePostThumbnails([post]);
+            SocialOSUI.renderPublishFlow(post, linkedinReady, redditReady, t[post.id]);
+          });
           break;
         }
 
@@ -2902,9 +3311,46 @@ const SocialOS = (() => {
     const fileInput = /** @type {HTMLInputElement} */ (SocialOSUI.$('local-file-input'));
     fileInput?.addEventListener('change', async () => {
       if (fileInput.files?.length) {
-        await importLocalFiles(fileInput.files);
+        const saved = await importLocalFiles(fileInput.files);
         fileInput.value = ''; // allow re-picking the same file
+        // Composer "Device" attach button (B6): the first imported photo
+        // routes straight back into the attach state instead of just landing
+        // in the Library. Videos have no thumbnail_url, so they fall through
+        // to today's behaviour untouched. C7: the picker allows multi-select
+        // and video, so don't silently no-op when more than one file came
+        // back — attach the first photo and say so.
+        if (state.currentScreen === 'compose') {
+          const firstPhoto = saved.find(s => s.thumbnail_url);
+          if (firstPhoto) {
+            state.composer.attach = {
+              contentId: firstPhoto.id,
+              thumbUrl: firstPhoto.thumbnail_url,
+              title: 'Attached photo',
+              flagged: !!firstPhoto.sensitivity_flags?.includes('faces_visible')
+            };
+            if (saved.length > 1) SocialOSUI.toast('Attached the first photo — the rest are in your Library.', 'info');
+            await applyAttachToExistingDrafts(); // C1 write-through
+            await renderComposer();
+          } else if (saved.length) {
+            SocialOSUI.toast('Saved to your Library. The composer attaches photos for now.', 'info');
+          }
+        }
       }
+    });
+
+    // Live quote-card preview — in place, never re-renders (keeps textarea
+    // focus). opp 1 / C5.
+    document.addEventListener('input', (e) => {
+      const t = e.target;
+      if (!(t instanceof HTMLTextAreaElement) || t.id !== 'composer-gen-text') return;
+      state.composer.gen.text = t.value;
+      const cc = document.getElementById('composer-gen-charcount');
+      if (cc && typeof SocialOSMedia !== 'undefined') {
+        const lim = SocialOSMedia.QUOTE_SOFT_LIMIT || 140;
+        cc.textContent = `${t.value.length}/${lim}${t.value.length > lim ? ` — cards read best under ${lim} characters; longer lines get trimmed on the card.` : ''}`;
+      }
+      clearTimeout(genPreviewTimer);
+      genPreviewTimer = setTimeout(refreshGenPreview, 200);
     });
 
     // ── Nav tab clicks ──────────────────────────────────────────────────

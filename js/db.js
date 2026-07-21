@@ -58,6 +58,7 @@
  * @typedef {Object} ScheduledPost
  * @property {string} id
  * @property {string} content_id
+ * @property {string|null} [media_content_id] - optional Library ContentItem id for an attached image (Visuals). Absent/null = today's behaviour.
  * @property {'linkedin'|'facebook'|'instagram'|'reddit'|'tiktok'} platform
  * @property {'draft'|'pending_approval'|'approved'|'published'|'skipped'|'failed'} status
  * @property {string} scheduled_time

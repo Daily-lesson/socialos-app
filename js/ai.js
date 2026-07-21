@@ -208,9 +208,10 @@ VIDEO: [one-sentence video concept]`
    * Scrubs content first, then generates 3 alternatives per platform.
    * @param {ContentItem} contentItem
    * @param {string[]} platforms
+   * @param {string|null} [mediaContentId=null] - optional Library ContentItem id for an attached image (Visuals); threaded onto each returned ScheduledPost, otherwise today's behaviour.
    * @returns {Promise<ScheduledPost[]>}
    */
-  async function generatePostDrafts(contentItem, platforms) {
+  async function generatePostDrafts(contentItem, platforms, mediaContentId = null) {
     const settings = await SocialOSDB.getSettings();
     const rawText = contentItem.raw_content || contentItem.description || contentItem.title;
 
@@ -279,6 +280,7 @@ VIDEO: [one-sentence video concept]`
       const post = {
         id: SocialOSUtils.uuid(),
         content_id: contentItem.id,
+        media_content_id: mediaContentId || null,
         platform,
         status: 'pending_approval',
         scheduled_time: '',
@@ -310,6 +312,26 @@ VIDEO: [one-sentence video concept]`
     }
 
     return posts;
+  }
+
+  /**
+   * Suggest a punchy single-line "hook" for a quote card (Visuals — js/media.js
+   * renderQuoteCard), given the composer's draft text. Best-effort: callers
+   * pre-fill with the first sentence and only swap in this suggestion when it
+   * resolves, so a slow or failed call never blocks the card editor (UX §2).
+   * @param {string} text
+   * @returns {Promise<string>}
+   */
+  async function suggestQuoteLine(text) {
+    const trimmed = (text || '').trim();
+    if (!trimmed) return '';
+
+    const settings = await SocialOSDB.getSettings();
+    const scrubbed = SocialOSUtils.scrub(trimmed, settings?.content_scrubbing?.custom_blocked_terms);
+
+    const systemPrompt = 'You pick the single most quotable line from a social media post to feature on a shareable quote card. Return ONLY that line — no quotation marks, no explanation, under 140 characters.';
+    const result = await callClaude(systemPrompt, scrubbed.text, 60);
+    return result.trim().replace(/^["'“]+|["'”]+$/g, '');
   }
 
   /**
@@ -697,6 +719,7 @@ Return ONLY the comment text.`;
     testProxy,
     buildSystemPrompt,
     generatePostDrafts,
+    suggestQuoteLine,
     analyseContent,
     analysePhoto,
     analyseLinkedProfiles,

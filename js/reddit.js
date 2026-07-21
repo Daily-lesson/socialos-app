@@ -366,6 +366,14 @@ const SocialOSReddit = (() => {
       throw new Error('Reddit connection missing — reconnect Reddit in Settings.');
     }
 
+    // Defense-in-depth backstop: the interactive path (composer.js publishOne)
+    // intercepts reddit + media_content_id BEFORE calling redditPublish and
+    // reports mode:'assisted' instead (UX capability matrix). This throw only
+    // fires for a caller that skips that intercept, e.g. the SW auto-post path.
+    if (post.media_content_id) {
+      throw new Error('Reddit image posts aren\'t supported by direct publish yet — use "Copy & open" to post the image manually.');
+    }
+
     const rawText = post.selected_alternative === 0
       ? post.draft.text
       : (post.alternatives[post.selected_alternative - 1]?.text || post.draft.text);

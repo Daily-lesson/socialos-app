@@ -59,7 +59,7 @@ const SocialOSComposer = (() => {
    * every draft also lands in the normal Approvals queue and Library history —
    * no parallel data model.
    *
-   * @param {{text: string, link?: string, platforms: string[]}} input
+   * @param {{text: string, link?: string, platforms: string[], mediaContentId?: string|null}} input
    * @returns {Promise<{contentId: string, posts: ScheduledPost[]}>}
    */
   async function draftAll(input) {
@@ -100,7 +100,7 @@ const SocialOSComposer = (() => {
     };
     await SocialOSDB.put(SocialOSDB.STORES.content, item);
 
-    const posts = await SocialOSAI.generatePostDrafts(item, platforms);
+    const posts = await SocialOSAI.generatePostDrafts(item, platforms, input.mediaContentId || null);
     return { contentId: item.id, posts };
   }
 
@@ -140,7 +140,7 @@ const SocialOSComposer = (() => {
    * reviewed is published verbatim (the platform publishers still run the
    * scrubber as defense in depth).
    *
-   * @param {{platform: string, text: string, title?: string, redditTitle?: string, subreddit?: string, scheduledTime?: string, source?: string}} input
+   * @param {{platform: string, text: string, title?: string, redditTitle?: string, subreddit?: string, scheduledTime?: string, source?: string, mediaContentId?: string|null}} input
    * @returns {Promise<ScheduledPost>}
    */
   async function createReadyPost(input) {
@@ -189,6 +189,7 @@ const SocialOSComposer = (() => {
     const post = {
       id: SocialOSUtils.uuid(),
       content_id: item.id,
+      media_content_id: input.mediaContentId || null,
       platform: /** @type {any} */ (platform),
       status: 'approved',
       scheduled_time: input.scheduledTime || '',
@@ -220,7 +221,7 @@ const SocialOSComposer = (() => {
    * step — we never claim a post landed when it was only copied.
    *
    * @param {string} postId
-   * @returns {Promise<{platform: string, mode: 'published'|'assisted'|'failed', text: string, url?: string|null, deepLink?: string, error?: string}>}
+   * @returns {Promise<{platform: string, mode: 'published'|'assisted'|'failed', text: string, url?: string|null, deepLink?: string, error?: string, mediaDataUri?: string|null}>}
    */
   async function publishOne(postId) {
     const post = await SocialOSDB.get(SocialOSDB.STORES.posts, postId);
@@ -229,6 +230,15 @@ const SocialOSComposer = (() => {
     const text = activeText(post);
     const deepLink = /** @type {Object<string, string>} */ (SocialOSUI.PLATFORM_DEEP_LINKS)[post.platform] || '';
 
+    // Resolve any attached media up front — it feeds both the reddit+image
+    // intercept below and the assisted return's mediaDataUri (UX capability
+    // matrix §3: Web Share bridge / copy+download need the data URI).
+    let mediaDataUri = null;
+    if (post.media_content_id) {
+      const media = await SocialOSDB.get(SocialOSDB.STORES.content, post.media_content_id);
+      if (media?.thumbnail_url) mediaDataUri = media.thumbnail_url;
+    }
+
     try {
       if (post.platform === 'linkedin' && await SocialOSLinkedIn.isConnected()) {
         const published = await SocialOSLinkedIn.linkedinPublish(post);
@@ -236,20 +246,25 @@ const SocialOSComposer = (() => {
         await markPostPublished(post, published.platform_post_id);
         return { platform: 'linkedin', mode: 'published', text, url: published.platform_post_id };
       }
-      if (post.platform === 'reddit' && await SocialOSReddit.isConnected()) {
+      // Reddit + image: direct publish doesn't support image posts (no public
+      // image host — see js/reddit.js). Rather than fail, this is reported
+      // honestly as assisted (UX matrix §3) — fall through to the assisted
+      // return below instead of calling redditPublish at all.
+      if (post.platform === 'reddit' && !mediaDataUri && await SocialOSReddit.isConnected()) {
         const published = await SocialOSReddit.redditPublish(post);
         await markContentPosted(post);
         await markPostPublished(post, published.platform_post_id);
         return { platform: 'reddit', mode: 'published', text, url: published.platform_post_id };
       }
     } catch (err) {
-      return { platform: post.platform, mode: 'failed', text, deepLink, error: err instanceof Error ? err.message : String(err) };
+      return { platform: post.platform, mode: 'failed', text, deepLink, error: err instanceof Error ? err.message : String(err), mediaDataUri };
     }
 
-    // Assisted platforms: TikTok / Facebook / Instagram, or a direct platform
-    // that isn't connected. The actual clipboard write happens on the user's
-    // tap in app.js (clipboard needs a user gesture); here we just say so.
-    return { platform: post.platform, mode: 'assisted', text, deepLink };
+    // Assisted platforms: TikTok / Facebook / Instagram, a direct platform
+    // that isn't connected, or reddit+image (intercepted above). The actual
+    // clipboard write / share-sheet call happens on the user's tap in app.js
+    // (both need a user gesture); here we just say so.
+    return { platform: post.platform, mode: 'assisted', text, deepLink, mediaDataUri };
   }
 
   /**

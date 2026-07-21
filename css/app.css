@@ -2542,6 +2542,106 @@ body.nav-visible .version-badge {
 .cmp-reply-head { font-family: var(--font-display); font-weight: 600; font-size: 0.85rem; color: var(--text-secondary); margin-bottom: 8px; }
 .cmp-reply-text { color: var(--text-primary); font-size: 0.92rem; line-height: 1.55; margin-bottom: 10px; white-space: pre-wrap; }
 
+/* ── Visuals: composer attach row + generated-card panel + review thumbs ── */
+.cmp-attach-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-sm);
+  margin-bottom: var(--space-md);
+}
+
+.cmp-attach-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 16px;
+  border-radius: var(--radius-full);
+  border: 1px solid var(--bg-border);
+  background: var(--bg-surface);
+  color: var(--text-primary);
+  font-family: var(--font-body);
+  font-size: 0.8125rem;
+  font-weight: 500;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: border-color 0.2s, background 0.2s;
+}
+.cmp-attach-btn:hover { border-color: var(--accent); background: rgba(110, 123, 255, 0.08); }
+.cmp-attach-btn svg { width: 16px; height: 16px; color: var(--accent); }
+
+.cmp-attach-preview {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  background: var(--bg-elevated);
+  border: 1px solid var(--bg-border);
+  border-radius: var(--radius-md);
+  padding: var(--space-sm);
+  margin-bottom: var(--space-md);
+}
+.cmp-attach-preview img {
+  width: 64px;
+  height: 64px;
+  border-radius: var(--radius-sm);
+  object-fit: cover;
+  display: block;
+  flex: 0 0 auto;
+}
+.cmp-attach-preview-body { flex: 1; min-width: 0; }
+.cmp-attach-preview-name {
+  font-size: 0.85rem;
+  color: var(--text-primary);
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cmp-attach-preview-flag { font-size: 0.78rem; color: var(--text-secondary); margin-top: 2px; }
+
+.cmp-attach-remove {
+  padding: 6px 12px;
+  border-radius: var(--radius-full);
+  border: 1px solid var(--bg-border);
+  background: transparent;
+  color: var(--text-secondary);
+  font-family: var(--font-body);
+  font-size: 0.78rem;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: border-color 0.15s ease, color 0.15s ease;
+}
+.cmp-attach-remove:hover { border-color: var(--danger); color: var(--danger); }
+
+/* Thumbs on draft/review/approval/scheduled cards — small variant of .content-thumb */
+.cmp-draft-thumb,
+.approval-thumb {
+  width: 56px;
+  height: 56px;
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  background: var(--bg-surface);
+  flex: 0 0 auto;
+  margin-bottom: var(--space-sm);
+}
+.cmp-draft-thumb img,
+.approval-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.cmp-gen-preview { display:block; width:100%; max-width:280px; margin:8px auto; border-radius: var(--radius-md); box-shadow: 0 2px 12px rgba(0,0,0,.25); }
+
+/* Quote-card template chooser (Clean / Bold / Quote) */
+.cmp-gen-templates {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-sm);
+  margin-bottom: var(--space-sm);
+}
+
 /* ── Content Security — no inline styles for sensitive elements ────── */
 
 /* CSP meta tag in index.html restricts inline scripts.
