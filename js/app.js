@@ -11,7 +11,7 @@ const SocialOS = (() => {
 
   /**
    * In-memory working state.
-   * @type {{currentScreen: string, onboardingStep: number, onboardingData: Object<string, any>, calendarFocusDate: string|null, approvalsTab: string, engagementSubTab: string, queue: {drafts: any[]}, composer: {mode: string, text: string, link: string, selected: string[]|null, oneTap: boolean, posts: any[], results: any[]|null, replyPlatform: string, comment: string, postSummary: string, reply: {reply: string, alternative: string}|null}}}
+   * @type {{currentScreen: string, onboardingStep: number, onboardingData: Object<string, any>, calendarFocusDate: string|null, approvalsTab: string, engagementSubTab: string, queue: {drafts: any[], direct: Object<string, boolean>}, composer: {mode: string, text: string, link: string, selected: string[]|null, oneTap: boolean, posts: any[], results: any[]|null, schedule: {show: boolean, time: string}, replyPlatform: string, comment: string, postSummary: string, reply: {reply: string, alternative: string}|null}}}
    */
   const state = {
     currentScreen: 'landing',
@@ -21,9 +21,11 @@ const SocialOS = (() => {
     approvalsTab: 'posts',
     engagementSubTab: 'likes',
     // Front Office queue (js/queue.js) view state — drafts cached from the
-    // last fetch so edit/approve can work off in-memory copies.
+    // last fetch so edit/approve can work off in-memory copies; `direct` is
+    // the platform→connected map that decides the one-click button labels.
     queue: {
-      /** @type {any[]} */ drafts: []
+      /** @type {any[]} */ drafts: [],
+      /** @type {Object<string, boolean>} */ direct: {}
     },
     // Quick Composer (js/composer.js) view state — all ephemeral, never persisted.
     composer: {
@@ -34,6 +36,7 @@ const SocialOS = (() => {
       oneTap: false,
       posts: [],           // drafted ScheduledPosts awaiting post
       results: null,       // per-platform publish outcomes
+      schedule: { show: false, time: '' }, // "Schedule instead" panel state
       replyPlatform: 'linkedin',
       comment: '',
       postSummary: '',
@@ -162,6 +165,7 @@ const SocialOS = (() => {
       oneTap: c.oneTap,
       posts: c.posts,
       results: c.results,
+      schedule: c.schedule,
       replyPlatform: c.replyPlatform,
       comment: c.comment,
       postSummary: c.postSummary,
@@ -184,6 +188,8 @@ const SocialOS = (() => {
     if (link) c.link = link.value;
     if (comment) c.comment = comment.value;
     if (summary) c.postSummary = summary.value;
+    const schedTime = /** @type {HTMLInputElement} */ (document.getElementById('composer-schedule-time'));
+    if (schedTime) c.schedule.time = schedTime.value;
     // Capture any inline edits to drafted posts so they survive a re-render.
     (c.posts || []).forEach(p => {
       const ta = /** @type {HTMLTextAreaElement} */ (document.getElementById(`cdraft-${p.id}`));
@@ -263,10 +269,12 @@ const SocialOS = (() => {
 
   async function renderApprovals() {
     const posts = await SocialOSDB.getPendingPosts();
+    const scheduled = await SocialOSDB.getScheduledPosts();
     const engagement = await SocialOSEngagement.getQueues();
     SocialOSUI.renderApprovals({
       tab: /** @type {any} */ (state.approvalsTab),
       posts,
+      scheduled,
       engagement,
       engagementSubTab: /** @type {any} */ (state.engagementSubTab),
       // Platforms where approving publishes in the same tap (label the
@@ -276,6 +284,72 @@ const SocialOS = (() => {
         reddit: await SocialOSReddit.isConnected()
       }
     });
+  }
+
+  /**
+   * Schedule every drafted composer post for the picked time instead of
+   * posting now: persist inline edits, mark the posts approved with the
+   * scheduled slot, and ask the server for a push reminder so posting is
+   * one tap when the time comes. Nothing publishes here.
+   */
+  async function scheduleAllComposer() {
+    syncComposerInputsFromDOM();
+    const c = state.composer;
+    if (!c.posts || !c.posts.length) return;
+
+    const raw = c.schedule.time;
+    const when = raw ? new Date(raw) : null;
+    if (!when || isNaN(when.getTime())) {
+      SocialOSUI.toast('Pick a date and time first.', 'warning');
+      return;
+    }
+    if (when.getTime() <= Date.now()) {
+      SocialOSUI.toast('That time is already past — pick a future slot.', 'warning');
+      return;
+    }
+
+    SocialOSUI.loading(true, 'Scheduling…');
+    try {
+      const iso = when.toISOString();
+      for (const p of c.posts) {
+        await SocialOSComposer.editDraft(p.id, p.draft.text); // persist inline edits
+        const post = await SocialOSDB.get(SocialOSDB.STORES.posts, p.id);
+        if (!post) continue;
+        post.status = 'approved';
+        post.approved_at = SocialOSUtils.now();
+        post.scheduled_time = iso;
+        await SocialOSDB.put(SocialOSDB.STORES.posts, post);
+      }
+
+      const single = c.posts.length === 1 ? c.posts[0] : null;
+      const previewText = (single ? single.draft.text : `${c.posts.length} posts`).replace(/\s+/g, ' ');
+      const reminderSet = await SocialOSPush.scheduleReminder({
+        send_at: iso,
+        title: single ? `Time to post on ${single.platform}` : `Time to post — ${c.posts.length} scheduled posts`,
+        body: SocialOSUtils.truncate(previewText, 140),
+        url: single ? `due/${single.id}` : 'approvals',
+        post_id: single ? single.id : undefined
+      });
+
+      const label = `${SocialOSUtils.formatDate(iso)} ${SocialOSUtils.formatTime(iso)}`;
+      c.posts = [];
+      c.results = null;
+      c.text = '';
+      c.link = '';
+      c.schedule = { show: false, time: '' };
+      SocialOSUI.loading(false);
+      SocialOSUI.toast(
+        reminderSet
+          ? `Scheduled for ${label} — you'll get a push notification to post it in one tap.`
+          : `Scheduled for ${label} — it's under Approvals → Scheduled. Enable push in Settings to get a reminder.`,
+        'success', 7000
+      );
+      await renderComposer();
+      await updateBadge();
+    } catch (err) {
+      SocialOSUI.loading(false);
+      SocialOSUI.toast(`Couldn't schedule — ${composerErrMsg(err)}`, 'error', 6000);
+    }
   }
 
   async function renderLibrary() {
@@ -302,16 +376,23 @@ const SocialOS = (() => {
    */
   async function renderQueue() {
     if (!(await SocialOSQueue.isConfigured())) {
-      SocialOSUI.renderQueue({ configured: false, drafts: [], error: null });
+      SocialOSUI.renderQueue({ configured: false, drafts: [], error: null, direct: {} });
       return;
     }
     SocialOSUI.loading(true, 'Loading the queue…');
+    // Which channels can truly post in one tap right now — drives the
+    // honest APPROVE & POST vs APPROVE & COPY button labels.
+    const direct = {
+      linkedin: await SocialOSLinkedIn.isConnected(),
+      reddit: await SocialOSReddit.isConnected()
+    };
+    state.queue.direct = direct;
     try {
       const drafts = await SocialOSQueue.fetchQueue();
       state.queue.drafts = drafts;
-      SocialOSUI.renderQueue({ configured: true, drafts, error: null });
+      SocialOSUI.renderQueue({ configured: true, drafts, error: null, direct });
     } catch (err) {
-      SocialOSUI.renderQueue({ configured: true, drafts: [], error: queueErrMsg(err) });
+      SocialOSUI.renderQueue({ configured: true, drafts: [], error: queueErrMsg(err), direct });
     }
     SocialOSUI.loading(false);
   }
@@ -361,6 +442,206 @@ const SocialOS = (() => {
     }
   }
 
+  /**
+   * ONE TAP: approve a Front Office draft and carry it as far as its
+   * platform honestly allows in the same gesture (CLAUDE.md gotcha 6):
+   *   - connected LinkedIn/Reddit → published, for real, right now
+   *   - assisted platforms → exact approved text copied + platform opened
+   *   - a failed direct publish → saved under Approvals → Scheduled (due
+   *     now) so one more tap retries; never silently lost
+   * The approved text is posted VERBATIM — no AI re-draft between the
+   * text Scot reviewed and what lands.
+   * @param {string} id
+   * @param {string} [bodyOverride] - Scot's edit from the edit view
+   */
+  async function approveAndPostQueueDraft(id, bodyOverride) {
+    SocialOSUI.loading(true, 'Approving…');
+    /** @type {import('./queue.js').MktDraft} */
+    let draft;
+    try {
+      draft = await SocialOSQueue.approveDraft(id, bodyOverride);
+      state.queue.drafts = state.queue.drafts.filter(d => d.id !== id);
+    } catch (err) {
+      SocialOSUI.loading(false);
+      SocialOSUI.toast(`Couldn't approve — ${queueErrMsg(err)}`, 'error', 6000);
+      await renderQueue();
+      return;
+    }
+
+    const channel = (draft.channel || '').toLowerCase();
+    if (!SocialOSQueue.isComposerChannel(draft)) {
+      // Defensive: the UI never routes these here, but keep the copy path.
+      SocialOSUI.loading(false);
+      try {
+        await navigator.clipboard.writeText(draft.body || '');
+        SocialOSUI.toast(`Approved — text copied. SocialOS doesn't publish ${channel}, so place it yourself.`, 'success', 5000);
+      } catch {
+        SocialOSUI.toast(`Approved. Copy the text from the ${channel} draft manually.`, 'info', 5000);
+      }
+      await renderQueue();
+      return;
+    }
+
+    // Reddit needs a target subreddit + title; the agents supply them in
+    // notes/title (js/queue.js redditMeta). Missing subreddit on a
+    // connected account → publishOne fails with a clear message and the
+    // copy-&-open fallback is offered instead of guessing where to post.
+    const redditExtra = channel === 'reddit' ? (SocialOSQueue.redditMeta(draft) || {}) : {};
+
+    SocialOSUI.loading(true, 'Posting…');
+    try {
+      const post = await SocialOSComposer.createReadyPost({
+        platform: channel,
+        text: draft.body || '',
+        title: draft.title,
+        source: 'queue',
+        scheduledTime: SocialOSUtils.now(),
+        ...redditExtra
+      });
+      const result = await SocialOSComposer.publishOne(post.id);
+      SocialOSUI.loading(false);
+
+      if (result.mode === 'published') {
+        SocialOSUI.toast(`Approved & posted to ${channel} ✓`, 'success', 5000);
+        await renderQueue();
+        await updateBadge();
+        return;
+      }
+
+      if (result.mode === 'assisted') {
+        let copied = false;
+        try { await navigator.clipboard.writeText(result.text); copied = true; } catch { /* needs the button tap */ }
+        const c = state.composer;
+        c.mode = 'post';
+        c.text = '';
+        c.link = '';
+        c.selected = [channel];
+        c.posts = [post];
+        c.results = [result];
+        SocialOSUI.toast(
+          copied ? `Approved & copied — paste it in ${channel}.` : 'Approved — tap "Copy & open" to place it.',
+          'success', 6000
+        );
+        if (copied && result.deepLink) window.open(result.deepLink, '_blank');
+        await navigate('compose');
+        return;
+      }
+
+      // Failed direct publish — the approved post is parked as due-now
+      // under Approvals → Scheduled for a one-tap retry.
+      SocialOSUI.toast(`Approved, but posting failed — ${result.error || 'unknown error'}. It's saved under Approvals → Scheduled; tap POST NOW to retry.`, 'error', 8000);
+      await renderQueue();
+    } catch (err) {
+      SocialOSUI.loading(false);
+      SocialOSUI.toast(`Approved, but posting hit an error — ${composerErrMsg(err)}. The draft is approved server-side; retry from Approvals.`, 'error', 8000);
+      await renderQueue();
+    }
+  }
+
+  /**
+   * Approve now, post at the agent's planned time: creates the approved
+   * post with the draft's scheduled_for slot and books a push reminder —
+   * when it fires, "Post now" publishes in one tap. Fixes the
+   * "approving at 10PM sends a morning post at 10PM" problem.
+   * @param {string} id
+   */
+  async function approveAndScheduleQueueDraft(id) {
+    const cached = state.queue.drafts.find(d => d.id === id);
+    const when = cached?.scheduled_for;
+    if (!when || new Date(when).getTime() <= Date.now()) {
+      await approveAndPostQueueDraft(id);
+      return;
+    }
+
+    SocialOSUI.loading(true, 'Approving…');
+    try {
+      const draft = await SocialOSQueue.approveDraft(id);
+      state.queue.drafts = state.queue.drafts.filter(d => d.id !== id);
+      const channel = (draft.channel || '').toLowerCase();
+      const redditExtra = channel === 'reddit' ? (SocialOSQueue.redditMeta(draft) || {}) : {};
+
+      const post = await SocialOSComposer.createReadyPost({
+        platform: channel,
+        text: draft.body || '',
+        title: draft.title,
+        source: 'queue',
+        scheduledTime: new Date(when).toISOString(),
+        ...redditExtra
+      });
+
+      const reminderSet = await SocialOSPush.scheduleReminder({
+        send_at: new Date(when).toISOString(),
+        title: `Time to post: ${SocialOSUtils.truncate(draft.title || channel, 60)}`,
+        body: SocialOSUtils.truncate((draft.body || '').replace(/\s+/g, ' '), 140),
+        url: `due/${post.id}`,
+        post_id: post.id
+      });
+
+      const label = `${SocialOSUtils.formatDate(when)} ${SocialOSUtils.formatTime(when)}`;
+      SocialOSUI.loading(false);
+      SocialOSUI.toast(
+        reminderSet
+          ? `Approved — posts ${label}. You'll get a push notification to send it in one tap.`
+          : `Approved & scheduled for ${label} (Approvals → Scheduled). Enable push in Settings to get the reminder.`,
+        'success', 8000
+      );
+      await renderQueue();
+      await updateBadge();
+    } catch (err) {
+      SocialOSUI.loading(false);
+      SocialOSUI.toast(`Couldn't approve — ${queueErrMsg(err)}`, 'error', 6000);
+      await renderQueue();
+    }
+  }
+
+  /**
+   * A scheduled, already-approved post's time has come (push reminder tap
+   * or the POST NOW button): publish it in one tap — direct platforms post,
+   * assisted ones copy the text and open the platform app.
+   * @param {string} postId
+   */
+  async function publishDuePost(postId) {
+    const post = await SocialOSDB.get(SocialOSDB.STORES.posts, postId);
+    if (!post) {
+      SocialOSUI.toast('That post is gone — maybe already published from another device.', 'info', 5000);
+      await navigate('approvals');
+      return;
+    }
+    if (post.status === 'published') {
+      SocialOSUI.toast('Already posted ✓', 'info');
+      await navigate('approvals');
+      return;
+    }
+
+    SocialOSUI.loading(true, 'Posting…');
+    try {
+      const result = await SocialOSComposer.publishOne(postId);
+      SocialOSUI.loading(false);
+
+      if (result.mode === 'published') {
+        SocialOSUI.toast(`Posted to ${result.platform} ✓`, 'success', 5000);
+      } else if (result.mode === 'assisted') {
+        let copied = false;
+        try { await navigator.clipboard.writeText(result.text); copied = true; } catch { /* manual copy below */ }
+        SocialOSUI.toast(
+          copied
+            ? `Copied — paste it in ${result.platform}, then Mark posted.`
+            : `SocialOS can't auto-post to ${result.platform} — copy the text from the card, then Mark posted.`,
+          'info', 8000
+        );
+        if (copied && result.deepLink) window.open(result.deepLink, '_blank');
+      } else {
+        SocialOSUI.toast(`Posting failed — ${result.error || 'unknown error'}. Tap POST NOW to retry.`, 'error', 8000);
+      }
+    } catch (err) {
+      SocialOSUI.loading(false);
+      SocialOSUI.toast(`Posting error — ${composerErrMsg(err)}`, 'error', 6000);
+    }
+    state.approvalsTab = 'posts';
+    await navigate('approvals');
+    await updateBadge();
+  }
+
   async function renderCalendar() {
     const slots = await SocialOSDB.getAllCalendarSlots();
     SocialOSUI.renderCalendar(slots, state.calendarFocusDate || undefined);
@@ -386,7 +667,8 @@ const SocialOS = (() => {
     const redditStatus = await SocialOSReddit.getConnectionStatus();
     const tiktokStatus = await SocialOSTikTok.getConnectionStatus();
     const account = await SocialOSAuth.accountStatus();
-    SocialOSUI.renderSettings(settings, profile, googleConnected, linkedinStatus, redditStatus, tiktokStatus, account);
+    const pushStatus = await SocialOSPush.status();
+    SocialOSUI.renderSettings(settings, profile, googleConnected, linkedinStatus, redditStatus, tiktokStatus, account, pushStatus);
   }
 
   async function updateBadge() {
@@ -945,6 +1227,96 @@ const SocialOS = (() => {
     }
   }
 
+  /**
+   * On app open: surface approved posts whose scheduled time has passed —
+   * they only need one tap (POST NOW) to go out. The push reminder is the
+   * primary nudge; this catches the push-disabled / missed-notification case.
+   */
+  async function checkDuePosts() {
+    const due = (await SocialOSDB.getScheduledPosts())
+      .filter(p => new Date(p.scheduled_time).getTime() <= Date.now());
+    if (!due.length) return;
+    SocialOSUI.toast(
+      `${due.length} scheduled post${due.length > 1 ? 's are' : ' is'} due — Approvals → POST NOW.`,
+      'warning', 8000
+    );
+  }
+
+  // ── Push / notification deep links (sw.js notificationclick) ──────────
+  // The service worker routes notification taps here: either via the URL
+  // hash on a cold open ('#queue-post/<id>') or a postMessage when a
+  // SocialOS window already exists. Every route lands on the same in-app
+  // flow the buttons use — the SW itself never publishes anything.
+
+  /**
+   * @param {string} route - e.g. 'queue', 'queue-post/<draftId>', 'due/<postId>'
+   * @returns {Promise<boolean>} true if the route was recognized
+   */
+  async function handleRoute(route) {
+    const [cmd, arg] = String(route || '').split('/');
+    switch (cmd) {
+      case 'queue':
+        await navigate('queue');
+        return true;
+
+      case 'queue-post': {
+        // "Approve & Post" straight from the notification: load the queue,
+        // then run the same one-tap flow as the in-app button.
+        await navigate('queue');
+        if (arg && state.queue.drafts.some(d => d.id === arg)) {
+          await approveAndPostQueueDraft(arg);
+        } else if (arg) {
+          SocialOSUI.toast('That draft is no longer queued — it may already be handled.', 'info', 6000);
+        }
+        return true;
+      }
+
+      case 'queue-edit': {
+        await navigate('queue');
+        const draft = arg ? state.queue.drafts.find(d => d.id === arg) : null;
+        if (draft) {
+          SocialOSUI.renderQueueEdit(draft, state.queue.direct);
+        } else if (arg) {
+          SocialOSUI.toast('That draft is no longer queued — it may already be handled.', 'info', 6000);
+        }
+        return true;
+      }
+
+      case 'due':
+        if (arg) { await publishDuePost(arg); return true; }
+        await navigate('approvals');
+        return true;
+
+      case 'approvals':
+        state.approvalsTab = 'posts';
+        await navigate('approvals');
+        return true;
+
+      case 'compose':
+        await navigate('compose');
+        return true;
+
+      default:
+        return false;
+    }
+  }
+
+  /**
+   * Pull a notification route out of the URL hash (set by sw.js
+   * clients.openWindow) and clear it so refreshes don't replay actions.
+   * Auth flows own other hash formats ('#access_token=…') — only known
+   * route commands are consumed.
+   * @returns {string|null}
+   */
+  function consumeHashRoute() {
+    const h = (location.hash || '').replace(/^#\/?/, '');
+    if (!h) return null;
+    const cmd = h.split('/')[0];
+    if (!['queue', 'queue-post', 'queue-edit', 'due', 'approvals', 'compose'].includes(cmd)) return null;
+    history.replaceState(null, '', location.pathname + location.search);
+    return h;
+  }
+
   // ── Event delegation ──────────────────────────────────────────────────
 
   /**
@@ -1074,6 +1446,38 @@ const SocialOS = (() => {
         case 'composer-post-all': {
           syncComposerInputsFromDOM();
           await postAllComposer();
+          break;
+        }
+
+        case 'composer-schedule-toggle': {
+          syncComposerInputsFromDOM();
+          state.composer.schedule.show = !state.composer.schedule.show;
+          await renderComposer();
+          break;
+        }
+
+        case 'composer-schedule-all': {
+          await scheduleAllComposer();
+          break;
+        }
+
+        // ── Scheduled posts (Approvals → Scheduled rail) ───────────────
+        case 'post-scheduled-now': {
+          if (!id) break;
+          await publishDuePost(id);
+          break;
+        }
+
+        case 'unschedule-post': {
+          if (!id) break;
+          const post = await SocialOSDB.get(SocialOSDB.STORES.posts, id);
+          if (!post) break;
+          post.status = 'pending_approval';
+          post.scheduled_time = '';
+          await SocialOSDB.put(SocialOSDB.STORES.posts, post);
+          SocialOSUI.toast('Unscheduled — it\'s back in the approval list.', 'info');
+          await renderApprovals();
+          await updateBadge();
           break;
         }
 
@@ -1497,6 +1901,44 @@ const SocialOS = (() => {
           settings.mkt_queue_url = /** @type {HTMLInputElement} */ (SocialOSUI.$('set-fo-url'))?.value?.trim() || SocialOSDB.DEFAULT_MKT_QUEUE_URL;
           await SocialOSDB.saveSettings(settings);
           SocialOSUI.toast('Front Office settings saved.', 'success');
+          await renderSettings(); // push section unlocks once the secret exists
+          break;
+        }
+
+        // ── Push notifications (js/push.js) ─────────────────────────────
+        case 'push-enable': {
+          SocialOSUI.loading(true, 'Enabling push…');
+          try {
+            await SocialOSPush.enable();
+            SocialOSUI.loading(false);
+            SocialOSUI.toast('Push enabled — you\'ll get a notification when a draft needs you or a scheduled post is due.', 'success', 7000);
+          } catch (err) {
+            SocialOSUI.loading(false);
+            SocialOSUI.toast(err instanceof Error ? err.message : String(err), 'error', 9000);
+          }
+          await renderSettings();
+          break;
+        }
+
+        case 'push-disable': {
+          SocialOSUI.loading(true, 'Turning push off…');
+          try { await SocialOSPush.disable(); } catch { /* best effort */ }
+          SocialOSUI.loading(false);
+          SocialOSUI.toast('Push turned off on this device.', 'info');
+          await renderSettings();
+          break;
+        }
+
+        case 'push-test': {
+          SocialOSUI.loading(true, 'Sending a test…');
+          try {
+            await SocialOSPush.sendTest();
+            SocialOSUI.loading(false);
+            SocialOSUI.toast('Test sent — it should pop up within a few seconds.', 'success', 6000);
+          } catch (err) {
+            SocialOSUI.loading(false);
+            SocialOSUI.toast(`Test didn't send — ${err instanceof Error ? err.message : String(err)}`, 'error', 8000);
+          }
           break;
         }
 
@@ -2031,7 +2473,7 @@ const SocialOS = (() => {
         case 'queue-edit': {
           if (!id) break;
           const draft = state.queue.drafts.find(d => d.id === id);
-          if (draft) SocialOSUI.renderQueueEdit(draft);
+          if (draft) SocialOSUI.renderQueueEdit(draft, state.queue.direct);
           break;
         }
 
@@ -2044,9 +2486,33 @@ const SocialOS = (() => {
           break;
         }
 
+        // Edited text + one-tap approve & post/copy (composer channels).
+        case 'queue-save-post': {
+          if (!id) break;
+          const ta = /** @type {HTMLTextAreaElement} */ (SocialOSUI.$('queue-edit-text'));
+          const text = ta?.value?.trim();
+          if (!text) { SocialOSUI.toast('The post text can\'t be empty.', 'warning'); break; }
+          await approveAndPostQueueDraft(id, text);
+          break;
+        }
+
         case 'queue-approve': {
           if (!id) break;
           await approveQueueDraft(id);
+          break;
+        }
+
+        // ONE TAP: approve + publish (direct) / copy & open (assisted).
+        case 'queue-post': {
+          if (!id) break;
+          await approveAndPostQueueDraft(id);
+          break;
+        }
+
+        // Approve now, auto-remind at the agent's planned time.
+        case 'queue-schedule': {
+          if (!id) break;
+          await approveAndScheduleQueueDraft(id);
           break;
         }
 
@@ -2527,17 +2993,34 @@ const SocialOS = (() => {
     // Setup event delegation
     setupEventDelegation();
 
-    // Register service worker
+    // Register service worker + listen for notification-tap routing
+    // (sw.js posts {type:'sos-navigate', route} when a SocialOS window
+    // already exists instead of opening a second one).
     if ('serviceWorker' in navigator) {
       // Relative path — the app may be served from a subpath (e.g. GitHub Pages)
       navigator.serviceWorker.register('sw.js').catch(() => {});
+      navigator.serviceWorker.addEventListener('message', (e) => {
+        if (e.data && e.data.type === 'sos-navigate' && e.data.route) {
+          handleRoute(String(e.data.route)).catch(() => {});
+        }
+      });
     }
 
     // Background maintenance — never blocks first paint
     SocialOSDB.archiveStaleRecords().catch(() => {});
     checkApprovalReminders().catch(() => {});
+    checkDuePosts().catch(() => {});
+    SocialOSPush.syncSubscription().catch(() => {});
 
     if (profile?.onboarding_complete) {
+      // A notification tap may have cold-opened the app with a route in
+      // the hash (sw.js clients.openWindow) — that wins over the default
+      // screen so "Approve & Post" lands exactly where it promised.
+      const pushRoute = consumeHashRoute();
+      if (pushRoute) {
+        await handleRoute(pushRoute);
+        return;
+      }
       // A fresh sign-in return lands on Settings so the Account section's
       // signed-in state is the first thing seen — not a 3s toast on the
       // dashboard.

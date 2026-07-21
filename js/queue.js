@@ -142,6 +142,22 @@ const SocialOSQueue = (() => {
   }
 
   /**
+   * Reddit needs a target subreddit + a title to publish directly. Agents
+   * put the subreddit in `notes` (or mention it in the body) — find it, and
+   * use the draft's own title. Returns null when no subreddit can be found,
+   * in which case the one-click path falls back to the composer handoff
+   * instead of guessing where to post.
+   * @param {MktDraft} draft
+   * @returns {{subreddit: string, redditTitle: string}|null}
+   */
+  function redditMeta(draft) {
+    const source = `${draft.notes || ''}\n${draft.body || ''}`;
+    const m = source.match(/(?:^|[\s(])\/?r\/([A-Za-z0-9][A-Za-z0-9_]{2,20})\b/);
+    if (!m) return null;
+    return { subreddit: m[1], redditTitle: (draft.title || '').trim() };
+  }
+
+  /**
    * Build the composer handoff for an approved draft: the text to publish
    * and the platform preselection. app.js applies this to
    * SocialOS.state.composer and navigates — reusing the existing composer
@@ -164,6 +180,7 @@ const SocialOSQueue = (() => {
     approveDraft,
     rejectDraft,
     isComposerChannel,
+    redditMeta,
     composerHandoff
   };
 })();

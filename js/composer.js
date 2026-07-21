@@ -134,6 +134,86 @@ const SocialOSComposer = (() => {
   }
 
   /**
+   * Create an already-approved, ready-to-publish post from FINAL text —
+   * no AI re-draft. This is the one-click path: the Front Office queue's
+   * "Approve & Post" and scheduled posts both use it, so text a human just
+   * reviewed is published verbatim (the platform publishers still run the
+   * scrubber as defense in depth).
+   *
+   * @param {{platform: string, text: string, title?: string, redditTitle?: string, subreddit?: string, scheduledTime?: string, source?: string}} input
+   * @returns {Promise<ScheduledPost>}
+   */
+  async function createReadyPost(input) {
+    const text = (input.text || '').trim();
+    if (!text) throw new Error('Nothing to post — the text is empty.');
+    const platform = input.platform;
+    if (!ALL_PLATFORMS.includes(/** @type {any} */ (platform))) {
+      throw new Error(`SocialOS can't post to "${platform}".`);
+    }
+
+    const words = text.split(/\s+/);
+    const title = input.title || (words.slice(0, 8).join(' ') + (words.length > 8 ? '…' : ''));
+
+    /** @type {ContentItem} */
+    const item = {
+      id: SocialOSUtils.uuid(),
+      source: 'manual',
+      source_id: null,
+      type: 'text',
+      title,
+      description: input.source === 'queue' ? 'Approved Front Office draft' : 'Ready-to-post text',
+      thumbnail_url: null,
+      raw_content: text,
+      tags: [],
+      sensitivity_flags: [],
+      scrubbed: true,
+      ai_rating: 'medium',
+      ai_rating_reason: input.source === 'queue' ? 'Reviewed and approved in the Queue' : 'User-provided final text',
+      suggested_platforms: [platform],
+      suggested_angles: [],
+      status: 'available',
+      post_history: [],
+      added_at: SocialOSUtils.now(),
+      last_used: null
+    };
+    await SocialOSDB.put(SocialOSDB.STORES.content, item);
+
+    /** @type {Object<string, string>} */
+    const platformMetadata = {};
+    if (platform === 'reddit') {
+      if (input.subreddit) platformMetadata.subreddit = input.subreddit;
+      if (input.redditTitle || input.title) platformMetadata.reddit_title = input.redditTitle || /** @type {string} */ (input.title);
+    }
+
+    /** @type {ScheduledPost} */
+    const post = {
+      id: SocialOSUtils.uuid(),
+      content_id: item.id,
+      platform: /** @type {any} */ (platform),
+      status: 'approved',
+      scheduled_time: input.scheduledTime || '',
+      published_time: null,
+      draft: {
+        text,
+        hashtags: SocialOSAI.extractHashtags(text),
+        angle: input.source === 'queue' ? 'Front Office draft' : 'Final text',
+        platform_metadata: platformMetadata
+      },
+      alternatives: [],
+      selected_alternative: 0,
+      approval_sent_at: SocialOSUtils.now(),
+      approved_at: SocialOSUtils.now(),
+      approved_by: 'user',
+      edits_made: false,
+      edit_history: [],
+      platform_post_id: null,
+      engagement_stats: { likes: 0, comments: 0, shares: 0, last_checked: SocialOSUtils.now() }
+    };
+    await SocialOSDB.put(SocialOSDB.STORES.posts, post);
+    return post;
+  }
+
+  /**
    * Publish one already-drafted post as far as the platform allows.
    * Direct platforms (connected LinkedIn/Reddit) post immediately. Everything
    * else returns mode:'assisted' with the text + deep link for a copy-and-open
@@ -153,11 +233,13 @@ const SocialOSComposer = (() => {
       if (post.platform === 'linkedin' && await SocialOSLinkedIn.isConnected()) {
         const published = await SocialOSLinkedIn.linkedinPublish(post);
         await markContentPosted(post);
+        await markPostPublished(post, published.platform_post_id);
         return { platform: 'linkedin', mode: 'published', text, url: published.platform_post_id };
       }
       if (post.platform === 'reddit' && await SocialOSReddit.isConnected()) {
         const published = await SocialOSReddit.redditPublish(post);
         await markContentPosted(post);
+        await markPostPublished(post, published.platform_post_id);
         return { platform: 'reddit', mode: 'published', text, url: published.platform_post_id };
       }
     } catch (err) {
@@ -168,6 +250,20 @@ const SocialOSComposer = (() => {
     // that isn't connected. The actual clipboard write happens on the user's
     // tap in app.js (clipboard needs a user gesture); here we just say so.
     return { platform: post.platform, mode: 'assisted', text, deepLink };
+  }
+
+  /**
+   * Mark the post record itself published (so the Scheduled rail and due
+   * reminders stop tracking it). The passed `post` is the live object read
+   * at the top of publishOne.
+   * @param {ScheduledPost} post
+   * @param {string|null} [platformPostId]
+   */
+  async function markPostPublished(post, platformPostId) {
+    post.status = 'published';
+    post.published_time = SocialOSUtils.now();
+    if (platformPostId) post.platform_post_id = platformPostId;
+    await SocialOSDB.put(SocialOSDB.STORES.posts, post);
   }
 
   /**
@@ -224,6 +320,7 @@ const SocialOSComposer = (() => {
     draftAll,
     activeText,
     editDraft,
+    createReadyPost,
     publishOne,
     replyDraft
   };

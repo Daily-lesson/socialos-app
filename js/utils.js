@@ -222,6 +222,50 @@ const SocialOSUtils = (() => {
     tiktok:    { days: [2, 4, 5],       hours: [12, 15, 19] }     // Tue/Thu/Fri
   };
 
+  /**
+   * The next good moment to post on a platform (or across several), per the
+   * BEST_TIMES table, strictly after `from`. Used by the composer's schedule
+   * suggestion and the late-night "this is a morning post" nudge.
+   * @param {string|string[]} platforms - one platform or a set (earliest wins)
+   * @param {Date} [from]
+   * @returns {Date}
+   */
+  function nextBestTime(platforms, from) {
+    const list = (Array.isArray(platforms) ? platforms : [platforms]).filter(p => BEST_TIMES[p]);
+    const start = from || new Date();
+    /** @type {Date|null} */
+    let best = null;
+
+    for (const p of (list.length ? list : Object.keys(BEST_TIMES))) {
+      const bt = BEST_TIMES[p];
+      // Scan forward day by day (14 days is always enough to hit a slot).
+      for (let d = 0; d < 14 && bt; d++) {
+        const day = new Date(start.getFullYear(), start.getMonth(), start.getDate() + d);
+        if (!bt.days.includes(day.getDay())) continue;
+        const hour = bt.hours.slice().sort((a, b) => a - b)
+          .find(h => new Date(day.getFullYear(), day.getMonth(), day.getDate(), h).getTime() > start.getTime());
+        if (hour === undefined) continue;
+        const slot = new Date(day.getFullYear(), day.getMonth(), day.getDate(), hour);
+        if (!best || slot.getTime() < best.getTime()) best = slot;
+        break; // first slot for this platform found — compare across platforms
+      }
+    }
+
+    // Degenerate fallback: 9am tomorrow.
+    return best || new Date(start.getFullYear(), start.getMonth(), start.getDate() + 1, 9);
+  }
+
+  /**
+   * Is this a "quiet" clock-hour to be posting (late night / very early)?
+   * Drives the composer nudge that catches a 10PM send of a morning post.
+   * @param {Date} [when]
+   * @returns {boolean}
+   */
+  function isOffHours(when) {
+    const h = (when || new Date()).getHours();
+    return h >= 20 || h < 6;
+  }
+
   // ── Truncate helper ───────────────────────────────────────────────────
 
   /**
@@ -248,6 +292,8 @@ const SocialOSUtils = (() => {
     addScrubTerms,
     preFilterScore,
     BEST_TIMES,
+    nextBestTime,
+    isOffHours,
     truncate,
     SCRUB_RULES,
     HIGH_VALUE_KEYWORDS

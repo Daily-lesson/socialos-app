@@ -204,6 +204,7 @@
  * @property {string} [social_oauth_url] - Social platform OAuth broker Edge Function URL (LinkedIn/Reddit/TikTok token grants). Baked-in default (DEFAULT_SOCIAL_OAUTH_URL); overridable for local dev.
  * @property {string} [mkt_queue_url] - Front Office approval-queue Edge Function URL (js/queue.js). Baked-in default (DEFAULT_MKT_QUEUE_URL); overridable for local dev. NB: hosted in project ehgnxblgiyqtxypkoioc (where the mkt_ schema lives), not Off_Races like the others.
  * @property {string} [front_office_secret] - Shared secret for the mkt-queue Edge Function (X-FrontOffice-Secret). Entered once in Settings, lives only in IndexedDB — NEVER baked into client code (this repo mirrors to a public repo). Empty until Scot sets it.
+ * @property {boolean} [push_enabled] - Web push notifications enabled on THIS device (js/push.js). Per-device (each device has its own push subscription) — deliberately NOT in sync.js SYNCED_SETTINGS_KEYS.
  * @property {{approval_reminder_hours_before: number, engagement_batch_time: string, quiet_hours_start: string, quiet_hours_end: string}} notification_preferences
  * @property {Object<string, number>} posting_limits
  * @property {{remove_client_names: boolean, remove_facility_locations: boolean, remove_proprietary_specs: boolean, remove_financial_data: boolean, custom_blocked_terms: string[]}} content_scrubbing
@@ -479,6 +480,8 @@ const SocialOSDB = (() => {
       // js/queue.js falls back to DEFAULT_MKT_QUEUE_URL when unset.
       mkt_queue_url: DEFAULT_MKT_QUEUE_URL,
       front_office_secret: '',
+      // Web push (js/push.js) — per-device, so not cloud-synced.
+      push_enabled: false,
       notification_preferences: {
         approval_reminder_hours_before: 48,
         engagement_batch_time: '08:00',
@@ -567,6 +570,18 @@ const SocialOSDB = (() => {
   async function getPendingPosts() {
     const all = await getAllPosts();
     return all.filter(p => p.status === 'pending_approval');
+  }
+
+  /**
+   * Approved posts waiting on their scheduled time (the "Scheduled" rail in
+   * Approvals + the due-post one-tap publish flow).
+   * @returns {Promise<ScheduledPost[]>}
+   */
+  async function getScheduledPosts() {
+    const all = await getAllPosts();
+    return all
+      .filter(p => p.status === 'approved' && !p.published_time && p.scheduled_time)
+      .sort((a, b) => (a.scheduled_time || '').localeCompare(b.scheduled_time || ''));
   }
 
   /**
@@ -705,6 +720,7 @@ const SocialOSDB = (() => {
     saveProject,
     deleteProject,
     getPendingPosts,
+    getScheduledPosts,
     getAuthSession,
     saveAuthSession,
     clearAuthSession,

@@ -955,7 +955,7 @@ const SocialOSUI = (() => {
 
     html += data.tab === 'engagement'
       ? renderEngagementTabContent(data.engagement, data.engagementSubTab)
-      : renderPostsTabContent(data.posts, data.directPlatforms || {});
+      : renderPostsTabContent(data.posts, data.directPlatforms || {}, data.scheduled || []);
 
     container.innerHTML = html;
   }
@@ -963,10 +963,23 @@ const SocialOSUI = (() => {
   /**
    * @param {ScheduledPost[]} posts
    * @param {Object<string, boolean>} directPlatforms - platform → connected for direct publish (approve = post, one tap)
+   * @param {ScheduledPost[]} [scheduled] - approved posts waiting on their scheduled time
    * @returns {string}
    */
-  function renderPostsTabContent(posts, directPlatforms) {
-    if (!posts.length) {
+  function renderPostsTabContent(posts, directPlatforms, scheduled) {
+    const sched = scheduled || [];
+    let html = '';
+
+    if (sched.length) {
+      html += `
+        <h3 style="margin:12px 0 8px">Scheduled</h3>
+        <div class="approval-list">
+          ${sched.map(post => renderScheduledCard(post, !!directPlatforms[post.platform])).join('')}
+        </div>
+        ${posts.length ? '<h3 style="margin:16px 0 8px">Waiting for approval</h3>' : ''}`;
+    }
+
+    if (!posts.length && !sched.length) {
       return `
         <div class="empty-state">
           <h2>All caught up</h2>
@@ -974,9 +987,50 @@ const SocialOSUI = (() => {
         </div>`;
     }
 
+    if (posts.length) {
+      html += `
+        <div class="approval-list">
+          ${posts.map(post => renderApprovalCard(post, !!directPlatforms[post.platform])).join('')}
+        </div>`;
+    }
+    return html;
+  }
+
+  /**
+   * One approved-and-scheduled post: shows its slot, flags it when due, and
+   * offers the honest one-tap action (post now for direct platforms, copy &
+   * open for assisted ones).
+   * @param {ScheduledPost} post
+   * @param {boolean} direct
+   * @returns {string}
+   */
+  function renderScheduledCard(post, direct) {
+    const txt = post.selected_alternative === 0
+      ? post.draft.text
+      : (post.alternatives[post.selected_alternative - 1]?.text || post.draft.text);
+    const due = post.scheduled_time && new Date(post.scheduled_time).getTime() <= Date.now();
+
     return `
-      <div class="approval-list">
-        ${posts.map(post => renderApprovalCard(post, !!directPlatforms[post.platform])).join('')}
+      <div class="card approval-card" data-post-id="${post.id}">
+        <div class="card-header">
+          <span class="platform-badge" style="background:${PLATFORM_COLORS[post.platform]}">${PLATFORM_ICONS[post.platform]}</span>
+          <span>${post.platform.charAt(0).toUpperCase() + post.platform.slice(1)}</span>
+          <span class="${due ? 'cmp-warn' : 'text-secondary'}" style="margin-left:auto">
+            ${due ? 'DUE NOW · ' : ''}${SocialOSUtils.formatDate(post.scheduled_time)} ${SocialOSUtils.formatTime(post.scheduled_time)}
+          </span>
+        </div>
+        <div class="post-text">${escapeHtml(txt)}</div>
+        <div class="card-actions">
+          <button class="btn btn-secondary btn-sm" data-action="unschedule-post" data-id="${post.id}">Unschedule</button>
+          ${direct ? '' : `<button class="btn btn-secondary btn-sm" data-action="mark-published" data-id="${post.id}">Mark posted</button>`}
+          <button class="btn ${due ? 'btn-success' : 'btn-accent'} btn-sm" data-action="post-scheduled-now" data-id="${post.id}">
+            ${direct ? 'POST NOW' : 'COPY & OPEN'}
+          </button>
+        </div>
+        <p class="text-secondary" style="font-size:0.75rem;margin-top:6px">
+          Already approved — ${direct ? 'it posts with one tap.' : `SocialOS can't auto-post to ${post.platform}, so one tap copies it and opens the app.`}
+          ${due ? '' : 'A reminder arrives at the scheduled time (push notification, if enabled in Settings).'}
+        </p>
       </div>`;
   }
 
@@ -1620,8 +1674,9 @@ const SocialOSUI = (() => {
    * @param {{connected: boolean, needsReconnect: boolean, handle: string|null}} [redditStatus]
    * @param {{connected: boolean, needsReconnect: boolean, handle: string|null}} [tiktokStatus]
    * @param {{signedIn: boolean, email: string|null, lastSyncAt: string|null}} [account] - SocialOS account (js/auth.js)
+   * @param {{supported: boolean, permission: string, subscribed: boolean, hasSecret: boolean}} [pushStatus] - web push state (js/push.js)
    */
-  function renderSettings(settings, profile, googleConnected, linkedinStatus, redditStatus, tiktokStatus, account) {
+  function renderSettings(settings, profile, googleConnected, linkedinStatus, redditStatus, tiktokStatus, account, pushStatus) {
     const container = $('settings-content');
     if (!container) return;
 
@@ -1825,6 +1880,38 @@ const SocialOSUI = (() => {
       </div>
 
       <div class="settings-section">
+        <h3>Push Notifications <span class="text-secondary" style="font-weight:400">(one-tap approvals on your phone)</span></h3>
+        ${(() => {
+          const ps = pushStatus || { supported: false, permission: 'default', subscribed: false, hasSecret: false };
+          const on = !!settings.push_enabled && ps.subscribed;
+          return `
+            <div class="connection-status ${on ? 'connected' : 'disconnected'}">
+              ${on ? 'Enabled on this device' : 'Off'}
+            </div>
+            <p class="text-secondary" style="margin:8px 0">
+              Get a notification when your agents queue a draft and when a
+              scheduled post is due — approve &amp; post, edit, or deny right
+              from the notification. On iPhone: install SocialOS to the Home
+              Screen first (Share &#8594; Add to Home Screen); action buttons
+              are Android-only, tapping the notification opens the right
+              screen everywhere.
+            </p>
+            ${!ps.supported ? `
+              <p class="text-secondary"><b>This browser can't receive push.</b> Use the installed app (Add to Home Screen) instead of a plain tab.</p>` : ''}
+            ${ps.supported && !ps.hasSecret ? `
+              <p class="text-secondary"><b>Add the Front Office shared secret above first</b> — push rides the same connection.</p>` : ''}
+            ${ps.supported && ps.permission === 'denied' ? `
+              <p class="text-secondary"><b>Notifications are blocked</b> for SocialOS in your browser/OS settings — allow them, then enable here.</p>` : ''}
+            <div style="display:flex;gap:8px;flex-wrap:wrap">
+              ${on
+                ? `<button class="btn btn-secondary btn-sm" data-action="push-test">Send a test</button>
+                   <button class="btn btn-danger btn-sm" data-action="push-disable">Turn off</button>`
+                : `<button class="btn btn-primary btn-sm" data-action="push-enable" ${ps.supported && ps.hasSecret ? '' : 'disabled'}>Enable push on this device</button>`}
+            </div>`;
+        })()}
+      </div>
+
+      <div class="settings-section">
         <h3>Data</h3>
         <button class="btn btn-danger" data-action="reset-all">Reset All Data</button>
         <p class="text-secondary" style="margin-top:8px">This will delete all content, posts, settings, and start fresh.</p>
@@ -1868,11 +1955,34 @@ const SocialOSUI = (() => {
 
   /**
    * Render one queued Front Office draft card.
+   *
+   * Button set is honest about what one tap does (CLAUDE.md gotcha 6):
+   *   - connected direct channel (LinkedIn/Reddit): APPROVE & POST — one
+   *     tap approves and publishes for real. If the agent planned a future
+   *     time, a second button approves now and posts at that time instead
+   *     (a push notification arrives then for the final tap).
+   *   - assisted composer channel: APPROVE & COPY — approves, copies the
+   *     exact approved text and opens the platform app to paste.
+   *   - anything else (blog/x/email): APPROVE — approves + copies.
    * @param {import('./queue.js').MktDraft} draft
    * @param {boolean} composerCapable - channel maps to a Quick Composer platform
+   * @param {Object<string, boolean>} direct - platform → connected for direct publish
    * @returns {string}
    */
-  function renderQueueCard(draft, composerCapable) {
+  function renderQueueCard(draft, composerCapable, direct) {
+    const channel = (draft.channel || '').toLowerCase();
+    const isDirect = composerCapable && !!direct[channel];
+    const scheduledFuture = draft.scheduled_for && new Date(draft.scheduled_for).getTime() > Date.now();
+
+    let primary;
+    if (isDirect) {
+      primary = `<button class="btn btn-success btn-lg" data-action="queue-post" data-id="${draft.id}">APPROVE &amp; POST</button>`;
+    } else if (composerCapable) {
+      primary = `<button class="btn btn-success btn-lg" data-action="queue-post" data-id="${draft.id}">APPROVE &amp; COPY</button>`;
+    } else {
+      primary = `<button class="btn btn-success btn-lg" data-action="queue-approve" data-id="${draft.id}">APPROVE</button>`;
+    }
+
     return `
       <div class="card approval-card" data-draft-id="${draft.id}">
         <div class="card-header">
@@ -1883,24 +1993,26 @@ const SocialOSUI = (() => {
         </div>
         <h4 style="margin:4px 0 8px">${escapeHtml(draft.title)}</h4>
         <div class="post-text">${escapeHtml(draft.body)}</div>
-        ${draft.scheduled_for ? `<p class="text-secondary" style="font-size:0.8rem;margin-top:8px">Planned for ${SocialOSUtils.formatDate(draft.scheduled_for)}</p>` : ''}
+        ${draft.scheduled_for ? `<p class="text-secondary" style="font-size:0.8rem;margin-top:8px">Planned for ${SocialOSUtils.formatDate(draft.scheduled_for)} ${SocialOSUtils.formatTime(draft.scheduled_for)}</p>` : ''}
         ${draft.notes ? `<p class="text-secondary" style="font-size:0.8rem;margin-top:4px">${escapeHtml(draft.notes)}</p>` : ''}
         <div class="card-actions">
           <button class="btn btn-secondary btn-sm" data-action="queue-edit" data-id="${draft.id}">Edit</button>
           <button class="btn btn-danger btn-sm" data-action="queue-reject" data-id="${draft.id}">Reject</button>
-          <button class="btn btn-success btn-lg" data-action="queue-approve" data-id="${draft.id}">
-            ${composerCapable ? 'APPROVE &#8594; COMPOSER' : 'APPROVE'}
-          </button>
+          ${primary}
         </div>
+        ${scheduledFuture && composerCapable ? `
+          <button class="btn btn-secondary btn-sm" data-action="queue-schedule" data-id="${draft.id}" style="margin-top:8px;width:100%">
+            Approve now, post ${SocialOSUtils.formatDate(/** @type {string} */ (draft.scheduled_for))} ${SocialOSUtils.formatTime(/** @type {string} */ (draft.scheduled_for))} (push reminder)
+          </button>` : ''}
         ${composerCapable
-          ? ''
-          : `<p class="text-secondary" style="font-size:0.75rem;margin-top:6px">SocialOS doesn't publish ${escapeHtml((draft.channel || '').toLowerCase())} — approving marks it approved and copies the text for you to place.</p>`}
+          ? (isDirect ? '' : `<p class="text-secondary" style="font-size:0.75rem;margin-top:6px">${PLATFORM_LABELS[channel] || escapeHtml(channel)} can't be auto-posted — one tap approves, copies the text, and opens the app to paste.</p>`)
+          : `<p class="text-secondary" style="font-size:0.75rem;margin-top:6px">SocialOS doesn't publish ${escapeHtml(channel)} — approving marks it approved and copies the text for you to place.</p>`}
       </div>`;
   }
 
   /**
    * Render the Front Office approval queue screen.
-   * @param {{configured: boolean, drafts: import('./queue.js').MktDraft[], error: string|null}} data
+   * @param {{configured: boolean, drafts: import('./queue.js').MktDraft[], error: string|null, direct?: Object<string, boolean>}} data
    */
   function renderQueue(data) {
     const container = $('queue-content');
@@ -1912,8 +2024,8 @@ const SocialOSUI = (() => {
         ${data.configured ? `<button class="btn btn-secondary btn-sm" data-action="queue-refresh" style="margin-left:auto">Refresh</button>` : ''}
       </div>
       <p class="text-secondary" style="margin:4px 0 16px">
-        Drafts your agents queued for review. Approving hands post drafts to
-        the Quick Composer — nothing is published without you.
+        Drafts your agents queued for review. One tap approves and posts as
+        far as each platform allows — nothing is published without you.
       </p>`;
 
     if (!data.configured) {
@@ -1939,7 +2051,7 @@ const SocialOSUI = (() => {
     } else {
       html += `
         <div class="approval-list">
-          ${data.drafts.map(d => renderQueueCard(d, SocialOSQueue.isComposerChannel(d))).join('')}
+          ${data.drafts.map(d => renderQueueCard(d, SocialOSQueue.isComposerChannel(d), data.direct || {})).join('')}
         </div>`;
     }
 
@@ -1950,11 +2062,18 @@ const SocialOSUI = (() => {
    * Edit-then-approve view for one queued draft (same shape as
    * renderPostEdit). Saving approves with the edited body; the agent's
    * original_body stays frozen server-side for edit-rate diffing.
+   * Composer-capable channels get SAVE & POST (one tap: approve with the
+   * edit, then publish/copy exactly like the card's primary button).
    * @param {import('./queue.js').MktDraft} draft
+   * @param {Object<string, boolean>} [direct] - platform → connected for direct publish
    */
-  function renderQueueEdit(draft) {
+  function renderQueueEdit(draft, direct) {
     const container = $('queue-content');
     if (!container) return;
+
+    const channel = (draft.channel || '').toLowerCase();
+    const composerCapable = SocialOSQueue.isComposerChannel(draft);
+    const isDirect = composerCapable && !!(direct || {})[channel];
 
     container.innerHTML = `
       <div class="edit-view">
@@ -1972,9 +2091,13 @@ const SocialOSUI = (() => {
         </div>
         <div class="card-actions">
           <button class="btn btn-secondary btn-sm" data-action="queue-refresh">Cancel</button>
-          <button class="btn btn-success btn-lg" data-action="queue-save-approve" data-id="${draft.id}">
-            SAVE &amp; APPROVE
-          </button>
+          ${composerCapable ? `
+            <button class="btn btn-success btn-lg" data-action="queue-save-post" data-id="${draft.id}">
+              ${isDirect ? 'SAVE &amp; POST' : 'SAVE &amp; COPY'}
+            </button>` : `
+            <button class="btn btn-success btn-lg" data-action="queue-save-approve" data-id="${draft.id}">
+              SAVE &amp; APPROVE
+            </button>`}
         </div>
       </div>`;
   }
@@ -2295,7 +2418,7 @@ const SocialOSUI = (() => {
         <span class="cmp-cta-icon">${ICONS.spark}</span> Draft &amp; Post
       </button>
 
-      ${(data.posts && data.posts.length) ? renderComposerDrafts(data.posts, data.results) : ''}
+      ${(data.posts && data.posts.length) ? renderComposerDrafts(data.posts, data.results, data.schedule) : ''}
     `;
 
     const replyMode = `
@@ -2361,10 +2484,14 @@ const SocialOSUI = (() => {
    * The "review & post" block: an editable card per drafted platform, a single
    * "Post all" button, and — once posted — an honest per-platform outcome
    * (published link, copy-and-open for assisted platforms, or a retry on error).
+   * Also offers "Schedule instead": pick a time (pre-filled with the next
+   * best slot for the selected platforms), and a late-night nudge so a
+   * morning-flavored post doesn't go out at 10PM.
    * @param {ScheduledPost[]} posts
    * @param {Array<{platform: string, mode: string, text: string, url?: string|null, deepLink?: string, error?: string}>|null} [results]
+   * @param {{show: boolean, time: string}} [schedule] - composer schedule view state
    */
-  function renderComposerDrafts(posts, results) {
+  function renderComposerDrafts(posts, results, schedule) {
     const byPlatform = {};
     (results || []).forEach(r => { byPlatform[r.platform] = r; });
 
@@ -2403,6 +2530,31 @@ const SocialOSUI = (() => {
 
     const allDone = results && results.length && results.every(r => r.mode === 'published');
 
+    // Schedule block: next best slot suggestion + a late-night nudge.
+    const platforms = posts.map(p => p.platform);
+    const suggested = SocialOSUtils.nextBestTime(platforms);
+    const sched = schedule || { show: false, time: '' };
+    // datetime-local wants "YYYY-MM-DDTHH:MM" in LOCAL time.
+    const toLocalInput = (/** @type {Date} */ d) =>
+      `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}T${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+    const suggestedLabel = `${SocialOSUtils.formatDate(suggested.toISOString())} ${SocialOSUtils.formatTime(suggested.toISOString())}`;
+    const offHoursNudge = SocialOSUtils.isOffHours()
+      ? `<p class="cmp-hint"><span class="cmp-warn">It's ${SocialOSUtils.formatTime(new Date().toISOString())} — posts landing now get buried overnight.</span> Best next slot: <b>${suggestedLabel}</b>.</p>`
+      : '';
+
+    const scheduleBlock = sched.show ? `
+      <div class="cmp-schedule card" style="margin-top:8px;padding:12px">
+        <label class="cmp-label" for="composer-schedule-time">Post at</label>
+        <input type="datetime-local" id="composer-schedule-time" class="cmp-input"
+               min="${toLocalInput(new Date())}"
+               value="${escapeHtml(sched.time || toLocalInput(suggested))}">
+        <p class="cmp-hint">Suggested: <b>${suggestedLabel}</b> — the next high-attention slot for ${platforms.map(p => PLATFORM_LABELS[p]).join(' + ')}.</p>
+        <button class="btn btn-accent btn-lg cmp-postall" data-action="composer-schedule-all">
+          <span class="cmp-cta-icon">${ICONS.send}</span> Schedule ${posts.length > 1 ? `all ${posts.length}` : 'it'}
+        </button>
+        <p class="cmp-hint">You'll get a push notification at that time — posting is one tap from there (direct platforms), so nothing goes out without you.</p>
+      </div>` : '';
+
     return `
       <div class="cmp-drafts">
         <div class="cmp-drafts-head"><h3>Review &amp; post</h3><span class="text-secondary">${posts.length} draft${posts.length > 1 ? 's' : ''}</span></div>
@@ -2410,9 +2562,14 @@ const SocialOSUI = (() => {
         ${allDone ? `
           <div class="cmp-alldone">${ICONS.shield} All set — posted to every connected platform.</div>
         ` : `
+          ${offHoursNudge}
           <button class="btn btn-accent btn-lg cmp-postall" data-action="composer-post-all">
             <span class="cmp-cta-icon">${ICONS.send}</span> Post all ${posts.length} now
           </button>
+          <button class="btn btn-secondary cmp-postall" data-action="composer-schedule-toggle" style="margin-top:8px">
+            ${sched.show ? 'Never mind — post now instead' : `Schedule instead (suggested: ${suggestedLabel})`}
+          </button>
+          ${scheduleBlock}
         `}
       </div>`;
   }
