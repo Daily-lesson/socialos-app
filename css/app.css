@@ -213,6 +213,19 @@ img { max-width: 100%; height: auto; }
 
 .nav-tab-icon svg { width: 100%; height: 100%; }
 
+/* 8 tabs share the bar: without min-width:0 a long label ("Approvals") makes
+   its flex item refuse to shrink on narrow phones — tabs go unequal and the
+   bar overflows/clips (the iOS render bug). Labels ellipsize instead. */
+.nav-tab { min-width: 0; }
+
+.nav-tab-label {
+  max-width: 100%;
+  padding: 0 2px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .nav-tab.active { color: var(--text-primary); }
 
 .nav-tab.active .nav-tab-icon {

@@ -5,7 +5,7 @@
  * Paths are relative so the app works from a subpath (e.g. GitHub Pages).
  */
 
-const CACHE_NAME = 'socialos-v17'; // v17: 3-step onboarding + accordion brief
+const CACHE_NAME = 'socialos-v18'; // v18: gradient app icons (iOS black-tile fix) + nav-label overflow fix
 const SHELL_ASSETS = [
   './',
   './index.html',
