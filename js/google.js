@@ -31,6 +31,19 @@
  * @property {string} [nameContains] - only files whose name contains this text
  */
 
+/**
+ * Outcome of a Drive scan — honest counts so the caller can report exactly
+ * what happened, not just how many items landed.
+ * @typedef {Object} DriveScanResult
+ * @property {ContentItem[]} items - the newly imported items (may be empty)
+ * @property {number} imported - items.length (new items stored this run)
+ * @property {number} alreadyImported - candidates skipped as dupes of existing google_drive items
+ * @property {number} tooLarge - candidates skipped by the byte-size cap
+ * @property {number} lowScore - candidates skipped by the local pre-filter
+ * @property {number} failed - candidates that errored after retries
+ * @property {boolean} truncated - true if the maxFiles cap left eligible new files unscanned
+ */
+
 const SocialOSGoogle = (() => {
   'use strict';
 
@@ -373,9 +386,11 @@ const SocialOSGoogle = (() => {
       clauses.push(`modifiedTime > '${cutoff}'`);
     }
 
-    // Only files the user owns — skips books, shared reference docs, and
-    // other people's articles that happen to live in their Drive but weren't
-    // written by them. Cheaper (fewer files) and more relevant.
+    // Only files the user OWNS — Drive ownership, which is NOT authorship. Skips
+    // books and shared reference docs others put in the user's Drive, but ALSO
+    // excludes files the user wrote that live in a shared/team drive (owned by
+    // the org, not 'me'). Cheaper and usually more relevant; the scan sheet
+    // states the tradeoff so the user can opt out.
     if (opts.ownedByMe) {
       clauses.push("'me' in owners");
     }
@@ -429,10 +444,36 @@ const SocialOSGoogle = (() => {
   const CONTENT_MAX_CHARS = 2000;
 
   /**
+   * Retry an async op with backoff — vanilla, no deps. Used to ride out
+   * transient Claude-proxy failures (e.g. 429 rate limits) when a batch of
+   * files hits analyseContent at once.
+   * @template T
+   * @param {() => Promise<T>} op
+   * @param {number[]} delaysMs - backoff before each retry; length = max retries
+   * @returns {Promise<T>}
+   */
+  async function withRetry(op, delaysMs) {
+    let lastErr;
+    for (let attempt = 0; attempt <= delaysMs.length; attempt++) {
+      try {
+        return await op();
+      } catch (err) {
+        lastErr = err;
+        if (attempt < delaysMs.length) {
+          await new Promise(resolve => setTimeout(resolve, delaysMs[attempt]));
+        }
+      }
+    }
+    throw lastErr;
+  }
+
+  /**
    * Get the opening slice of a Drive file's text.
    * For Google-native docs, exports as plain text (export ignores Range, but
-   * these are small). For everything else, downloads only the first
-   * CONTENT_HEAD_BYTES via a Range header instead of the whole file.
+   * these are small) — returns early. For everything else, tries a ranged
+   * download of just the first CONTENT_HEAD_BYTES; if that throws or comes
+   * back non-ok/non-206 (some proxies reject Range with a 4xx), falls back to
+   * one unranged retry instead of dropping the file.
    * @param {string} fileId
    * @param {string} mimeType
    * @returns {Promise<string>}
@@ -442,47 +483,61 @@ const SocialOSGoogle = (() => {
     if (!token) throw new Error('Google not connected');
 
     const isGoogleDoc = mimeType.startsWith('application/vnd.google-apps.');
-    /** @type {Object<string, string>} */
-    const headers = { Authorization: `Bearer ${token}` };
-    let url;
-
     if (isGoogleDoc) {
-      url = `https://www.googleapis.com/drive/v3/files/${fileId}/export?mimeType=text/plain`;
-    } else {
-      url = `https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`;
-      // Only the opening chunk — Drive honours this for media downloads and
-      // replies 206 Partial Content. A server that ignores it just returns
-      // 200 with the full body, which we still slice, so this is safe.
-      headers.Range = `bytes=0-${CONTENT_HEAD_BYTES - 1}`;
+      const exportUrl = `https://www.googleapis.com/drive/v3/files/${fileId}/export?mimeType=text/plain`;
+      const response = await fetch(exportUrl, { headers: { Authorization: `Bearer ${token}` } });
+      if (!response.ok) throw new Error(`Drive file fetch error: ${response.status}`);
+      const text = await response.text();
+      return text.slice(0, CONTENT_MAX_CHARS);
     }
 
-    const response = await fetch(url, { headers });
+    const url = `https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`;
+    /** @type {Object<string, string>} */
+    const authHeaders = { Authorization: `Bearer ${token}` };
 
-    // 206 Partial Content is the expected success for a ranged request.
-    if (!response.ok && response.status !== 206) {
-      throw new Error(`Drive file fetch error: ${response.status}`);
+    // First try only the opening chunk via Range — big files cost the same as
+    // small ones when Drive honours it (206 Partial Content).
+    try {
+      const ranged = await fetch(url, {
+        headers: { ...authHeaders, Range: `bytes=0-${CONTENT_HEAD_BYTES - 1}` }
+      });
+      if (ranged.ok || ranged.status === 206) {
+        return (await ranged.text()).slice(0, CONTENT_MAX_CHARS);
+      }
+      // Non-ok / non-206 (some proxies reject Range with 4xx) — fall through.
+    } catch {
+      // Network/CORS rejection of the ranged request — fall through and retry.
     }
 
-    const text = await response.text();
-    return text.slice(0, CONTENT_MAX_CHARS);
+    // Fallback: one unranged retry. Bounded by the scan's size cap (files over
+    // the cap are dropped before download), so this can't pull a 40 MB book —
+    // we still slice to CONTENT_MAX_CHARS.
+    const full = await fetch(url, { headers: authHeaders });
+    if (!full.ok) throw new Error(`Drive file fetch error: ${full.status}`);
+    return (await full.text()).slice(0, CONTENT_MAX_CHARS);
   }
 
   /**
    * Scan Google Drive: list the files matching the user's scope (type +
-   * timeframe + optional name filter, capped to a maximum), pre-filter
-   * locally, then send high-scoring files to Claude for analysis.
+   * timeframe + optional name filter, capped to a maximum), skip files
+   * already imported and files over the size cap, pre-filter locally, then
+   * send high-scoring files to Claude for analysis. Returns honest counts for
+   * everything that happened, not just the imported items.
    *
    * The scope is what stops a large Drive from flooding the scan: instead of
    * listing every file and reading them all, the type/timeframe filters are
-   * pushed into the Drive `q` query and only up to `maxFiles` (newest-first)
-   * are ever fetched and analysed. Omitting `types`/`sinceDays` and raising
-   * `maxFiles` gives the broad "scan everything" behaviour.
+   * pushed into the Drive `q` query and only up to `maxFiles` NEW (not
+   * already-imported) files, newest-first, are ever fetched and analysed.
+   * Omitting `types`/`sinceDays` and raising `maxFiles` gives the broad "scan
+   * everything" behaviour. Re-scanning is safe and cheap: files already in
+   * the library (by `source_id`) are skipped before any download or Claude
+   * call, so a re-scan doesn't duplicate the library or re-pay every call.
    *
    * Back-compat: `scanDrive(onProgress)` (options omitted) still works and
    * scans all supported document types, newest 50.
    * @param {DriveScanOptions|((current: number, total: number, fileName: string) => void)} [options]
    * @param {(current: number, total: number, fileName: string) => void} [onProgress]
-   * @returns {Promise<ContentItem[]>}
+   * @returns {Promise<DriveScanResult>}
    */
   async function scanDrive(options, onProgress) {
     // Support the old single-argument signature scanDrive(onProgress).
@@ -494,28 +549,46 @@ const SocialOSGoogle = (() => {
     const report = onProgress || (() => {});
     const maxFiles = Math.max(1, opts.maxFiles || DEFAULT_SCAN_MAX_FILES);
     const query = buildDriveQuery(opts);
+    const maxFileBytes = opts.maxFileBytes || DEFAULT_MAX_FILE_BYTES;
+
+    // Dedup: load existing library once and skip files we've already imported,
+    // so a re-scan doesn't duplicate the library or re-pay every Claude call.
+    // No index on source_id (js/db.js) — enumerate and filter in JS. Matching on
+    // modifiedTime to re-import changed files is intentionally OUT OF SCOPE here
+    // (future work); we only skip on source_id.
+    const existing = await SocialOSDB.getAllContent();
+    const importedDriveIds = new Set(
+      existing
+        .filter(c => c.source === 'google_drive' && c.source_id)
+        .map(c => c.source_id)
+    );
 
     const items = [];
+    let alreadyImported = 0;
+    let tooLarge = 0;
+    const candidates = [];      // eligible NEW files, newest-first
     let pageToken = null;
-    const allFiles = [];
 
-    // Fetch file metadata — but stop as soon as we have enough. Because the
-    // list is modifiedTime-desc, the first `maxFiles` are the newest matches.
+    // Page until we have enough NEW candidates (the cap is on new work, not on
+    // files looked at). Because dedup/size skips happen here, we keep paging past
+    // files that don't count toward the cap. Skip counts therefore cover only the
+    // pages actually fetched.
     do {
       const result = await listDriveFiles(pageToken, query);
-      allFiles.push(...result.files);
+      for (const f of result.files) {
+        if (importedDriveIds.has(f.id)) { alreadyImported++; continue; }
+        // `size` is bytes-as-string; absent for Google-native docs (kept).
+        if (f.size && Number(f.size) > maxFileBytes) { tooLarge++; continue; }
+        candidates.push(f);
+      }
       pageToken = result.nextPageToken || null;
-    } while (pageToken && allFiles.length < maxFiles);
+    } while (pageToken && candidates.length < maxFiles);
 
-    // Drop files bigger than the size cap before downloading anything —
-    // long books / large exports slow the scan and rarely make good short-
-    // form source material. `size` is bytes as a string, and is absent for
-    // Google-native docs (those have no fixed byte size), which we keep.
-    const maxFileBytes = opts.maxFileBytes || DEFAULT_MAX_FILE_BYTES;
-    const files = allFiles
-      .filter(f => !f.size || Number(f.size) <= maxFileBytes)
-      .slice(0, maxFiles); // hard cap so a big Drive can't blow past the limit
+    // Truncated if the cap left eligible new files unscanned: either this page
+    // pushed us past the cap, or we stopped with a page token still pending.
+    const truncated = candidates.length > maxFiles || !!pageToken;
 
+    const files = candidates.slice(0, maxFiles); // cap applies to NEW files only
     const total = files.length;
     let current = 0;
 
@@ -524,11 +597,10 @@ const SocialOSGoogle = (() => {
     const blockedTerms = settings?.content_scrubbing?.custom_blocked_terms;
 
     /**
-     * Fetch, filter, analyse and store one file. Returns the stored item, or
-     * null if the file was skipped (low score / error). Kept side-effect-safe
-     * so a whole batch can run concurrently.
+     * Fetch, filter, analyse and store one file. Kept side-effect-safe so a
+     * whole batch can run concurrently.
      * @param {any} file
-     * @returns {Promise<ContentItem|null>}
+     * @returns {Promise<{item: ContentItem|null, outcome: 'imported'|'lowScore'|'failed'}>}
      */
     async function processFile(file) {
       report(++current, total, file.name);
@@ -537,10 +609,13 @@ const SocialOSGoogle = (() => {
 
         // Local pre-filter (Section 7) — cheap gate before spending a Claude call.
         const score = SocialOSUtils.preFilterScore(text, file.mimeType);
-        if (score < 0.3) return null;
+        if (score < 0.3) return { item: null, outcome: 'lowScore' };
 
         const scrubbed = SocialOSUtils.scrub(text, blockedTerms);
-        const analysis = await SocialOSAI.analyseContent(scrubbed.text, file.name);
+        const analysis = await withRetry(
+          () => SocialOSAI.analyseContent(scrubbed.text, file.name),
+          [1000, 3000]   // up to 2 retries: 1s then 3s, then count as failed
+        );
 
         /** @type {ContentItem} */
         const item = {
@@ -566,10 +641,10 @@ const SocialOSGoogle = (() => {
         };
 
         await SocialOSDB.put(SocialOSDB.STORES.content, item);
-        return item;
+        return { item, outcome: 'imported' };
       } catch (err) {
         console.warn(`Skipping file ${file.name}:`, err.message);
-        return null;
+        return { item: null, outcome: 'failed' };
       }
     }
 
@@ -577,15 +652,27 @@ const SocialOSGoogle = (() => {
     // wait (Drive download + Claude call), so running a batch in parallel
     // instead of one-at-a-time is the biggest single speed-up. Batching (vs.
     // firing all at once) keeps us from hammering the Drive/Claude proxies.
+    let lowScore = 0;
+    let failed = 0;
     for (let i = 0; i < files.length; i += SCAN_BATCH_SIZE) {
       const batch = files.slice(i, i + SCAN_BATCH_SIZE);
       const results = await Promise.all(batch.map(processFile));
-      for (const item of results) {
-        if (item) items.push(item);
+      for (const r of results) {
+        if (r.outcome === 'imported' && r.item) items.push(r.item);
+        else if (r.outcome === 'lowScore') lowScore++;
+        else if (r.outcome === 'failed') failed++;
       }
     }
 
-    return items;
+    return {
+      items,
+      imported: items.length,
+      alreadyImported,
+      tooLarge,
+      lowScore,
+      failed,
+      truncated
+    };
   }
 
   // ── Photos Picker API (Phase 2, BUILD_PLAN §7/§8) ──────────────────────

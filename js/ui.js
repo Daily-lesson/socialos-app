@@ -309,7 +309,7 @@ const SocialOSUI = (() => {
           </button>
         </div>
         <p class="text-secondary" style="font-size:0.85em;margin-top:4px">
-          Skips books, shared docs, and articles others put in your Drive.
+          On: only files you own. Skips books and shared docs others dropped in your Drive — but also skips things you wrote that live in a shared or team drive. Turn it off to include those.
         </p>
       </div>
 

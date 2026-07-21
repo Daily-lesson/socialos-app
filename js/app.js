@@ -1759,12 +1759,25 @@ const SocialOS = (() => {
 
           SocialOSUI.closeSheet();
           try {
-            const items = await SocialOSGoogle.scanDrive(
+            const result = await SocialOSGoogle.scanDrive(
               { types, sinceDays, maxFiles, nameContains, ownedByMe },
               (current, total, name) => SocialOSUI.renderScanProgress(current, total, name)
             );
             SocialOSUI.loading(false);
-            SocialOSUI.toast(`Found ${items.length} content items from Drive!`, 'success');
+
+            // Honest summary — say what was skipped and why, omitting zero counts.
+            const parts = [];
+            if (result.imported) parts.push(`Imported ${result.imported}`);
+            if (result.alreadyImported) parts.push(`${result.alreadyImported} already in library`);
+            if (result.tooLarge) parts.push(`${result.tooLarge} too large`);
+            if (result.lowScore) parts.push(`${result.lowScore} low-signal`);
+            if (result.failed) parts.push(`${result.failed} failed`);
+            if (!parts.length) parts.push('No matching files found');
+            let msg = parts.join(' · ');
+            if (result.truncated) {
+              msg += ` — hit the ${maxFiles}-file cap; narrow the scope or raise the cap for the rest`;
+            }
+            SocialOSUI.toast(msg, result.imported ? 'success' : 'info');
             if (state.currentScreen === 'library') await renderLibrary();
             if (state.currentScreen === 'dashboard') await renderDashboard();
           } catch (err) {
