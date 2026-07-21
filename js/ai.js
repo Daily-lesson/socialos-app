@@ -335,6 +335,31 @@ VIDEO: [one-sentence video concept]`
   }
 
   /**
+   * Pick the best-matching Library photo for a drafted post (Auto-Visuals v2).
+   * Candidates are COMPACT METADATA ONLY (id/description/tags/ai_rating) — never
+   * image bytes — to keep the call cheap. Best-effort: the caller treats any
+   * throw/empty as "no suggestion" and stays silent (CLAUDE.md gotcha 5).
+   * @param {string} postText
+   * @param {Array<{id: string, description: string, tags: string[], ai_rating: string}>} candidates
+   * @returns {Promise<string|null>} chosen candidate id, or null for "none fit"
+   */
+  async function suggestMediaForPost(postText, candidates) {
+    const trimmed = (postText || '').trim();
+    if (!trimmed || !candidates?.length) return null;
+    const settings = await SocialOSDB.getSettings();
+    const scrubbed = SocialOSUtils.scrub(trimmed, settings?.content_scrubbing?.custom_blocked_terms).text;
+    const list = candidates
+      .map(c => `${c.id} — ${c.description || '(no description)'} [tags: ${(c.tags || []).join(', ') || 'none'}; rating: ${c.ai_rating}]`)
+      .join('\n');
+    const systemPrompt = 'You match a social post to the single best photo from a list, by meaning. Reply with ONLY the id of the best match, or the exact word NONE if none genuinely fit. No explanation.';
+    const userMessage = `Post:\n${scrubbed}\n\nPhotos:\n${list}`;
+    const result = (await callClaude(systemPrompt, userMessage, 20)).trim();
+    if (!result || /^none$/i.test(result)) return null;
+    const match = candidates.find(c => result.includes(c.id));
+    return match ? match.id : null;
+  }
+
+  /**
    * Extract hashtags from post text.
    * @param {string} text
    * @returns {string[]}
@@ -720,6 +745,7 @@ Return ONLY the comment text.`;
     buildSystemPrompt,
     generatePostDrafts,
     suggestQuoteLine,
+    suggestMediaForPost,
     analyseContent,
     analysePhoto,
     analyseLinkedProfiles,

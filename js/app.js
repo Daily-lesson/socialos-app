@@ -11,7 +11,7 @@ const SocialOS = (() => {
 
   /**
    * In-memory working state.
-   * @type {{currentScreen: string, onboardingStep: number, onboardingData: Object<string, any>, calendarFocusDate: string|null, approvalsTab: string, engagementSubTab: string, queue: {drafts: any[], direct: Object<string, boolean>}, composer: {mode: string, text: string, link: string, selected: string[]|null, oneTap: boolean, posts: any[], results: any[]|null, schedule: {show: boolean, time: string}, replyPlatform: string, comment: string, postSummary: string, reply: {reply: string, alternative: string}|null, attach: {contentId: string, thumbUrl: string, title: string, flagged: boolean}|null, attachPicker: boolean, gen: {show: boolean, template: string, size: string, text: string, autoText: string, note: string, byline: string}}}}
+   * @type {{currentScreen: string, onboardingStep: number, onboardingData: Object<string, any>, calendarFocusDate: string|null, approvalsTab: string, engagementSubTab: string, queue: {drafts: any[], direct: Object<string, boolean>}, composer: {mode: string, text: string, link: string, selected: string[]|null, oneTap: boolean, posts: any[], results: any[]|null, schedule: {show: boolean, time: string}, replyPlatform: string, comment: string, postSummary: string, reply: {reply: string, alternative: string}|null, attach: {contentId: string, thumbUrl: string, title: string, flagged: boolean, auto?: boolean}|null, attachPicker: boolean, autoCardId: string|null, autoVisualBlocked: boolean, gen: {show: boolean, template: string, size: string, text: string, autoText: string, note: string, byline: string}}}}
    */
   const state = {
     currentScreen: 'landing',
@@ -42,8 +42,11 @@ const SocialOS = (() => {
       postSummary: '',
       reply: null,
       // Visuals attach — ephemeral, mirrors onto every draft's media_content_id.
-      attach: null,        // { contentId, thumbUrl, title, flagged } | null
+      attach: null,        // { contentId, thumbUrl, title, flagged, auto? } | null
       attachPicker: false, // "From your library" grid open?
+      // Auto-Visuals v2 (race guard state — see autoVisualStale/maybeAutoAttachVisual).
+      autoCardId: null,        // ContentItem id of the current AUTO quote card (orphan tracking), else null
+      autoVisualBlocked: false, // any manual attach/remove sets true → auto-visuals won't (re)attach this run
       // Generate-a-quote-card panel state (js/media.js renderQuoteCard).
       gen: { show: false, template: 'clean', size: 'square', text: '', autoText: '', note: '', byline: '' }
     }
@@ -52,6 +55,10 @@ const SocialOS = (() => {
   // Debounce handle for the live gen-panel preview (opp 1 / C5) — module-scoped
   // so repeated keystrokes clear the previous pending refresh.
   let genPreviewTimer = null;
+
+  // Bumped each composer-draft run; guards the fire-and-forget Auto-Visuals
+  // v2 worker (maybeAutoAttachVisual) against a stale/superseded run.
+  let composerDraftEpoch = 0;
 
   // ── Router ────────────────────────────────────────────────────────────
 
@@ -294,6 +301,11 @@ const SocialOS = (() => {
   async function postAllComposer() {
     const c = state.composer;
     if (!c.posts || !c.posts.length) return;
+    // Auto-Visuals v2 honesty guard (gotcha 6): posting has started, so
+    // invalidate any in-flight auto-visual worker — it must never land an
+    // attachment between here and publishOne reading media_content_id, or a
+    // post would ship an image the user never saw on the review screen.
+    composerDraftEpoch++;
     await withSensitivityConfirm(c.posts, doPostAllComposer);
   }
 
@@ -312,6 +324,7 @@ const SocialOS = (() => {
         results.push(await SocialOSComposer.publishOne(p.id));
       }
       c.results = results;
+      c.autoCardId = null; // Auto-Visuals v2: once posted, the auto card is kept — stop tracking it as an orphan.
 
       const posted = results.filter(r => r.mode === 'published').length;
       const copy = results.filter(r => r.mode === 'assisted').length;
@@ -467,6 +480,115 @@ const SocialOS = (() => {
   }
 
   /**
+   * True when the current auto-visual run has been superseded or overridden —
+   * re-checked after every await (Auto-Visuals v2 race guard, see the
+   * "Design: race handling" section of the plan this feature shipped from).
+   * @param {number} myEpoch
+   * @returns {boolean}
+   */
+  function autoVisualStale(myEpoch) {
+    const c = state.composer;
+    return myEpoch !== composerDraftEpoch || c.autoVisualBlocked || c.attach !== null || state.currentScreen !== 'compose';
+  }
+
+  /**
+   * Attach an auto-chosen visual loudly + write it through onto every draft
+   * (C1). Never sets autoVisualBlocked, so the user can still remove it.
+   * @param {{contentId: string, thumbUrl: string, title: string, flagged: boolean}} attach
+   */
+  async function applyAutoAttach(attach) {
+    const c = state.composer;
+    c.attach = { ...attach, auto: true };
+    await applyAttachToExistingDrafts(); // C1 write-through onto post.media_content_id
+    await renderComposer();
+  }
+
+  /**
+   * Auto-Visuals v2 behavior 1 helper: ask Claude for the best eligible
+   * Library photo. Excludes face-flagged, low/skip-rated, and generated
+   * items. Silent on any failure (gotcha 5).
+   * @param {string} text
+   * @returns {Promise<ContentItem|null>}
+   */
+  async function suggestLibraryPhoto(text) {
+    const all = await SocialOSDB.getAllContent();
+    const candidates = all.filter(i =>
+      i.type === 'photo' && i.thumbnail_url &&
+      !i.tags?.includes('generated') &&
+      !i.sensitivity_flags?.includes('faces_visible') &&   // HARD RULE (a): flagged photos are manual-only
+      (i.ai_rating === 'high' || i.ai_rating === 'medium')  // exclude low/skip
+    );
+    if (!candidates.length) return null;
+    const compact = candidates.map(i => ({ id: i.id, description: i.description || i.title, tags: i.tags || [], ai_rating: i.ai_rating }));
+    let chosenId;
+    try { chosenId = await SocialOSAI.suggestMediaForPost(text, compact); }
+    catch { return null; }
+    return chosenId ? (candidates.find(i => i.id === chosenId) || null) : null;
+  }
+
+  /**
+   * Auto-Visuals v2 behavior 2: generate + attach a quote card from the
+   * drafted text, tagged ['generated','auto']. Deletes itself if the user
+   * acts mid-render (orphan rule).
+   * @param {number} myEpoch
+   */
+  async function autoGenerateCard(myEpoch) {
+    if (typeof SocialOSMedia === 'undefined') return;
+    const c = state.composer;
+    let line = firstSentenceOf(c.text);                    // instant offline fallback
+    try { const s = await SocialOSAI.suggestQuoteLine(c.text); if (s) line = s; } catch { /* gotcha 5 */ }
+    if (autoVisualStale(myEpoch)) return;
+    const settings = await SocialOSDB.getSettings();
+    const scrubbed = SocialOSUtils.scrub(line, settings?.content_scrubbing?.custom_blocked_terms).text;
+    const profile = await SocialOSDB.getProfile();
+    if (SocialOSMedia.ensureFonts) await SocialOSMedia.ensureFonts(); // risk 4
+    if (autoVisualStale(myEpoch)) return;
+    const size = (c.selected?.length === 1 && c.selected[0] === 'linkedin') ? 'wide' : 'square';
+    const dataUri = SocialOSMedia.renderQuoteCard({ text: scrubbed, template: 'clean', size, byline: profile?.name || '' });
+    /** @type {ContentItem} */
+    const item = {
+      id: SocialOSUtils.uuid(), source: 'manual', source_id: null, type: 'photo',
+      title: SocialOSUtils.truncate(scrubbed, 60), description: 'Auto-generated quote card',
+      thumbnail_url: dataUri, raw_content: null, tags: ['generated', 'auto'],
+      sensitivity_flags: [], scrubbed: true, ai_rating: 'medium',
+      ai_rating_reason: 'Auto-generated quote card', suggested_platforms: [], suggested_angles: [],
+      status: 'available', post_history: [], added_at: SocialOSUtils.now(), last_used: null
+    };
+    await SocialOSDB.put(SocialOSDB.STORES.content, item);
+    if (autoVisualStale(myEpoch)) { await SocialOSDB.del(SocialOSDB.STORES.content, item.id); return; } // don't litter
+    c.autoCardId = item.id;
+    await applyAutoAttach({ contentId: item.id, thumbUrl: dataUri, title: 'Quote card', flagged: false });
+  }
+
+  /**
+   * Auto-Visuals v2 orchestrator — fire-and-forget after drafts render.
+   * Behavior 1 (Library photo) then Behavior 2 (quote card, only when there
+   * is no link). Fully silent on failure (gotcha 5).
+   * @param {number} myEpoch
+   */
+  async function maybeAutoAttachVisual(myEpoch) {
+    try {
+      const c = state.composer;
+      const settings = await SocialOSDB.getSettings();
+      if (settings && settings.auto_visuals === false) return; // default ON: only explicit false disables
+      if (autoVisualStale(myEpoch)) return;
+
+      const photo = await suggestLibraryPhoto(c.text);
+      if (autoVisualStale(myEpoch)) return;
+      if (photo) {
+        await applyAutoAttach({
+          contentId: photo.id, thumbUrl: photo.thumbnail_url,
+          title: photo.title, flagged: false
+        });
+        return;
+      }
+      // Behavior 2 fallback — skip for link posts (they get a platform link-card).
+      if ((c.link || '').trim()) return;
+      await autoGenerateCard(myEpoch);
+    } catch { /* gotcha 5: a nicety never raises a toast */ }
+  }
+
+  /**
    * Render the quote card (js/media.js — synchronous, app-local, no network),
    * save it to the Library as a normal 'photo' ContentItem tagged 'generated',
    * and attach it to the composer draft in progress (TECH_PLAN C4).
@@ -477,6 +599,15 @@ const SocialOS = (() => {
   async function saveGeneratedCard(hookText, template, size) {
     const text = (hookText || '').trim();
     if (!text) { SocialOSUI.toast('Add a line to feature first.', 'warning'); return; }
+
+    const c = state.composer;
+    // Auto-Visuals v2 orphan rule: a manual "Generate card" supersedes any
+    // auto card this run — delete it and block further auto-attach this run.
+    if (c.autoCardId && c.attach?.auto && c.attach.contentId === c.autoCardId) {
+      await SocialOSDB.del(SocialOSDB.STORES.content, c.autoCardId);
+    }
+    c.autoCardId = null;
+    c.autoVisualBlocked = true;
 
     const settings = await SocialOSDB.getSettings();
     const scrubbed = SocialOSUtils.scrub(text, settings?.content_scrubbing?.custom_blocked_terms).text;
@@ -514,7 +645,6 @@ const SocialOS = (() => {
     };
     await SocialOSDB.put(SocialOSDB.STORES.content, item);
 
-    const c = state.composer;
     c.attach = { contentId: item.id, thumbUrl: dataUri, title: 'Quote card', flagged: false };
     c.gen.show = false;
     await renderComposer();
@@ -595,6 +725,10 @@ const SocialOS = (() => {
       return;
     }
 
+    // Auto-Visuals v2 honesty guard (gotcha 6): scheduling has started —
+    // invalidate any in-flight auto-visual worker so it can't attach an image
+    // onto a post being persisted that the user never saw on the review screen.
+    composerDraftEpoch++;
     await withSensitivityConfirm(c.posts, () => doScheduleAllComposer(when));
   }
 
@@ -632,6 +766,8 @@ const SocialOS = (() => {
       c.results = null;
       c.text = '';
       c.link = '';
+      c.attach = null;
+      c.autoCardId = null; // Auto-Visuals v2: once scheduled, the auto card is kept — stop tracking it as an orphan.
       c.schedule = { show: false, time: '' };
       SocialOSUI.loading(false);
       const autoOn = (await SocialOSDB.getSettings())?.auto_post_scheduled;
@@ -1753,6 +1889,17 @@ const SocialOS = (() => {
           if (!c.text.trim()) { SocialOSUI.toast('Write something to share first.', 'warning'); break; }
           if (!c.selected || !c.selected.length) { SocialOSUI.toast('Pick at least one platform.', 'warning'); break; }
 
+          // Auto-Visuals v2: a fresh run re-suggests. Drop an unused auto-attach
+          // from the previous run (and delete an orphaned auto card). A MANUAL
+          // attach stays sticky across re-drafts.
+          if (c.attach?.auto) {
+            if (c.autoCardId && c.attach.contentId === c.autoCardId) await SocialOSDB.del(SocialOSDB.STORES.content, c.autoCardId);
+            c.autoCardId = null;
+            c.attach = null;
+          }
+          const myEpoch = ++composerDraftEpoch;
+          c.autoVisualBlocked = false;
+
           SocialOSUI.loading(true, 'Drafting for ' + c.selected.join(', ') + '…');
           try {
             const { posts } = await SocialOSComposer.draftAll({ text: c.text, link: c.link, platforms: c.selected, mediaContentId: c.attach?.contentId || null });
@@ -1761,10 +1908,11 @@ const SocialOS = (() => {
             SocialOSUI.loading(false);
 
             if (c.oneTap) {
-              await postAllComposer();   // publishes immediately, then re-renders
+              await postAllComposer();   // publishes immediately, then re-renders — auto-visuals never runs here
             } else {
               SocialOSUI.toast('Drafts ready — review and post.', 'success');
               await renderComposer();
+              if (!c.attach) maybeAutoAttachVisual(myEpoch); // fire-and-forget; drafts already shown
             }
           } catch (err) {
             SocialOSUI.loading(false);
@@ -1815,6 +1963,13 @@ const SocialOS = (() => {
             break;
           }
           const c = state.composer;
+          // Auto-Visuals v2 orphan rule: a manual pick supersedes any auto card
+          // this run — delete it and block further auto-attach this run.
+          if (c.autoCardId && c.attach?.auto && c.attach.contentId === c.autoCardId) {
+            await SocialOSDB.del(SocialOSDB.STORES.content, c.autoCardId);
+          }
+          c.autoCardId = null;
+          c.autoVisualBlocked = true;
           c.attach = {
             contentId: mediaItem.id,
             thumbUrl: mediaItem.thumbnail_url,
@@ -1829,7 +1984,16 @@ const SocialOS = (() => {
 
         case 'composer-attach-remove': {
           syncComposerInputsFromDOM();
-          state.composer.attach = null;
+          const c = state.composer;
+          // Auto-Visuals v2 orphan rule: removing an auto-attached card deletes
+          // it from the Library instead of leaving it to litter, and blocks
+          // this run from re-attaching anything (user action always wins).
+          if (c.autoCardId && c.attach?.auto && c.attach.contentId === c.autoCardId) {
+            await SocialOSDB.del(SocialOSDB.STORES.content, c.autoCardId);
+          }
+          c.autoCardId = null;
+          c.attach = null;
+          c.autoVisualBlocked = true;
           await applyAttachToExistingDrafts(); // C1 write-through
           await renderComposer();
           break;
@@ -2374,6 +2538,19 @@ const SocialOS = (() => {
               ? 'Auto-post on — approved scheduled posts will publish themselves at their time (LinkedIn/Reddit, from this device).'
               : 'Auto-post off — due posts wait for your "Post now" tap.',
             'info', 7000
+          );
+          break;
+        }
+
+        case 'toggle-auto-visuals': {
+          const settings = await SocialOSDB.getOrCreateSettings();
+          settings.auto_visuals = !!(/** @type {HTMLInputElement} */ (actionEl)).checked;
+          await SocialOSDB.saveSettings(settings);
+          SocialOSUI.toast(
+            settings.auto_visuals
+              ? 'Auto-suggest visuals on — when you draft with nothing attached, the composer picks a Library photo or makes a quote card. Remove it any time.'
+              : 'Auto-suggest visuals off — the composer posts text-only unless you attach something.',
+            'info', 6000
           );
           break;
         }
@@ -3322,7 +3499,15 @@ const SocialOS = (() => {
         if (state.currentScreen === 'compose') {
           const firstPhoto = saved.find(s => s.thumbnail_url);
           if (firstPhoto) {
-            state.composer.attach = {
+            const c = state.composer;
+            // Auto-Visuals v2 orphan rule: a device import supersedes any auto
+            // card this run — delete it and block further auto-attach this run.
+            if (c.autoCardId && c.attach?.auto && c.attach.contentId === c.autoCardId) {
+              await SocialOSDB.del(SocialOSDB.STORES.content, c.autoCardId);
+            }
+            c.autoCardId = null;
+            c.autoVisualBlocked = true;
+            c.attach = {
               contentId: firstPhoto.id,
               thumbUrl: firstPhoto.thumbnail_url,
               title: 'Attached photo',

@@ -7,7 +7,7 @@
  * approval notifications with one-tap actions and routes taps into the app.
  */
 
-const CACHE_NAME = 'socialos-v22'; // v22: Visuals (media attach, quote cards, share bridge) + v21's logo.svg precache
+const CACHE_NAME = 'socialos-v23'; // v23: Auto-Visuals v2 (AI photo suggest + auto quote-card fallback)
 const SHELL_ASSETS = [
   './',
   './index.html',

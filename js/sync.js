@@ -40,7 +40,8 @@ const SocialOSSync = (() => {
     'content_scrubbing',
     'theme',
     'front_office_secret',
-    'mkt_queue_url'
+    'mkt_queue_url',
+    'auto_visuals'
   ];
 
   /** @type {ReturnType<typeof setTimeout>|null} */

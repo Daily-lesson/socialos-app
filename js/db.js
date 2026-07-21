@@ -207,6 +207,7 @@
  * @property {string} [front_office_secret] - Shared secret for the mkt-queue Edge Function (X-FrontOffice-Secret). Entered once in Settings, lives only in IndexedDB — NEVER baked into client code (this repo mirrors to a public repo). Empty until Scot sets it.
  * @property {boolean} [push_enabled] - Web push notifications enabled on THIS device (js/push.js). Per-device (each device has its own push subscription) — deliberately NOT in sync.js SYNCED_SETTINGS_KEYS.
  * @property {boolean} [auto_post_scheduled] - Zero-tap mode: approved scheduled posts publish themselves when their reminder arrives (sw.js swAutoPostDue) or on app open (checkDuePosts). Direct platforms only; per-device (the post records live in this device's IndexedDB) — NOT synced.
+ * @property {boolean} [auto_visuals] - Auto-Visuals v2: when drafting with no attachment, the composer AI-picks a Library photo or generates a quote card and attaches it (visibly, one-tap removable). Face-flagged/low-rated photos are excluded. Synced (SYNCED_SETTINGS_KEYS).
  * @property {{approval_reminder_hours_before: number, engagement_batch_time: string, quiet_hours_start: string, quiet_hours_end: string}} notification_preferences
  * @property {Object<string, number>} posting_limits
  * @property {{remove_client_names: boolean, remove_facility_locations: boolean, remove_proprietary_specs: boolean, remove_financial_data: boolean, custom_blocked_terms: string[]}} content_scrubbing
@@ -486,6 +487,9 @@ const SocialOSDB = (() => {
       push_enabled: false,
       // Zero-tap: approved scheduled posts publish themselves (sw.js).
       auto_post_scheduled: false,
+      // Auto-Visuals v2: composer auto-suggests a Library photo or a quote card
+      // when you draft with nothing attached. Default on; loud + one-tap removable.
+      auto_visuals: true,
       notification_preferences: {
         approval_reminder_hours_before: 48,
         engagement_batch_time: '08:00',

@@ -1897,6 +1897,14 @@ const SocialOSUI = (() => {
       </div>
 
       <div class="settings-section">
+        <h3>Visuals</h3>
+        <label class="toggle-row">
+          <input type="checkbox" data-action="toggle-auto-visuals" ${settings.auto_visuals !== false ? 'checked' : ''}>
+          <span>Auto-suggest visuals — when you draft a post with nothing attached, pick a matching Library photo or make a quote card, shown so you can remove it in one tap. Never uses face-flagged photos.</span>
+        </label>
+      </div>
+
+      <div class="settings-section">
         <h3>Front Office Queue <span class="text-secondary" style="font-weight:400">(agent drafts)</span></h3>
         <div class="connection-status ${settings.front_office_secret ? 'connected' : 'disconnected'}">
           ${settings.front_office_secret ? 'Connected' : 'Not connected'}
@@ -2412,7 +2420,7 @@ const SocialOSUI = (() => {
    *   comment?: string,
    *   postSummary?: string,
    *   reply?: {reply: string, alternative: string}|null,
-   *   attach?: {contentId: string, thumbUrl: string, title: string, flagged: boolean}|null,
+   *   attach?: {contentId: string, thumbUrl: string, title: string, flagged: boolean, auto?: boolean}|null,
    *   attachPicker?: boolean,
    *   gen?: {show: boolean, template: string, size: string, text: string, note: string},
    *   mediaItems?: ContentItem[]
@@ -2456,6 +2464,7 @@ const SocialOSUI = (() => {
           ${attach.flagged ? '<span class="text-secondary">photo &middot; faces visible</span>' : ''}
           <button type="button" class="btn btn-secondary btn-sm cmp-attach-remove" data-action="composer-attach-remove">Remove</button>
         </div>
+        ${attach.auto ? `<p class="cmp-hint">Auto-attached ${escapeHtml(attach.title || 'a visual')} — remove it if it doesn't fit.</p>` : ''}
       </div>
     ` : `
       <div class="cmp-field cmp-attach-row">
