@@ -5,7 +5,7 @@
  * Paths are relative so the app works from a subpath (e.g. GitHub Pages).
  */
 
-const CACHE_NAME = 'socialos-v16'; // v16: landing sign-in sheet (account, not LinkedIn) + visible version in UI
+const CACHE_NAME = 'socialos-v17'; // v17: 3-step onboarding + accordion brief
 const SHELL_ASSETS = [
   './',
   './index.html',

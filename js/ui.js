@@ -391,9 +391,9 @@ const SocialOSUI = (() => {
       </div>`;
   }
 
-  // ── Onboarding Wizard (12 steps — Step 1 is account linking) ─────────
+  // ── Onboarding Wizard (3 steps — Connect, Confirm your brief, Guardrails & launch) ─
 
-  const ONBOARDING_TOTAL_STEPS = 12;
+  const ONBOARDING_TOTAL_STEPS = 3;
 
   /**
    * Render a specific onboarding step.
@@ -412,6 +412,10 @@ const SocialOSUI = (() => {
       </div>`;
     html += `<div class="onboarding-progress"><div class="progress-bar" style="width:${progress}%"></div></div>`;
     html += `<div class="onboarding-step-label">Step ${step} of ${ONBOARDING_TOTAL_STEPS}</div>`;
+
+    // Small local helper — turns a snake_case value into readable words.
+    // (Kept local to this function; nowhere else in ui.js needs it.)
+    const humanize = (s) => String(s).replace(/_/g, ' ');
 
     switch (step) {
       case 1: {
@@ -449,14 +453,62 @@ const SocialOSUI = (() => {
                 ${escapeHtml(String(s))}<br>`).join('')}
             </div>
           ` : ''}
-          <p class="text-secondary" style="margin-top:12px">Facebook and Instagram sign-in is coming (their APIs require an app review) — handles work today. Nothing is ever posted without your approval, and you can connect or disconnect any account later in Settings. <a href="privacy.html" target="_blank" rel="noopener">Privacy Policy</a></p>`;
+          <p class="text-secondary" style="margin-top:12px">Facebook and Instagram sign-in is coming (their APIs require an app review) — handles work today. Nothing is ever posted without your approval, and you can connect or disconnect any account later in Settings. <a href="privacy.html" target="_blank" rel="noopener">Privacy Policy</a></p>
+
+          <div class="form-group" style="margin-top:24px;padding-top:20px;border-top:1px solid var(--border, #333)">
+            <label>Connect Google <span class="text-secondary" style="font-weight:400">(optional)</span></label>
+            <p class="text-secondary" style="margin-top:-4px">Lets SocialOS read your Drive for post content and pick photos from Google Photos. Tapping the button takes you to Google's own sign-in page — SocialOS never sees your Google password.</p>
+            ${data.google_connected ? `
+              <div class="connection-status connected" style="margin-top:8px">&#10003; Google connected</div>
+            ` : `
+              <a href="#" class="btn btn-google btn-small" data-action="connect-google" style="margin-top:8px;display:inline-flex;align-items:center;justify-content:center;gap:8px;text-decoration:none">
+                ${GOOGLE_G_ICON}
+                <span>Sign in with Google</span>
+              </a>
+              <div id="google-connect-result" class="test-result"></div>
+            `}
+            <div class="info-box" style="margin-top:12px">
+              <strong>What you're granting:</strong><br>
+              &#8226; <strong>Google Drive — read-only.</strong> SocialOS can read files to suggest post content; it can never modify, share, or delete anything.<br>
+              &#8226; <strong>Google Photos — only what you pick.</strong> SocialOS only ever sees the specific photos you select in Google's picker, never your whole library.<br>
+              See the <a href="privacy.html" target="_blank" rel="noopener">Privacy Policy</a> for exactly how this data is handled.
+            </div>
+          </div>`;
         break;
       }
 
-      case 2:
+      case 2: {
+        const goals = data.goals || [];
+        const goalsSummary = goals.length ? goals.map(humanize).join(', ') : 'Not set yet';
+
+        const topics = data.topics || [];
+        const topicsSummary = topics.length
+          ? topics.slice(0, 3).map(humanize).join(', ') + (topics.length > 3 ? ` +${topics.length - 3}` : '')
+          : 'Not set yet';
+
+        const toneValues = Object.values(data.tone || {});
+        const toneSummary = toneValues.length
+          ? SocialOSUtils.truncate(toneValues.map(humanize).join(', '), 60)
+          : 'Default per platform';
+
+        const audienceEntries = Object.entries(data.target_audience || {}).filter(([, v]) => v);
+        const audienceSummary = data.target_audience?.linkedin
+          ? SocialOSUtils.truncate(data.target_audience.linkedin, 40)
+          : audienceEntries.length
+            ? `${audienceEntries.length} platform${audienceEntries.length > 1 ? 's' : ''} set`
+            : 'Not set yet';
+
+        const frequencyLabels = {
+          ai_recommended: 'AI Recommended',
+          daily: 'Daily',
+          moderate: 'Moderate',
+          conservative: 'Conservative'
+        };
+        const frequencySummary = frequencyLabels[data.post_frequency_preference] || 'AI Recommended';
+
         html += `
-          <h2>Welcome to SocialOS</h2>
-          <p class="onboarding-desc">Your AI social media manager. ${data.name ? 'We pre-filled this from your linked profiles — check it looks right.' : "Let's set up your profile."}</p>
+          <h2>Confirm your brief</h2>
+          <p class="onboarding-desc">${data.name ? "We pre-filled this from your linked profiles" : "We filled in sensible defaults"} — tap any section below to adjust it.</p>
           <div class="form-group">
             <label for="ob-name">Full Name</label>
             <input type="text" id="ob-name" class="input" placeholder="Scot Carl Jr." value="${data.name || ''}">
@@ -468,113 +520,124 @@ const SocialOSUI = (() => {
           <div class="form-group">
             <label for="ob-employer">Employer (private — used for scrubbing only)</label>
             <input type="text" id="ob-employer" class="input" placeholder="Company name" value="${data.employer || ''}">
-          </div>`;
+          </div>
+
+          <details class="ob-accordion">
+            <summary class="ob-summary">
+              <span class="ob-summary-label">Goals</span>
+              <span class="ob-summary-value">${escapeHtml(goalsSummary)}</span>
+            </summary>
+            <div class="ob-accordion-body">
+              <p class="onboarding-desc">Select all that apply.</p>
+              <div class="chip-group" data-field="goals">
+                ${['professional_reputation', 'thought_leadership', 'network_growth', 'job_opportunities', 'industry_influence', 'personal_brand'].map(g => `
+                  <button class="chip ${goals.includes(g) ? 'selected' : ''}" data-value="${g}">${humanize(g)}</button>
+                `).join('')}
+              </div>
+            </div>
+          </details>
+
+          <details class="ob-accordion">
+            <summary class="ob-summary">
+              <span class="ob-summary-label">Topics</span>
+              <span class="ob-summary-value">${escapeHtml(topicsSummary)}</span>
+            </summary>
+            <div class="ob-accordion-body">
+              <p class="onboarding-desc">Select or add topics you post about.</p>
+              <div class="chip-group" data-field="topics">
+                ${['robotics', 'autonomous_systems', 'boston_dynamics', 'drones', 'manufacturing', 'iot', 'deployment', 'engineering', 'ai_ml', 'project_management'].map(t => `
+                  <button class="chip ${topics.includes(t) ? 'selected' : ''}" data-value="${t}">${humanize(t)}</button>
+                `).join('')}
+              </div>
+              <div class="form-group" style="margin-top:16px">
+                <label for="ob-custom-topic">Add custom topic</label>
+                <div class="input-row">
+                  <input type="text" id="ob-custom-topic" class="input" placeholder="e.g. semiconductor">
+                  <button class="btn btn-small" data-action="add-custom-topic">Add</button>
+                </div>
+              </div>
+            </div>
+          </details>
+
+          <details class="ob-accordion">
+            <summary class="ob-summary">
+              <span class="ob-summary-label">Tone per platform</span>
+              <span class="ob-summary-value">${escapeHtml(toneSummary)}</span>
+            </summary>
+            <div class="ob-accordion-body">
+              <p class="onboarding-desc">How should SocialOS sound on each platform?</p>
+              ${['linkedin', 'facebook', 'instagram', 'reddit', 'tiktok'].map(p => {
+                const tones = {
+                  linkedin: ['professional_thoughtful', 'authoritative', 'conversational_professional'],
+                  facebook: ['conversational_warm', 'friendly', 'inspirational'],
+                  instagram: ['casual_visual', 'playful', 'minimal'],
+                  reddit: ['technical_peer', 'helpful_expert', 'casual_knowledgeable'],
+                  tiktok: ['energetic_authentic', 'educational_quick', 'playful_casual']
+                };
+                return `
+                <div class="form-group">
+                  <label>${p.charAt(0).toUpperCase() + p.slice(1)}</label>
+                  <div class="chip-group">
+                    ${tones[p].map(t => `
+                      <button class="chip chip-sm ${(data.tone || {})[p] === t ? 'selected' : ''}" data-platform="${p}" data-value="${t}">${humanize(t)}</button>
+                    `).join('')}
+                  </div>
+                </div>`;
+              }).join('')}
+            </div>
+          </details>
+
+          <details class="ob-accordion">
+            <summary class="ob-summary">
+              <span class="ob-summary-label">Audience per platform</span>
+              <span class="ob-summary-value">${escapeHtml(audienceSummary)}</span>
+            </summary>
+            <div class="ob-accordion-body">
+              <p class="onboarding-desc">Describe your target audience per platform.</p>
+              ${['linkedin', 'facebook', 'instagram', 'reddit', 'tiktok'].map(p => `
+                <div class="form-group">
+                  <label for="ob-aud-${p}">${p.charAt(0).toUpperCase() + p.slice(1)}</label>
+                  <input type="text" id="ob-aud-${p}" class="input"
+                    placeholder="e.g. Engineering managers, robotics professionals"
+                    value="${escapeHtml((data.target_audience || {})[p] || '')}">
+                </div>
+              `).join('')}
+            </div>
+          </details>
+
+          <details class="ob-accordion">
+            <summary class="ob-summary">
+              <span class="ob-summary-label">Posting frequency</span>
+              <span class="ob-summary-value">${escapeHtml(frequencySummary)}</span>
+            </summary>
+            <div class="ob-accordion-body">
+              <p class="onboarding-desc">How often should SocialOS schedule posts?</p>
+              <div class="radio-group">
+                ${[
+                  { value: 'ai_recommended', label: 'AI Recommended', desc: 'Let SocialOS optimize timing and frequency' },
+                  { value: 'daily', label: 'Daily', desc: 'One post per day across platforms' },
+                  { value: 'moderate', label: 'Moderate', desc: '3-4 posts per week' },
+                  { value: 'conservative', label: 'Conservative', desc: '1-2 posts per week' }
+                ].map(o => `
+                  <label class="radio-card ${data.post_frequency_preference === o.value ? 'selected' : ''}">
+                    <input type="radio" name="frequency" value="${o.value}" ${data.post_frequency_preference === o.value ? 'checked' : ''}>
+                    <div class="radio-label">${o.label}</div>
+                    <div class="radio-desc">${o.desc}</div>
+                  </label>
+                `).join('')}
+              </div>
+            </div>
+          </details>`;
         break;
+      }
 
       case 3:
         html += `
-          <h2>What are your goals?</h2>
-          <p class="onboarding-desc">Select all that apply.</p>
-          <div class="chip-group">
-            ${['professional_reputation', 'thought_leadership', 'network_growth', 'job_opportunities', 'industry_influence', 'personal_brand'].map(g => `
-              <button class="chip ${(data.goals || []).includes(g) ? 'selected' : ''}" data-value="${g}">${g.replace(/_/g, ' ')}</button>
-            `).join('')}
-          </div>`;
-        break;
-
-      case 4:
-        html += `
-          <h2>Who's your audience?</h2>
-          <p class="onboarding-desc">Describe your target audience per platform.</p>
-          ${['linkedin', 'facebook', 'instagram', 'reddit', 'tiktok'].map(p => `
-            <div class="form-group">
-              <label for="ob-aud-${p}">${p.charAt(0).toUpperCase() + p.slice(1)}</label>
-              <input type="text" id="ob-aud-${p}" class="input"
-                placeholder="e.g. Engineering managers, robotics professionals"
-                value="${(data.target_audience || {})[p] || ''}">
-            </div>
-          `).join('')}`;
-        break;
-
-      case 5:
-        html += `
-          <h2>Your expertise topics</h2>
-          <p class="onboarding-desc">Select or add topics you post about.</p>
-          <div class="chip-group">
-            ${['robotics', 'autonomous_systems', 'boston_dynamics', 'drones', 'manufacturing', 'iot', 'deployment', 'engineering', 'ai_ml', 'project_management'].map(t => `
-              <button class="chip ${(data.topics || []).includes(t) ? 'selected' : ''}" data-value="${t}">${t.replace(/_/g, ' ')}</button>
-            `).join('')}
-          </div>
-          <div class="form-group" style="margin-top:16px">
-            <label for="ob-custom-topic">Add custom topic</label>
-            <div class="input-row">
-              <input type="text" id="ob-custom-topic" class="input" placeholder="e.g. semiconductor">
-              <button class="btn btn-small" data-action="add-custom-topic">Add</button>
-            </div>
-          </div>`;
-        break;
-
-      case 6:
-        html += `
-          <h2>Tone preferences</h2>
-          <p class="onboarding-desc">How should SocialOS sound on each platform?</p>
-          ${['linkedin', 'facebook', 'instagram', 'reddit', 'tiktok'].map(p => {
-            const tones = {
-              linkedin: ['professional_thoughtful', 'authoritative', 'conversational_professional'],
-              facebook: ['conversational_warm', 'friendly', 'inspirational'],
-              instagram: ['casual_visual', 'playful', 'minimal'],
-              reddit: ['technical_peer', 'helpful_expert', 'casual_knowledgeable'],
-              tiktok: ['energetic_authentic', 'educational_quick', 'playful_casual']
-            };
-            return `
-            <div class="form-group">
-              <label>${p.charAt(0).toUpperCase() + p.slice(1)}</label>
-              <div class="chip-group">
-                ${tones[p].map(t => `
-                  <button class="chip chip-sm ${(data.tone || {})[p] === t ? 'selected' : ''}" data-platform="${p}" data-value="${t}">${t.replace(/_/g, ' ')}</button>
-                `).join('')}
-              </div>
-            </div>`;
-          }).join('')}`;
-        break;
-
-      case 7:
-        html += `
-          <h2>Posting frequency</h2>
-          <p class="onboarding-desc">How often should SocialOS schedule posts?</p>
-          <div class="radio-group">
-            ${[
-              { value: 'ai_recommended', label: 'AI Recommended', desc: 'Let SocialOS optimize timing and frequency' },
-              { value: 'daily', label: 'Daily', desc: 'One post per day across platforms' },
-              { value: 'moderate', label: 'Moderate', desc: '3-4 posts per week' },
-              { value: 'conservative', label: 'Conservative', desc: '1-2 posts per week' }
-            ].map(o => `
-              <label class="radio-card ${data.post_frequency_preference === o.value ? 'selected' : ''}">
-                <input type="radio" name="frequency" value="${o.value}" ${data.post_frequency_preference === o.value ? 'checked' : ''}>
-                <div class="radio-label">${o.label}</div>
-                <div class="radio-desc">${o.desc}</div>
-              </label>
-            `).join('')}
-          </div>`;
-        break;
-
-      case 8:
-        html += `
-          <h2>Blackout dates</h2>
-          <p class="onboarding-desc">Any dates SocialOS should never post? (Optional)</p>
-          <div class="form-group">
-            <label for="ob-blackout">Add dates (YYYY-MM-DD, one per line)</label>
-            <textarea id="ob-blackout" class="input textarea" rows="4" placeholder="2026-12-25&#10;2026-01-01">${(data.blackout_dates || []).join('\n')}</textarea>
-          </div>`;
-        break;
-
-      case 9:
-        html += `
-          <h2>Off-limits topics</h2>
+          <h2>Guardrails & launch</h2>
           <p class="onboarding-desc">Topics SocialOS must never mention in posts.</p>
-          <div class="chip-group">
+          <div class="chip-group" data-field="off_limits_topics">
             ${['salary', 'client_names', 'facility_locations', 'proprietary_specs', 'family', 'personal_life', 'politics', 'religion'].map(t => `
-              <button class="chip ${(data.off_limits_topics || []).includes(t) ? 'selected' : ''}" data-value="${t}">${t.replace(/_/g, ' ')}</button>
+              <button class="chip ${(data.off_limits_topics || []).includes(t) ? 'selected' : ''}" data-value="${t}">${humanize(t)}</button>
             `).join('')}
           </div>
           <div class="form-group" style="margin-top:16px">
@@ -583,48 +646,28 @@ const SocialOSUI = (() => {
               <input type="text" id="ob-custom-offlimit" class="input" placeholder="e.g. health issues">
               <button class="btn btn-small" data-action="add-custom-offlimit">Add</button>
             </div>
-          </div>`;
-        break;
+          </div>
 
-      case 10:
-        html += `
-          <h2>AI engine</h2>
-          <p class="onboarding-desc">Nothing to set up — SocialOS's AI is built in and ready. Your writing is drafted by Claude through a secure managed connection; no API key or configuration needed.</p>
+          <details class="ob-accordion" style="margin-top:16px">
+            <summary class="ob-summary">
+              <span class="ob-summary-label">Advanced — blackout dates</span>
+              <span class="ob-summary-value">${(data.blackout_dates || []).length ? `${data.blackout_dates.length} date${data.blackout_dates.length > 1 ? 's' : ''}` : 'None set'}</span>
+            </summary>
+            <div class="ob-accordion-body">
+              <p class="onboarding-desc">Any dates SocialOS should never post? (Optional)</p>
+              <div class="form-group">
+                <label for="ob-blackout">Add dates (YYYY-MM-DD, one per line)</label>
+                <textarea id="ob-blackout" class="input textarea" rows="4" placeholder="2026-12-25&#10;2026-01-01">${(data.blackout_dates || []).join('\n')}</textarea>
+              </div>
+            </div>
+          </details>
+
           <div class="info-box" style="margin-top:16px">
-            <strong>✓ Included free.</strong> Post drafting, photo analysis, and
-            engagement suggestions all work out of the box. Advanced tiers
-            (higher volume, premium models) will be offered later.
-          </div>`;
-        break;
+            <strong>✓ AI engine included free.</strong> Post drafting, photo analysis, and
+            engagement suggestions are built in and ready — nothing else to configure.
+          </div>
 
-      case 11:
-        html += `
-          <h2>Connect Google</h2>
-          <p class="onboarding-desc">SocialOS reads your Google Drive to find content for posts, and lets you pick photos from Google Photos when you want to. Tapping the button takes you to Google's own sign-in page, where you grant (or decline) that access — SocialOS never sees your Google password.</p>
-          ${data.google_connected ? `
-            <div class="connection-status connected" style="margin-top:8px">&#10003; Google connected</div>
-            <p class="text-secondary" style="margin-top:12px">You can disconnect anytime in Settings — that revokes SocialOS's access at Google, too.</p>
-          ` : `
-            <a href="#" class="btn btn-google" data-action="connect-google" style="margin-top:8px;display:inline-flex;align-items:center;justify-content:center;gap:8px;text-decoration:none">
-              ${GOOGLE_G_ICON}
-              <span>Sign in with Google</span>
-            </a>
-            <div id="google-connect-result" class="test-result"></div>
-            <p class="text-secondary" style="margin-top:12px">Or skip this for now and connect later in Settings.</p>
-          `}
-          <div class="info-box" style="margin-top:16px">
-            <strong>What you're granting:</strong><br>
-            &#8226; <strong>Google Drive — read-only.</strong> SocialOS can read files to suggest post content; it can never modify, share, or delete anything.<br>
-            &#8226; <strong>Google Photos — only what you pick.</strong> SocialOS only ever sees the specific photos you select in Google's picker, never your whole library.<br>
-            See the <a href="privacy.html" target="_blank" rel="noopener">Privacy Policy</a> for exactly how this data is handled.
-          </div>`;
-        break;
-
-      case 12:
-        html += `
-          <h2>You're all set!</h2>
-          <p class="onboarding-desc">SocialOS is ready to manage your social media presence.</p>
-          <div class="completion-summary">
+          <div class="completion-summary" style="margin-top:16px">
             <div class="summary-item">
               <span class="check ${Object.keys(data.linked_accounts || {}).length ? '' : 'pending'}">
                 ${Object.keys(data.linked_accounts || {}).length ? '&#10003;' : '&#9675;'}
@@ -656,7 +699,7 @@ const SocialOSUI = (() => {
       html += `<div></div>`;
     }
     if (step < ONBOARDING_TOTAL_STEPS) {
-      html += `<button class="btn btn-primary" data-action="ob-next">${step === 11 ? 'Skip / Next' : 'Next'}</button>`;
+      html += `<button class="btn btn-primary" data-action="ob-next">Next</button>`;
     } else {
       html += `<button class="btn btn-primary btn-lg" data-action="ob-finish">Launch SocialOS</button>`;
     }

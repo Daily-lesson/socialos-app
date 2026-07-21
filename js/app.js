@@ -398,6 +398,115 @@ const SocialOS = (() => {
   // ── Onboarding logic ──────────────────────────────────────────────────
 
   /**
+   * Fallback profile values used when the user hasn't picked/typed anything
+   * and profile analysis found nothing to suggest. Copied verbatim from the
+   * old finishOnboarding() safety net so behavior doesn't change.
+   */
+  const ONBOARDING_DEFAULTS = {
+    goals: ['professional_reputation', 'thought_leadership', 'network_growth'],
+    target_audience: {
+      linkedin: 'Engineering managers, robotics professionals',
+      facebook: 'Industry peers, colleagues',
+      instagram: 'Tech community, robotics enthusiasts',
+      reddit: 'Engineers, robotics hobbyists',
+      tiktok: 'Tech-curious viewers, makers, engineering students'
+    },
+    topics: ['robotics', 'autonomous_systems', 'drones', 'manufacturing', 'iot'],
+    off_limits_topics: ['salary', 'client_names', 'facility_locations', 'proprietary_specs', 'family', 'personal_life'],
+    tone: {
+      linkedin: 'professional_thoughtful', facebook: 'conversational_warm',
+      instagram: 'casual_visual', reddit: 'technical_peer', tiktok: 'energetic_authentic'
+    },
+    post_frequency_preference: 'ai_recommended',
+    blackout_dates: []
+  };
+
+  /**
+   * Fill in ONBOARDING_DEFAULTS for whatever fields are still missing on
+   * state.onboardingData, so Step 2/3 render confirmable values without
+   * clobbering anything AI-suggested (applyAnalysisResult) or user-picked.
+   */
+  function surfaceDefaultsIntoOnboardingData() {
+    const d = state.onboardingData;
+    if (!(d.goals || []).length) d.goals = [...ONBOARDING_DEFAULTS.goals];
+    if (!(d.topics || []).length) d.topics = [...ONBOARDING_DEFAULTS.topics];
+    if (!(d.off_limits_topics || []).length) d.off_limits_topics = [...ONBOARDING_DEFAULTS.off_limits_topics];
+    d.target_audience = Object.assign({}, ONBOARDING_DEFAULTS.target_audience, d.target_audience || {});
+    d.tone = Object.assign({}, ONBOARDING_DEFAULTS.tone, d.tone || {});
+    if (!d.post_frequency_preference) d.post_frequency_preference = ONBOARDING_DEFAULTS.post_frequency_preference;
+    if (!d.blackout_dates) d.blackout_dates = [];
+  }
+
+  /**
+   * Merge a SocialOSLinker.analyzeProfiles() result into onboardingData —
+   * shared by the manual "Analyze" button and the auto-analyze-on-Next path.
+   * Never overwrites something the user already typed or picked.
+   * @param {any} result
+   */
+  function applyAnalysisResult(result) {
+    const d = state.onboardingData;
+    d.linked_accounts = result.linked_accounts;
+    d.social_activity = result.social_activity;
+
+    // Pre-fill the later steps; never overwrite something the user
+    // already typed or picked.
+    const s = result.suggestions || {};
+    if (s.name && !d.name) d.name = s.name;
+    if (s.title && !d.title) d.title = s.title;
+    if (s.topics && !(d.topics || []).length) d.topics = s.topics;
+    if (s.post_frequency_preference && !d.post_frequency_preference) {
+      d.post_frequency_preference = s.post_frequency_preference;
+    }
+    if (s.target_audience) {
+      d.target_audience = d.target_audience || {};
+      for (const [p, aud] of Object.entries(s.target_audience)) {
+        if (!d.target_audience[p]) d.target_audience[p] = aud;
+      }
+    }
+    if (s.tone) {
+      d.tone = d.tone || {};
+      for (const [p, t] of Object.entries(s.tone)) {
+        if (!d.tone[p]) d.tone[p] = t;
+      }
+    }
+
+    d._analyzed = true;
+  }
+
+  /**
+   * Auto-run profile analysis when leaving Step 1, so users who never tap
+   * "Analyze" explicitly still land on Step 2 with pre-filled suggestions.
+   * Silently skipped if nothing's linked yet, already analyzed, or the
+   * analysis call fails — it's a convenience, not a blocking dependency.
+   */
+  async function maybeAutoAnalyze() {
+    const d = state.onboardingData;
+    if (d._analyzed) return;
+    const accounts = d.linked_accounts || {};
+    if (!Object.values(accounts).some(Boolean)) return; // no handles → skip
+    SocialOSUI.loading(true, 'Reading your public profiles…');
+    try {
+      const result = await SocialOSLinker.analyzeProfiles(accounts);
+      applyAnalysisResult(result);
+    } catch { /* non-blocking: linking still succeeds without the pre-fill */ }
+    SocialOSUI.loading(false);
+  }
+
+  /**
+   * Map a saved onboarding_step from the old 12-step wizard onto the new
+   * 3-step one, for the one-time migration in init(). Old steps: 1 Connect,
+   * 2-7 profile/goals/audience/topics/tone/frequency, 8-12 blackout/off-
+   * limits/AI engine/Google/done.
+   * @param {number} saved
+   * @returns {number}
+   */
+  function migrateOnboardingStep(saved) {
+    if (saved <= 1) return 1;   // old 1 (Connect) → new 1
+    if (saved <= 7) return 2;   // old 2–7 (profile/goals/audience/topics/tone/frequency) → new 2
+    return 3;                   // old 8–12 (blackout/off-limits/AI/Google/done) → new 3
+  }
+
+  /**
    * Collect data from the current onboarding step before advancing.
    */
   function collectOnboardingData() {
@@ -420,44 +529,36 @@ const SocialOS = (() => {
         break;
       }
       case 2: {
+        // Brief: name/title/employer, per-platform audience, and posting
+        // frequency all live together on the "Confirm your brief" step.
+        // Goals/topics/tone are chip-driven — handleChipClick writes those
+        // straight into onboardingData, nothing to harvest here.
         const name = /** @type {HTMLInputElement} */ (SocialOSUI.$('ob-name'));
         const title = /** @type {HTMLInputElement} */ (SocialOSUI.$('ob-title'));
         const employer = /** @type {HTMLInputElement} */ (SocialOSUI.$('ob-employer'));
         if (name) d.name = name.value.trim();
         if (title) d.title = title.value.trim();
         if (employer) d.employer = employer.value.trim();
-        break;
-      }
-      case 3: {
-        d.goals = d.goals || [];
-        break;
-      }
-      case 4: {
+
         d.target_audience = d.target_audience || {};
         ['linkedin', 'facebook', 'instagram', 'reddit', 'tiktok'].forEach(p => {
           const el = /** @type {HTMLInputElement} */ (SocialOSUI.$(`ob-aud-${p}`));
           if (el) d.target_audience[p] = el.value.trim();
         });
-        break;
-      }
-      case 6: {
-        // Tones collected via chip clicks
-        break;
-      }
-      case 7: {
+
         const checked = /** @type {HTMLInputElement} */ (document.querySelector('input[name="frequency"]:checked'));
         if (checked) d.post_frequency_preference = checked.value;
         break;
       }
-      case 8: {
+      case 3: {
+        // Guardrails & launch: off-limits topics are chip-driven; only the
+        // blackout-dates textarea needs harvesting here.
         const textarea = /** @type {HTMLTextAreaElement} */ (SocialOSUI.$('ob-blackout'));
         if (textarea) {
           d.blackout_dates = textarea.value.split('\n').map(s => s.trim()).filter(Boolean);
         }
         break;
       }
-      // Step 10 (AI engine) and Step 11 (Connect Google) have nothing to
-      // collect — the proxy and the Google OAuth broker are both baked in.
     }
   }
 
@@ -534,7 +635,8 @@ const SocialOS = (() => {
     const settings = await SocialOSDB.getOrCreateSettings();
     if (d.proxy_url) settings.proxy_url = d.proxy_url;
     if (d.proxy_secret) settings.proxy_secret = d.proxy_secret;
-    settings.onboarding_step = 12;
+    settings.onboarding_step = 3;
+    settings.onboarding_schema = 2;
 
     // Seed platform connection handles from the linked accounts so
     // Settings shows them even before any OAuth connect happens.
@@ -869,20 +971,13 @@ const SocialOS = (() => {
       chip.closest('.chip-group')?.querySelectorAll('.chip').forEach(c => c.classList.remove('selected'));
       chip.classList.add('selected');
     } else {
-      // Multi-select toggle
-      const step = state.onboardingStep;
-      let arr;
-      if (step === 3) {
-        arr = state.onboardingData.goals = state.onboardingData.goals || [];
-      } else if (step === 5) {
-        arr = state.onboardingData.topics = state.onboardingData.topics || [];
-      } else if (step === 9) {
-        arr = state.onboardingData.off_limits_topics = state.onboardingData.off_limits_topics || [];
-      }
-      if (arr) {
+      // Multi-select toggle. The target array is named by data-field on the
+      // chip's group, so several multi-select groups can share one screen.
+      const field = chip.closest('[data-field]')?.dataset.field; // 'goals' | 'topics' | 'off_limits_topics'
+      if (field) {
+        const arr = state.onboardingData[field] = state.onboardingData[field] || [];
         const idx = arr.indexOf(value);
-        if (idx >= 0) arr.splice(idx, 1);
-        else arr.push(value);
+        if (idx >= 0) arr.splice(idx, 1); else arr.push(value);
         chip.classList.toggle('selected');
       }
     }
@@ -1093,7 +1188,9 @@ const SocialOS = (() => {
         case 'ob-next':
           collectOnboardingData();
           if (!validateOnboardingStep()) break;
-          state.onboardingStep = Math.min(state.onboardingStep + 1, 12);
+          if (state.onboardingStep === 1) await maybeAutoAnalyze();
+          state.onboardingStep = Math.min(state.onboardingStep + 1, 3);
+          if (state.onboardingStep >= 2) surfaceDefaultsIntoOnboardingData();
           SocialOSUI.renderOnboardingStep(state.onboardingStep, state.onboardingData);
           break;
 
@@ -1101,6 +1198,7 @@ const SocialOS = (() => {
           collectOnboardingData();
           state.onboardingStep = Math.max(state.onboardingStep - 1, 1);
           if (state.onboardingStep === 1) await refreshOnboardingPlatformStatus();
+          if (state.onboardingStep >= 2) surfaceDefaultsIntoOnboardingData();
           SocialOSUI.renderOnboardingStep(state.onboardingStep, state.onboardingData);
           break;
 
@@ -1145,32 +1243,8 @@ const SocialOS = (() => {
           SocialOSUI.loading(true, 'Reading your public profiles…');
           try {
             const result = await SocialOSLinker.analyzeProfiles(accounts);
+            applyAnalysisResult(result);
             const d = state.onboardingData;
-            d.linked_accounts = result.linked_accounts;
-            d.social_activity = result.social_activity;
-
-            // Pre-fill the later steps; never overwrite something the user
-            // already typed or picked.
-            const s = result.suggestions || {};
-            if (s.name && !d.name) d.name = s.name;
-            if (s.title && !d.title) d.title = s.title;
-            if (s.topics && !(d.topics || []).length) d.topics = s.topics;
-            if (s.post_frequency_preference && !d.post_frequency_preference) {
-              d.post_frequency_preference = s.post_frequency_preference;
-            }
-            if (s.target_audience) {
-              d.target_audience = d.target_audience || {};
-              for (const [p, aud] of Object.entries(s.target_audience)) {
-                if (!d.target_audience[p]) d.target_audience[p] = aud;
-              }
-            }
-            if (s.tone) {
-              d.tone = d.tone || {};
-              for (const [p, t] of Object.entries(s.tone)) {
-                if (!d.tone[p]) d.tone[p] = t;
-              }
-            }
-
             SocialOSUI.renderOnboardingStep(state.onboardingStep, d);
             const extracted = Object.keys(result.social_activity).length;
             SocialOSUI.toast(
@@ -2424,6 +2498,15 @@ const SocialOS = (() => {
     } else {
       // Restore onboarding step if returning from redirect
       const settings = await SocialOSDB.getOrCreateSettings();
+      // One-time migration from the old 12-step wizard's saved step number
+      // to the new 3-step one. Gated on onboarding_schema so it only ever
+      // runs once per profile — profiles already on schema 2 (including
+      // fresh ones, which start at step 1) skip straight past this.
+      if (settings.onboarding_schema !== 2 && settings.onboarding_step > 0) {
+        settings.onboarding_step = migrateOnboardingStep(settings.onboarding_step);
+        settings.onboarding_schema = 2;
+        await SocialOSDB.saveSettings(settings);
+      }
       if (settings.onboarding_step > 0) {
         state.onboardingStep = settings.onboarding_step;
       }
@@ -2433,6 +2516,7 @@ const SocialOS = (() => {
       // the landing page. Brand-new signed-out visitors see the landing.
       const alreadySignedIn = freshSignIn || await SocialOSAuth.isSignedIn().catch(() => false);
       if (settings.onboarding_step > 1 || savedData || alreadySignedIn) {
+        if (state.onboardingStep >= 2) surfaceDefaultsIntoOnboardingData();
         navigate('onboarding');
       } else {
         navigate('landing');

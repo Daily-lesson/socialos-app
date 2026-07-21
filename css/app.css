@@ -1140,6 +1140,74 @@ select.input {
   color: var(--text-secondary);
 }
 
+/* ── Accordion / summary-card ("Confirm your brief") ─────────────────── */
+
+.ob-accordion {
+  display: block;
+  background: var(--bg-surface);
+  border: 1px solid var(--bg-border);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+
+.ob-accordion + .ob-accordion {
+  margin-top: var(--space-sm);
+}
+
+.ob-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-sm);
+  padding: var(--space-md);
+  cursor: pointer;
+  list-style: none;
+  font-size: 0.9375rem;
+  color: var(--text-primary);
+}
+
+.ob-summary::-webkit-details-marker {
+  display: none;
+}
+
+.ob-summary-label {
+  font-weight: 600;
+  flex-shrink: 0;
+}
+
+.ob-summary-value {
+  flex: 1;
+  min-width: 0;
+  color: var(--text-secondary);
+  font-size: 0.8125rem;
+  text-align: right;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ob-summary::after {
+  content: '';
+  flex-shrink: 0;
+  width: 7px;
+  height: 7px;
+  margin-left: var(--space-xs);
+  border-right: 1.5px solid var(--text-secondary);
+  border-bottom: 1.5px solid var(--text-secondary);
+  transform: rotate(45deg);
+  transition: transform 0.2s ease;
+}
+
+.ob-accordion[open] > .ob-summary::after {
+  transform: rotate(-135deg);
+}
+
+.ob-accordion-body {
+  padding: 0 var(--space-md) var(--space-md);
+  padding-top: var(--space-md);
+  border-top: 1px solid var(--bg-border);
+}
+
 /* ═══════════════════════════════════════════════════════════════════
    DASHBOARD
    ═══════════════════════════════════════════════════════════════════ */
