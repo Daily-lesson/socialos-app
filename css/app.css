@@ -2442,13 +2442,21 @@ body.nav-visible .version-badge {
 }
 .cmp-textarea::placeholder, .cmp-input::placeholder { color: var(--text-faint); }
 
-.cmp-linkrow { position: relative; }
-.cmp-linkrow .cmp-input { padding-left: 44px; }
+.cmp-linkrow { position: relative; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.cmp-linkrow .cmp-input { padding-left: 44px; flex: 1 1 200px; }
 .cmp-link-icon {
   position: absolute; left: 14px; top: 50%; transform: translateY(-50%);
   color: var(--text-faint); pointer-events: none;
 }
 .cmp-link-icon svg { width: 18px; height: 18px; display: block; }
+.cmp-link-find { white-space: nowrap; }
+
+/* "Find a link" suggestion panel (Visuals v3) */
+.cmp-linkfind { display: flex; flex-direction: column; gap: 8px; }
+.cmp-linkfind-list { display: flex; flex-direction: column; gap: 8px; }
+.cmp-linkfind-row { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; text-align: left; width: 100%; padding: 12px; cursor: pointer; }
+.cmp-linkfind-title { font-weight: 600; }
+.cmp-linkfind-meta { font-size: 0.85em; color: var(--text-secondary); }
 
 /* Platform chips */
 .cmp-chips { display: flex; flex-wrap: wrap; gap: var(--space-sm); margin-bottom: var(--space-sm); }

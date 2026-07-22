@@ -202,6 +202,7 @@
  * @property {string} [google_auth_url] - Google OAuth broker Edge Function URL. Baked-in default (DEFAULT_GOOGLE_AUTH_URL); overridable for local dev, like proxy_url.
  * @property {Object<string, PlatformConnection>} platform_connections
  * @property {string|null} social_relay_url - Shared stateless CORS relay Edge Function URL for LinkedIn/Reddit/TikTok API calls (docs/ROADMAP.md §2). Baked-in default (DEFAULT_SOCIAL_RELAY_URL); overridable for local dev.
+ * @property {string} [link_enrich_url] - Link-enrichment Edge Function URL (js/app.js "Find a link"). Baked-in default (DEFAULT_LINK_ENRICH_URL); overridable for local dev. Same Off_Races project as social_relay_url.
  * @property {string} [social_oauth_url] - Social platform OAuth broker Edge Function URL (LinkedIn/Reddit/TikTok token grants). Baked-in default (DEFAULT_SOCIAL_OAUTH_URL); overridable for local dev.
  * @property {string} [mkt_queue_url] - Front Office approval-queue Edge Function URL (js/queue.js). Baked-in default (DEFAULT_MKT_QUEUE_URL); overridable for local dev. NB: hosted in project ehgnxblgiyqtxypkoioc (where the mkt_ schema lives), not Off_Races like the others.
  * @property {string} [front_office_secret] - Shared secret for the mkt-queue Edge Function (X-FrontOffice-Secret). Entered once in Settings, lives only in IndexedDB — NEVER baked into client code (this repo mirrors to a public repo). Empty until Scot sets it.
@@ -409,6 +410,12 @@ const SocialOSDB = (() => {
   // holds no secrets (supabase/functions/social-relay/index.ts).
   const DEFAULT_SOCIAL_RELAY_URL = 'https://qjnvihdrzeyzkjbmzmyf.supabase.co/functions/v1/social-relay';
 
+  // Link enrichment (supabase/functions/link-enrich) — same baked-in,
+  // origin-authorized, no-secret model as social-relay above; same Off_Races
+  // project. Turns a topic query into real recent article links for the
+  // composer's "Find a link". Overridable for local dev.
+  const DEFAULT_LINK_ENRICH_URL = 'https://qjnvihdrzeyzkjbmzmyf.supabase.co/functions/v1/link-enrich';
+
   // Front Office approval-queue broker (supabase/functions/mkt-queue) —
   // NB: deployed to project ehgnxblgiyqtxypkoioc ("Daily-lesson's
   // Project"), NOT Off_Races like the functions above, because that's
@@ -477,6 +484,9 @@ const SocialOSDB = (() => {
       // Shared CORS relay for LinkedIn/Reddit/TikTok (docs/ROADMAP.md §2).
       // Baked in like the AI proxy; overridable for local dev.
       social_relay_url: DEFAULT_SOCIAL_RELAY_URL,
+      // Link enrichment relay (js/app.js "Find a link"). Baked in like the
+      // AI proxy / social relay; overridable for local dev. Off_Races project.
+      link_enrich_url: DEFAULT_LINK_ENRICH_URL,
       // Front Office approval queue (js/queue.js). URL baked in; the
       // shared secret is entered once in Settings (empty = not connected).
       // Settings saved before this shipped won't have these fields —
@@ -703,6 +713,7 @@ const SocialOSDB = (() => {
     DEFAULT_GOOGLE_AUTH_URL,
     DEFAULT_SOCIAL_OAUTH_URL,
     DEFAULT_SOCIAL_RELAY_URL,
+    DEFAULT_LINK_ENRICH_URL,
     DEFAULT_MKT_QUEUE_URL,
     DEFAULT_SUPABASE_URL,
     DEFAULT_SUPABASE_ANON_KEY,

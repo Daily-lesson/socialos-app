@@ -335,6 +335,24 @@ VIDEO: [one-sentence video concept]`
   }
 
   /**
+   * Turn a draft post into a short news-search query for "Find a link".
+   * Claude, ~15 tokens. Throws on proxy failure — the caller (js/app.js)
+   * catches and falls back to significant words of the draft, so the search
+   * still runs when the AI is down.
+   * @param {string} text
+   * @returns {Promise<string>}
+   */
+  async function suggestLinkQuery(text) {
+    const trimmed = (text || '').trim();
+    if (!trimmed) return '';
+    const settings = await SocialOSDB.getSettings();
+    const scrubbed = SocialOSUtils.scrub(trimmed, settings?.content_scrubbing?.custom_blocked_terms);
+    const systemPrompt = 'You turn a social media post draft into a short news-search query. Return ONLY a 2 to 6 word query naming the core topic — no quotation marks, no punctuation, no explanation.';
+    const result = await callClaude(systemPrompt, scrubbed.text, 15);
+    return result.trim().replace(/^["'“]+|["'”]+$/g, '').replace(/[.?!,;:]+$/g, '');
+  }
+
+  /**
    * Pick the best-matching Library photo for a drafted post (Auto-Visuals v2).
    * Candidates are COMPACT METADATA ONLY (id/description/tags/ai_rating) — never
    * image bytes — to keep the call cheap. Best-effort: the caller treats any
@@ -745,6 +763,7 @@ Return ONLY the comment text.`;
     buildSystemPrompt,
     generatePostDrafts,
     suggestQuoteLine,
+    suggestLinkQuery,
     suggestMediaForPost,
     analyseContent,
     analysePhoto,

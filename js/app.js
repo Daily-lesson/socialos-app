@@ -11,7 +11,7 @@ const SocialOS = (() => {
 
   /**
    * In-memory working state.
-   * @type {{currentScreen: string, onboardingStep: number, onboardingData: Object<string, any>, calendarFocusDate: string|null, approvalsTab: string, engagementSubTab: string, queue: {drafts: any[], direct: Object<string, boolean>}, composer: {mode: string, text: string, link: string, selected: string[]|null, oneTap: boolean, posts: any[], results: any[]|null, schedule: {show: boolean, time: string}, replyPlatform: string, comment: string, postSummary: string, reply: {reply: string, alternative: string}|null, attach: {contentId: string, thumbUrl: string, title: string, flagged: boolean, auto?: boolean}|null, attachPicker: boolean, autoCardId: string|null, autoVisualBlocked: boolean, gen: {show: boolean, template: string, size: string, text: string, autoText: string, note: string, byline: string}}}}
+   * @type {{currentScreen: string, onboardingStep: number, onboardingData: Object<string, any>, calendarFocusDate: string|null, approvalsTab: string, engagementSubTab: string, queue: {drafts: any[], direct: Object<string, boolean>}, composer: {mode: string, text: string, link: string, selected: string[]|null, oneTap: boolean, posts: any[], results: any[]|null, schedule: {show: boolean, time: string}, replyPlatform: string, comment: string, postSummary: string, reply: {reply: string, alternative: string}|null, attach: {contentId: string, thumbUrl: string, title: string, flagged: boolean, auto?: boolean}|null, attachPicker: boolean, autoCardId: string|null, autoVisualBlocked: boolean, gen: {show: boolean, template: string, size: string, text: string, autoText: string, note: string, byline: string}, linkFind: {show: boolean, loading: boolean, items: any[], error: string}}}}
    */
   const state = {
     currentScreen: 'landing',
@@ -48,7 +48,9 @@ const SocialOS = (() => {
       autoCardId: null,        // ContentItem id of the current AUTO quote card (orphan tracking), else null
       autoVisualBlocked: false, // any manual attach/remove sets true → auto-visuals won't (re)attach this run
       // Generate-a-quote-card panel state (js/media.js renderQuoteCard).
-      gen: { show: false, template: 'clean', size: 'square', text: '', autoText: '', note: '', byline: '' }
+      gen: { show: false, template: 'clean', size: 'square', text: '', autoText: '', note: '', byline: '' },
+      // Link enrichment ("Find a link") — ephemeral suggestion panel state.
+      linkFind: { show: false, loading: false, items: [], error: '' }
     }
   };
 
@@ -59,6 +61,10 @@ const SocialOS = (() => {
   // Bumped each composer-draft run; guards the fire-and-forget Auto-Visuals
   // v2 worker (maybeAutoAttachVisual) against a stale/superseded run.
   let composerDraftEpoch = 0;
+
+  // Bumped each composer-link-find run; guards against a superseded "Find a
+  // link" request overwriting fresher results (or a since-cleared composer).
+  let linkFindEpoch = 0;
 
   // ── Router ────────────────────────────────────────────────────────────
 
@@ -195,6 +201,7 @@ const SocialOS = (() => {
       attach: c.attach,
       attachPicker: c.attachPicker,
       gen: c.gen,
+      linkFind: c.linkFind,
       mediaItems
     });
   }
@@ -356,6 +363,57 @@ const SocialOS = (() => {
     if (!t) return '';
     const m = t.match(/^[^.!?\n]+[.!?]?/);
     return (m ? m[0] : t).trim();
+  }
+
+  /**
+   * Offline fallback query for "Find a link": first ~6 significant words of the
+   * draft (drops URLs, punctuation, stopwords, and words <3 chars). Used when
+   * SocialOSAI.suggestLinkQuery throws (AI proxy down) so the news search still
+   * runs — user-initiated, so silence would be wrong.
+   * @param {string} text @returns {string}
+   */
+  function fallbackLinkQuery(text) {
+    const stop = new Set(['the','a','an','and','or','but','to','of','in','on','for','with','is','are','was','this','that','my','our','your','we','it','at','as','by','be','how','why','what']);
+    return (text || '')
+      .replace(/https?:\/\/\S+/g, ' ')
+      .replace(/[^\w\s]/g, ' ')
+      .split(/\s+/)
+      .filter(w => w.length > 2 && !stop.has(w.toLowerCase()))
+      .slice(0, 6)
+      .join(' ');
+  }
+
+  /**
+   * POST a query to the link-enrich Edge Function. Reads the URL override at
+   * call time (settings.link_enrich_url || DEFAULT_LINK_ENRICH_URL), matching
+   * the social-relay call-site pattern (js/linkedin.js relayFetch).
+   * @param {string} query @param {number} [limit=5]
+   * @returns {Promise<Array<{title:string,source:string,published:string,url:string}>>}
+   */
+  async function findLinkSuggestions(query, limit = 5) {
+    const settings = await SocialOSDB.getSettings();
+    const url = settings?.link_enrich_url || SocialOSDB.DEFAULT_LINK_ENRICH_URL;
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ query, limit })
+    });
+    if (!res.ok) throw new Error(`Link service returned ${res.status}`);
+    const data = await res.json().catch(() => ({}));
+    return Array.isArray(data.items) ? data.items : [];
+  }
+
+  /**
+   * Honest, quiet failure line for "Find a link" (user-initiated, so visible
+   * is correct — contrast the silent auto paths, CLAUDE.md gotcha 5).
+   * @param {unknown} err @returns {string}
+   */
+  function linkFindErrMsg(err) {
+    const m = err instanceof Error ? err.message : String(err);
+    if (/failed to fetch|networkerror|load failed|ERR_|fetch|Link service returned/i.test(m)) {
+      return "Couldn't reach the link service — it may not be deployed yet; see supabase/functions/link-enrich/README.md";
+    }
+    return m;
   }
 
   /**
@@ -766,6 +824,7 @@ const SocialOS = (() => {
       c.results = null;
       c.text = '';
       c.link = '';
+      c.linkFind = { show: false, loading: false, items: [], error: '' };
       c.attach = null;
       c.autoCardId = null; // Auto-Visuals v2: once scheduled, the auto card is kept — stop tracking it as an orphan.
       c.schedule = { show: false, time: '' };
@@ -854,6 +913,7 @@ const SocialOS = (() => {
         c.mode = 'post';
         c.text = handoff.text;
         c.link = '';
+        c.linkFind = { show: false, loading: false, items: [], error: '' };
         if (handoff.platforms.length) c.selected = handoff.platforms.slice();
         c.posts = [];
         c.results = null;
@@ -951,6 +1011,7 @@ const SocialOS = (() => {
         c.mode = 'post';
         c.text = '';
         c.link = '';
+        c.linkFind = { show: false, loading: false, items: [], error: '' };
         c.selected = [channel];
         c.posts = [post];
         c.results = [result];
@@ -1858,6 +1919,7 @@ const SocialOS = (() => {
         case 'composer-mode': {
           syncComposerInputsFromDOM();
           state.composer.mode = actionEl.dataset?.mode === 'reply' ? 'reply' : 'post';
+          state.composer.linkFind = { show: false, loading: false, items: [], error: '' };
           await renderComposer();
           break;
         }
@@ -2002,6 +2064,49 @@ const SocialOS = (() => {
         case 'composer-attach-cancel': {
           syncComposerInputsFromDOM();
           state.composer.attachPicker = false;
+          await renderComposer();
+          break;
+        }
+
+        case 'composer-link-find': {
+          syncComposerInputsFromDOM();
+          const c = state.composer;
+          if (!c.text.trim()) { SocialOSUI.toast('Add some text first — the link search reads your draft.', 'warning'); break; }
+          const myEpoch = ++linkFindEpoch;
+          c.linkFind = { show: true, loading: true, items: [], error: '' };
+          await renderComposer();
+          try {
+            let query = '';
+            try { query = await SocialOSAI.suggestLinkQuery(c.text); } catch (_) { /* AI down — fall back */ }
+            if (!query) query = fallbackLinkQuery(c.text);
+            const items = await findLinkSuggestions(query, 5);
+            if (myEpoch !== linkFindEpoch) break; // superseded — a fresher request already landed
+            c.linkFind = { show: true, loading: false, items, error: '' };
+          } catch (err) {
+            if (myEpoch !== linkFindEpoch) break; // superseded — don't clobber fresher results with a stale error
+            c.linkFind = { show: true, loading: false, items: [], error: linkFindErrMsg(err) };
+          }
+          await renderComposer();
+          break;
+        }
+
+        case 'composer-link-pick': {
+          syncComposerInputsFromDOM();
+          const c = state.composer;
+          const url = actionEl.dataset?.url;
+          if (url) {
+            c.link = url;
+            const el = /** @type {HTMLInputElement} */ (document.getElementById('composer-link'));
+            if (el) el.value = url; // reflect immediately; existing draft/publish flow reads state.composer.link
+          }
+          c.linkFind = { show: false, loading: false, items: [], error: '' };
+          await renderComposer();
+          break;
+        }
+
+        case 'composer-link-find-cancel': {
+          syncComposerInputsFromDOM();
+          state.composer.linkFind = { show: false, loading: false, items: [], error: '' };
           await renderComposer();
           break;
         }

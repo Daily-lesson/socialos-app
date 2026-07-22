@@ -7,7 +7,7 @@
  * approval notifications with one-tap actions and routes taps into the app.
  */
 
-const CACHE_NAME = 'socialos-v23'; // v23: Auto-Visuals v2 (AI photo suggest + auto quote-card fallback)
+const CACHE_NAME = 'socialos-v24'; // v24: Link enrichment ("Find a link" — link-enrich Edge Function)
 const SHELL_ASSETS = [
   './',
   './index.html',

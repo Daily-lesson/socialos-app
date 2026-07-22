@@ -336,7 +336,8 @@ const SocialOSUI = (() => {
     shield:   '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-3.6 8-9.5V5.4L12 2 4 5.4v7.1C4 18.4 12 22 12 22z"/><path d="m9 11.5 2 2 4-4.5"/></svg>',
     engage:   '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a8 8 0 0 1-8 8H4l2-3a8 8 0 1 1 15-5z"/><path d="M9 11h6M9 14h3"/></svg>',
     compose:  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/><path d="m5 3 1.5 3L9.5 7 6.5 8.5 5 11.5 3.5 8.5.5 7l3-1L5 3z" opacity=".7"/></svg>',
-    send:     '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M22 2 11 13"/><path d="M22 2 15 22l-4-9-9-4 20-7z"/></svg>'
+    send:     '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M22 2 11 13"/><path d="M22 2 15 22l-4-9-9-4 20-7z"/></svg>',
+    search:   '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>'
   };
 
   // ── Landing page (signed-out / pre-onboarding) ────────────────────────
@@ -2438,6 +2439,7 @@ const SocialOSUI = (() => {
     const attachPicker = !!data.attachPicker;
     const gen = data.gen || { show: false, template: 'clean', size: 'square', text: '', note: '' };
     const mediaItems = data.mediaItems || [];
+    const linkFind = data.linkFind || null;
 
     const chip = (p) => {
       const isDirect = cap.direct.includes(p);
@@ -2542,6 +2544,35 @@ const SocialOSUI = (() => {
       </div>
     ` : '';
 
+    // "Find a link" (Visuals v3) — inline suggestion panel below the link row.
+    // User-initiated only (never automatic); failure is visible (CLAUDE.md gotcha 5).
+    const lf = linkFind || { show: false, loading: false, items: [], error: '' };
+    const fmtLinkDate = (s) => {
+      if (!s) return '';
+      const d = new Date(s);
+      return isNaN(+d) ? '' : d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+    };
+    const linkFindBlock = lf.show ? `
+      <div class="cmp-field cmp-linkfind">
+        <div class="cmp-drafts-head"><h3>Suggested links</h3>
+          <button type="button" class="btn btn-secondary btn-sm" data-action="composer-link-find-cancel">Close</button>
+        </div>
+        ${lf.loading ? `<p class="cmp-hint">Searching recent news…</p>` : ''}
+        ${lf.error ? `<p class="cmp-hint"><span class="cmp-warn">${escapeHtml(lf.error)}</span></p>` : ''}
+        ${(!lf.loading && !lf.error && !lf.items.length) ? `<p class="cmp-hint">No recent articles found for that topic. Edit your text and try again.</p>` : ''}
+        ${lf.items.length ? `
+          <div class="cmp-linkfind-list">
+            ${lf.items.map(it => `
+              <button type="button" class="card cmp-linkfind-row" data-action="composer-link-pick" data-url="${escapeHtml(it.url)}">
+                <span class="cmp-linkfind-title">${escapeHtml(it.title)}</span>
+                <span class="cmp-linkfind-meta">${escapeHtml(it.source || '')}${it.source && it.published ? ' &middot; ' : ''}${escapeHtml(fmtLinkDate(it.published))}</span>
+              </button>
+            `).join('')}
+          </div>
+        ` : ''}
+      </div>
+    ` : '';
+
     const postMode = `
       <div class="cmp-field">
         <textarea id="composer-text" class="cmp-textarea" rows="5"
@@ -2551,7 +2582,9 @@ const SocialOSUI = (() => {
         <span class="cmp-link-icon" aria-hidden="true">${ICONS.link}</span>
         <input id="composer-link" class="cmp-input" type="url" inputmode="url"
                placeholder="Add a link (optional)" value="${escapeHtml(data.link || '')}">
+        <button type="button" class="cmp-attach-btn cmp-link-find" data-action="composer-link-find">${ICONS.search} Find a link</button>
       </div>
+      ${linkFindBlock}
 
       ${attachBlock}
       ${genPanel}
