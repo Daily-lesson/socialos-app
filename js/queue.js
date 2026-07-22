@@ -40,6 +40,8 @@
  * @property {'draft'|'queued'|'approved'|'published'|'rejected'|'superseded'} status
  * @property {string|null} scheduled_for
  * @property {string|null} notes
+ * @property {boolean} [has_media] - true if the draft carries a valid media_data_uri (v4; list never returns the URI itself)
+ * @property {string|null} [media_alt] - alt text for the media, when has_media is true
  */
 
 const SocialOSQueue = (() => {
@@ -133,6 +135,17 @@ const SocialOSQueue = (() => {
   }
 
   /**
+   * Lazily fetch a draft's media (data URI + alt). Returns {mediaDataUri:null}
+   * when absent/invalid. Used for card thumbnails and at approve time.
+   * @param {string} id
+   * @returns {Promise<{mediaDataUri: string|null, mediaAlt: string|null}>}
+   */
+  async function fetchMedia(id) {
+    const data = await call({ action: 'media', id });
+    return { mediaDataUri: data?.media_data_uri || null, mediaAlt: data?.media_alt || null };
+  }
+
+  /**
    * Can this draft's channel be handed into the Quick Composer?
    * @param {MktDraft} draft
    * @returns {boolean}
@@ -179,6 +192,7 @@ const SocialOSQueue = (() => {
     fetchQueue,
     approveDraft,
     rejectDraft,
+    fetchMedia,
     isComposerChannel,
     redditMeta,
     composerHandoff

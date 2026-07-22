@@ -11,7 +11,7 @@ const SocialOS = (() => {
 
   /**
    * In-memory working state.
-   * @type {{currentScreen: string, onboardingStep: number, onboardingData: Object<string, any>, calendarFocusDate: string|null, approvalsTab: string, engagementSubTab: string, queue: {drafts: any[], direct: Object<string, boolean>}, composer: {mode: string, text: string, link: string, selected: string[]|null, oneTap: boolean, posts: any[], results: any[]|null, schedule: {show: boolean, time: string}, replyPlatform: string, comment: string, postSummary: string, reply: {reply: string, alternative: string}|null, attach: {contentId: string, thumbUrl: string, title: string, flagged: boolean, auto?: boolean}|null, attachPicker: boolean, autoCardId: string|null, autoVisualBlocked: boolean, gen: {show: boolean, template: string, size: string, text: string, autoText: string, note: string, byline: string}, linkFind: {show: boolean, loading: boolean, items: any[], error: string}}}}
+   * @type {{currentScreen: string, onboardingStep: number, onboardingData: Object<string, any>, calendarFocusDate: string|null, approvalsTab: string, engagementSubTab: string, queue: {drafts: any[], direct: Object<string, boolean>, media: Object<string, {dataUri: string, alt: string}>}, composer: {mode: string, text: string, link: string, selected: string[]|null, oneTap: boolean, posts: any[], results: any[]|null, schedule: {show: boolean, time: string}, replyPlatform: string, comment: string, postSummary: string, reply: {reply: string, alternative: string}|null, attach: {contentId: string, thumbUrl: string, title: string, flagged: boolean, auto?: boolean}|null, attachPicker: boolean, autoCardId: string|null, autoVisualBlocked: boolean, gen: {show: boolean, template: string, size: string, text: string, autoText: string, note: string, byline: string}, linkFind: {show: boolean, loading: boolean, items: any[], error: string}}}}
    */
   const state = {
     currentScreen: 'landing',
@@ -25,7 +25,8 @@ const SocialOS = (() => {
     // the platform→connected map that decides the one-click button labels.
     queue: {
       /** @type {any[]} */ drafts: [],
-      /** @type {Object<string, boolean>} */ direct: {}
+      /** @type {Object<string, boolean>} */ direct: {},
+      /** @type {Object<string,{dataUri:string,alt:string}>} */ media: {}
     },
     // Quick Composer (js/composer.js) view state — all ephemeral, never persisted.
     composer: {
@@ -264,24 +265,30 @@ const SocialOS = (() => {
 
   /**
    * One-time gate before a publish/schedule action proceeds when the
-   * attached media is flagged faces_visible (UX §4). Resolves from the
-   * ContentItem rather than the ephemeral state.composer.attach.flagged so
-   * it stays correct even if attach state has moved on since drafting. Not
-   * flagged: runs `onProceed` immediately. Flagged: one SocialOSUI.confirm
-   * sheet — cancel leaves the review screen untouched and sends nothing.
-   * Once per action, never per platform.
+   * attached media is flagged faces_visible (UX §4) — or, since v4's queue
+   * media pipeline, 'screening_unavailable' (analysePhoto couldn't run at
+   * approve time, so the image was imported unflagged rather than silently
+   * passed — hard rule 2). Resolves from the ContentItem rather than the
+   * ephemeral state.composer.attach.flagged so it stays correct even if
+   * attach state has moved on since drafting. Neither flag: runs
+   * `onProceed` immediately. Faces takes priority over screening-unavailable
+   * when both are somehow present. One SocialOSUI.confirm sheet — cancel
+   * leaves the review screen untouched and sends nothing. Once per action,
+   * never per platform.
    * @param {ScheduledPost[]} posts
    * @param {() => Promise<void>} onProceed
    * @returns {Promise<void>}
    */
   async function withSensitivityConfirm(posts, onProceed) {
     const contentIds = new Set((posts || []).map(p => p.media_content_id).filter(Boolean));
-    let flagged = false;
+    let facesVisible = false, screeningUnavailable = false;
     for (const contentId of contentIds) {
       const item = await SocialOSDB.get(SocialOSDB.STORES.content, contentId);
-      if (item?.sensitivity_flags?.includes('faces_visible')) { flagged = true; break; }
+      const flags = item?.sensitivity_flags || [];
+      if (flags.includes('faces_visible')) facesVisible = true;
+      if (flags.includes('screening_unavailable')) screeningUnavailable = true;
     }
-    if (!flagged) { await onProceed(); return; }
+    if (!facesVisible && !screeningUnavailable) { await onProceed(); return; }
 
     // Reddit+image is forced assisted regardless of connection (see
     // composer.js publishOne) — factor that into the confirm label so "all
@@ -290,11 +297,22 @@ const SocialOS = (() => {
     const willBeAssisted = (/** @type {ScheduledPost} */ p) =>
       !cap.direct.includes(p.platform) || (p.platform === 'reddit' && !!p.media_content_id);
     const allAssisted = posts.every(willBeAssisted);
+    const confirmLabel = allAssisted ? 'Copy & open' : 'Post it';
+
+    if (facesVisible) {
+      SocialOSUI.confirm(
+        'A face is visible',
+        "The image on this post shows someone's face. Post it as-is?",
+        confirmLabel,
+        () => { onProceed(); }
+      );
+      return;
+    }
 
     SocialOSUI.confirm(
-      'A face is visible',
-      "The image on this post shows someone's face. Post it as-is?",
-      allAssisted ? 'Copy & open' : 'Post it',
+      "Couldn't screen this image",
+      "This image couldn't be checked for faces or sensitive content — the screener was unreachable. Post it anyway?",
+      confirmLabel,
       () => { onProceed(); }
     );
   }
@@ -866,6 +884,52 @@ const SocialOS = (() => {
   }
 
   /**
+   * Honest weekly tally from the local posts store. Direct = published with a
+   * real platform_post_id (LinkedIn/Reddit auto-post). Assisted = published
+   * with no platform_post_id — i.e. an assisted handoff the user confirmed via
+   * "Mark posted"/"I've Posted It" (the only signal we have; an assisted post
+   * never confirmed isn't counted, which is the honest floor).
+   * @returns {Promise<{direct:number, assisted:number}>}
+   */
+  async function weeklyPostCounts() {
+    const posts = await SocialOSDB.getAllPosts();
+    const cutoff = Date.now() - 7 * 24 * 60 * 60 * 1000;
+    let direct = 0, assisted = 0;
+    for (const p of posts) {
+      if (p.status !== 'published' || !p.published_time) continue;
+      if (new Date(p.published_time).getTime() < cutoff) continue;
+      if (p.platform_post_id) direct++; else assisted++;
+    }
+    return { direct, assisted };
+  }
+
+  /**
+   * Lazy, silent (hard rule 3) thumbnail fetch for has_media cards. Fetch
+   * failures are swallowed — the card just shows no thumb, never an error.
+   * @param {import('./queue.js').MktDraft[]} drafts
+   */
+  async function loadQueueThumbnails(drafts) {
+    let any = false;
+    for (const d of drafts) {
+      if (!d.has_media || state.queue.media[d.id]) continue;
+      try {
+        const { mediaDataUri, mediaAlt } = await SocialOSQueue.fetchMedia(d.id);
+        if (mediaDataUri) {
+          state.queue.media[d.id] = { dataUri: mediaDataUri, alt: mediaAlt || d.media_alt || '' };
+          any = true;
+        }
+      } catch { /* silent — the card just shows no thumb */ }
+    }
+    if (any && state.currentScreen === 'queue') {
+      const week = await weeklyPostCounts();
+      SocialOSUI.renderQueue({
+        configured: true, drafts: state.queue.drafts, error: null,
+        direct: state.queue.direct, media: state.queue.media, week
+      });
+    }
+  }
+
+  /**
    * Load + render the Front Office approval queue (js/queue.js).
    */
   async function renderQueue() {
@@ -881,12 +945,14 @@ const SocialOS = (() => {
       reddit: await SocialOSReddit.isConnected()
     };
     state.queue.direct = direct;
+    const week = await weeklyPostCounts();
     try {
       const drafts = await SocialOSQueue.fetchQueue();
       state.queue.drafts = drafts;
-      SocialOSUI.renderQueue({ configured: true, drafts, error: null, direct });
+      SocialOSUI.renderQueue({ configured: true, drafts, error: null, direct, media: state.queue.media, week });
+      loadQueueThumbnails(drafts); // fire-and-forget
     } catch (err) {
-      SocialOSUI.renderQueue({ configured: true, drafts: [], error: queueErrMsg(err), direct });
+      SocialOSUI.renderQueue({ configured: true, drafts: [], error: queueErrMsg(err), direct, media: state.queue.media, week });
     }
     SocialOSUI.loading(false);
   }
@@ -983,53 +1049,76 @@ const SocialOS = (() => {
     // copy-&-open fallback is offered instead of guessing where to post.
     const redditExtra = channel === 'reddit' ? (SocialOSQueue.redditMeta(draft) || {}) : {};
 
-    SocialOSUI.loading(true, 'Posting…');
+    // v4: fetch + screen any queue media into a Library ContentItem BEFORE
+    // creating the post, so withSensitivityConfirm below has real flags to
+    // gate on (removed the standalone loading(true,'Posting…') here — the
+    // confirm sheet, when it fires, comes first now).
+    let post;
     try {
-      const post = await SocialOSComposer.createReadyPost({
+      const media = await importQueueMedia(draft);
+      post = await SocialOSComposer.createReadyPost({
         platform: channel,
         text: draft.body || '',
         title: draft.title,
         source: 'queue',
         scheduledTime: SocialOSUtils.now(),
+        mediaContentId: media.mediaContentId,
         ...redditExtra
       });
-      const result = await SocialOSComposer.publishOne(post.id);
-      SocialOSUI.loading(false);
-
-      if (result.mode === 'published') {
-        SocialOSUI.toast(`Approved & posted to ${channel} ✓`, 'success', 5000);
-        await renderQueue();
-        await updateBadge();
-        return;
-      }
-
-      if (result.mode === 'assisted') {
-        // C2/C3: route through the shared handoff so an image
-        // (result.mediaDataUri) rides along, then still land in the
-        // composer so the approved draft is reviewable there.
-        const c = state.composer;
-        c.mode = 'post';
-        c.text = '';
-        c.link = '';
-        c.linkFind = { show: false, loading: false, items: [], error: '' };
-        c.selected = [channel];
-        c.posts = [post];
-        c.results = [result];
-        const label = SocialOSUI.PLATFORM_LABELS[channel] || channel;
-        await assistedHandoff({ text: result.text, deepLink: result.deepLink, mediaDataUri: result.mediaDataUri, label });
-        await navigate('compose');
-        return;
-      }
-
-      // Failed direct publish — the approved post is parked as due-now
-      // under Approvals → Scheduled for a one-tap retry.
-      SocialOSUI.toast(`Approved, but posting failed — ${result.error || 'unknown error'}. It's saved under Approvals → Scheduled; tap POST NOW to retry.`, 'error', 8000);
-      await renderQueue();
     } catch (err) {
       SocialOSUI.loading(false);
       SocialOSUI.toast(`Approved, but posting hit an error — ${composerErrMsg(err)}. The draft is approved server-side; retry from Approvals.`, 'error', 8000);
       await renderQueue();
+      return;
     }
+
+    async function doPublish() {
+      SocialOSUI.loading(true, 'Posting…');
+      try {
+        const result = await SocialOSComposer.publishOne(post.id);
+        SocialOSUI.loading(false);
+
+        if (result.mode === 'published') {
+          SocialOSUI.toast(`Approved & posted to ${channel} ✓`, 'success', 5000);
+          await renderQueue();
+          await updateBadge();
+          return;
+        }
+
+        if (result.mode === 'assisted') {
+          // C2/C3: route through the shared handoff so an image
+          // (result.mediaDataUri) rides along, then still land in the
+          // composer so the approved draft is reviewable there.
+          const c = state.composer;
+          c.mode = 'post';
+          c.text = '';
+          c.link = '';
+          c.linkFind = { show: false, loading: false, items: [], error: '' };
+          c.selected = [channel];
+          c.posts = [post];
+          c.results = [result];
+          const label = SocialOSUI.PLATFORM_LABELS[channel] || channel;
+          await assistedHandoff({ text: result.text, deepLink: result.deepLink, mediaDataUri: result.mediaDataUri, label });
+          await navigate('compose');
+          return;
+        }
+
+        // Failed direct publish — the approved post is parked as due-now
+        // under Approvals → Scheduled for a one-tap retry.
+        SocialOSUI.toast(`Approved, but posting failed — ${result.error || 'unknown error'}. It's saved under Approvals → Scheduled; tap POST NOW to retry.`, 'error', 8000);
+        await renderQueue();
+      } catch (err) {
+        SocialOSUI.loading(false);
+        SocialOSUI.toast(`Approved, but posting hit an error — ${composerErrMsg(err)}. The draft is approved server-side; retry from Approvals.`, 'error', 8000);
+        await renderQueue();
+      }
+    }
+    // Drop the 'Approving…' overlay (z-index 500) before the confirm sheet
+    // (z-index 200) — otherwise a faces_visible/screening_unavailable draft's
+    // confirm renders under the still-showing spinner (invisible + untappable,
+    // and Cancel would never clear it). doPublish re-raises 'Posting…'.
+    SocialOSUI.loading(false);
+    await withSensitivityConfirm([post], doPublish);
   }
 
   /**
@@ -1054,12 +1143,16 @@ const SocialOS = (() => {
       const channel = (draft.channel || '').toLowerCase();
       const redditExtra = channel === 'reddit' ? (SocialOSQueue.redditMeta(draft) || {}) : {};
 
+      // v4: screen queue media now, at approve time — never at publish time
+      // (the zero-tap SW path can't run analysePhoto; see sw.js swAutoPostDue).
+      const media = await importQueueMedia(draft);
       const post = await SocialOSComposer.createReadyPost({
         platform: channel,
         text: draft.body || '',
         title: draft.title,
         source: 'queue',
         scheduledTime: new Date(when).toISOString(),
+        mediaContentId: media.mediaContentId,
         ...redditExtra
       });
 
@@ -1110,28 +1203,36 @@ const SocialOS = (() => {
       return;
     }
 
-    SocialOSUI.loading(true, 'Posting…');
-    try {
-      const result = await SocialOSComposer.publishOne(postId);
-      SocialOSUI.loading(false);
+    async function doPublish() {
+      SocialOSUI.loading(true, 'Posting…');
+      try {
+        const result = await SocialOSComposer.publishOne(postId);
+        SocialOSUI.loading(false);
 
-      if (result.mode === 'published') {
-        SocialOSUI.toast(`Posted to ${result.platform} ✓`, 'success', 5000);
-      } else if (result.mode === 'assisted') {
-        // C2: route through the shared handoff so a scheduled/due post's
-        // image (result.mediaDataUri) rides along instead of being dropped.
-        const label = SocialOSUI.PLATFORM_LABELS[result.platform] || result.platform;
-        await assistedHandoff({ text: result.text, deepLink: result.deepLink, mediaDataUri: result.mediaDataUri, label });
-      } else {
-        SocialOSUI.toast(`Posting failed — ${result.error || 'unknown error'}. Tap POST NOW to retry.`, 'error', 8000);
+        if (result.mode === 'published') {
+          SocialOSUI.toast(`Posted to ${result.platform} ✓`, 'success', 5000);
+        } else if (result.mode === 'assisted') {
+          // C2: route through the shared handoff so a scheduled/due post's
+          // image (result.mediaDataUri) rides along instead of being dropped.
+          const label = SocialOSUI.PLATFORM_LABELS[result.platform] || result.platform;
+          await assistedHandoff({ text: result.text, deepLink: result.deepLink, mediaDataUri: result.mediaDataUri, label });
+        } else {
+          SocialOSUI.toast(`Posting failed — ${result.error || 'unknown error'}. Tap POST NOW to retry.`, 'error', 8000);
+        }
+      } catch (err) {
+        SocialOSUI.loading(false);
+        SocialOSUI.toast(`Posting error — ${composerErrMsg(err)}`, 'error', 6000);
       }
-    } catch (err) {
-      SocialOSUI.loading(false);
-      SocialOSUI.toast(`Posting error — ${composerErrMsg(err)}`, 'error', 6000);
+      state.approvalsTab = 'posts';
+      await navigate('approvals');
+      await updateBadge();
     }
-    state.approvalsTab = 'posts';
-    await navigate('approvals');
-    await updateBadge();
+    // v4: gated once if the post's media is flagged faces_visible or
+    // couldn't be screened at approve time (queue media screens at approve,
+    // not here — this covers the sw.js swAutoPostDue exclusion for that
+    // case). Shared gate with composer-scheduled posts — a second
+    // face-confirm on non-queue posts is harmless, never dishonest.
+    await withSensitivityConfirm([post], doPublish);
   }
 
   async function renderCalendar() {
@@ -1674,6 +1775,54 @@ const SocialOS = (() => {
     return savedItems;
   }
 
+  /**
+   * Approve-time media pipeline for a queue draft: fetch → screen → save as a
+   * Library ContentItem tagged ['queue'] with real sensitivity_flags. Screening
+   * failure imports the image with a 'screening_unavailable' sentinel so the
+   * publish gate shows a visible "couldn't screen this image" confirm — never a
+   * silent pass (V4 hard rule 2). Fetch failure => text-only post (silent).
+   * @param {MktDraft} draft
+   * @returns {Promise<{mediaContentId: string|null, screenFailed: boolean}>}
+   */
+  async function importQueueMedia(draft) {
+    if (!draft.has_media) return { mediaContentId: null, screenFailed: false };
+    let mediaDataUri;
+    try {
+      ({ mediaDataUri } = await SocialOSQueue.fetchMedia(draft.id));
+    } catch { return { mediaContentId: null, screenFailed: false }; }
+    if (!mediaDataUri) return { mediaContentId: null, screenFailed: false };
+
+    const settings = await SocialOSDB.getSettings();
+    const mimeType = (mediaDataUri.match(/^data:(image\/[a-z+]+);base64,/i) || [])[1] || 'image/png';
+    let flags = [], tags = ['queue'], screenFailed = false;
+    let ratingReason = 'Screened from the Front Office queue';
+    let description = draft.title || 'Queue image';
+    try {
+      const analysis = await SocialOSAI.analysePhoto(mediaDataUri, mimeType, draft.title || 'queue-image');
+      flags = analysis.sensitivity_flags || [];
+      tags = ['queue', ...(analysis.tags || [])];
+      ratingReason = analysis.rating_reason || ratingReason;
+      description = SocialOSUtils.scrub(analysis.description || description,
+        settings?.content_scrubbing?.custom_blocked_terms).text;
+    } catch {
+      screenFailed = true;
+      flags = ['screening_unavailable'];
+      ratingReason = 'Screening unavailable — confirm before posting.';
+    }
+    /** @type {ContentItem} */
+    const item = {
+      id: SocialOSUtils.uuid(), source: 'local_upload', source_id: null, type: 'photo',
+      title: draft.title || 'Queue image', description,
+      thumbnail_url: mediaDataUri, raw_content: null,
+      tags, sensitivity_flags: flags, scrubbed: true,
+      ai_rating: 'medium', ai_rating_reason: ratingReason,
+      suggested_platforms: [(draft.channel || 'linkedin').toLowerCase()], suggested_angles: [],
+      status: 'available', post_history: [], added_at: SocialOSUtils.now(), last_used: null
+    };
+    await SocialOSDB.put(SocialOSDB.STORES.content, item);
+    return { mediaContentId: item.id, screenFailed };
+  }
+
   // ── Notifications (BUILD_PLAN §7 notification_scheduler, §12 triggers) ─
   // A PWA can't run timers in the background, so reminders are checked on
   // every app open. Phase 5 moves scheduling server-side (Cloudflare Cron).
@@ -1748,10 +1897,22 @@ const SocialOS = (() => {
       remaining = [];
       for (const p of due) {
         if (direct[p.platform]) {
-          try {
-            const r = await SocialOSComposer.publishOne(p.id);
-            if (r.mode === 'published') { posted++; continue; }
-          } catch { /* fall through to the manual list */ }
+          // v4 hard rule 2: a flagged / unscreened image must never zero-tap —
+          // it needs the visible confirm, which can't run in a silent auto-post.
+          // Mirror sw.js swAutoPostDue; fall to the manual POST NOW list (the
+          // gated publishDuePost) instead of publishing it here.
+          let needsConfirm = false;
+          if (p.media_content_id) {
+            const media = await SocialOSDB.get(SocialOSDB.STORES.content, p.media_content_id);
+            const flags = (media && media.sensitivity_flags) || [];
+            needsConfirm = flags.includes('faces_visible') || flags.includes('screening_unavailable');
+          }
+          if (!needsConfirm) {
+            try {
+              const r = await SocialOSComposer.publishOne(p.id);
+              if (r.mode === 'published') { posted++; continue; }
+            } catch { /* fall through to the manual list */ }
+          }
         }
         remaining.push(p);
       }
@@ -1802,7 +1963,7 @@ const SocialOS = (() => {
         await navigate('queue');
         const draft = arg ? state.queue.drafts.find(d => d.id === arg) : null;
         if (draft) {
-          SocialOSUI.renderQueueEdit(draft, state.queue.direct);
+          SocialOSUI.renderQueueEdit(draft, state.queue.direct, state.queue.media[draft.id]);
         } else if (arg) {
           SocialOSUI.toast('That draft is no longer queued — it may already be handled.', 'info', 6000);
         }
@@ -3215,7 +3376,7 @@ const SocialOS = (() => {
         case 'queue-edit': {
           if (!id) break;
           const draft = state.queue.drafts.find(d => d.id === id);
-          if (draft) SocialOSUI.renderQueueEdit(draft, state.queue.direct);
+          if (draft) SocialOSUI.renderQueueEdit(draft, state.queue.direct, state.queue.media[draft.id]);
           break;
         }
 

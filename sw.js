@@ -7,7 +7,7 @@
  * approval notifications with one-tap actions and routes taps into the app.
  */
 
-const CACHE_NAME = 'socialos-v24'; // v24: Link enrichment ("Find a link" — link-enrich Edge Function)
+const CACHE_NAME = 'socialos-v25'; // v25: Queue media (receiving end) — thumbnails + approve-time screening
 const SHELL_ASSETS = [
   './',
   './index.html',
@@ -229,6 +229,18 @@ async function swAutoPostDue(data) {
     if (!post) return null; // scheduled on a different device — it will post
     if (post.status === 'published') {
       return { ok: true, platform: post.platform, already: true };
+    }
+
+    // v4: media needs a human gesture the SW can't provide — either because
+    // it wasn't screened at approve time (screening_unavailable) or shows a
+    // face, or because reddit+image has no direct-post path at all (only
+    // assisted, which needs a human tap). Bail to the interactive "Post now"
+    // card, which routes through the gated publishDuePost instead.
+    if (post.media_content_id) {
+      if (post.platform === 'reddit') return null; // reddit+image is assisted-only (no direct image path) — needs the human one-tap
+      const media = await SocialOSDB.get(SocialOSDB.STORES.content, post.media_content_id);
+      const flags = (media && media.sensitivity_flags) || [];
+      if (flags.includes('faces_visible') || flags.includes('screening_unavailable')) return null; // the human confirm can't run in the SW
     }
 
     let published;

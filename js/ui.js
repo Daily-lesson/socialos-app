@@ -2023,9 +2023,10 @@ const SocialOSUI = (() => {
    * @param {import('./queue.js').MktDraft} draft
    * @param {boolean} composerCapable - channel maps to a Quick Composer platform
    * @param {Object<string, boolean>} direct - platform → connected for direct publish
+   * @param {Object<string,{dataUri:string,alt:string}>} [media] - lazily-fetched thumbnails, keyed by draft id
    * @returns {string}
    */
-  function renderQueueCard(draft, composerCapable, direct) {
+  function renderQueueCard(draft, composerCapable, direct, media) {
     const channel = (draft.channel || '').toLowerCase();
     const isDirect = composerCapable && !!direct[channel];
     const scheduledFuture = draft.scheduled_for && new Date(draft.scheduled_for).getTime() > Date.now();
@@ -2048,6 +2049,10 @@ const SocialOSUI = (() => {
           <span class="text-secondary" style="margin-left:auto">${SocialOSUtils.formatDate(draft.created_at)}</span>
         </div>
         <h4 style="margin:4px 0 8px">${escapeHtml(draft.title)}</h4>
+        ${(() => { const t = media && media[draft.id]; return t ? `
+          <div class="approval-thumb">
+            <img src="${t.dataUri}" alt="${escapeHtml(t.alt || 'Attached image')}" loading="lazy">
+          </div>` : ''; })()}
         <div class="post-text">${escapeHtml(draft.body)}</div>
         ${draft.scheduled_for ? `<p class="text-secondary" style="font-size:0.8rem;margin-top:8px">Planned for ${SocialOSUtils.formatDate(draft.scheduled_for)} ${SocialOSUtils.formatTime(draft.scheduled_for)}</p>` : ''}
         ${draft.notes ? `<p class="text-secondary" style="font-size:0.8rem;margin-top:4px">${escapeHtml(draft.notes)}</p>` : ''}
@@ -2068,7 +2073,7 @@ const SocialOSUI = (() => {
 
   /**
    * Render the Front Office approval queue screen.
-   * @param {{configured: boolean, drafts: import('./queue.js').MktDraft[], error: string|null, direct?: Object<string, boolean>}} data
+   * @param {{configured: boolean, drafts: import('./queue.js').MktDraft[], error: string|null, direct?: Object<string, boolean>, media?: Object<string,{dataUri:string,alt:string}>, week?: {direct:number, assisted:number}}} data
    */
   function renderQueue(data) {
     const container = $('queue-content');
@@ -2082,7 +2087,8 @@ const SocialOSUI = (() => {
       <p class="text-secondary" style="margin:4px 0 16px">
         Drafts your agents queued for review. One tap approves and posts as
         far as each platform allows — nothing is published without you.
-      </p>`;
+      </p>
+      ${data.week ? `<p class="text-secondary" style="margin:0 0 12px;font-weight:500">This week: ${data.week.direct} posted direct, ${data.week.assisted} assisted.</p>` : ''}`;
 
     if (!data.configured) {
       html += `
@@ -2107,7 +2113,7 @@ const SocialOSUI = (() => {
     } else {
       html += `
         <div class="approval-list">
-          ${data.drafts.map(d => renderQueueCard(d, SocialOSQueue.isComposerChannel(d), data.direct || {})).join('')}
+          ${data.drafts.map(d => renderQueueCard(d, SocialOSQueue.isComposerChannel(d), data.direct || {}, data.media || {})).join('')}
         </div>`;
     }
 
@@ -2122,8 +2128,9 @@ const SocialOSUI = (() => {
    * edit, then publish/copy exactly like the card's primary button).
    * @param {import('./queue.js').MktDraft} draft
    * @param {Object<string, boolean>} [direct] - platform → connected for direct publish
+   * @param {{dataUri:string,alt:string}} [thumb] - this draft's lazily-fetched media thumbnail, if any
    */
-  function renderQueueEdit(draft, direct) {
+  function renderQueueEdit(draft, direct, thumb) {
     const container = $('queue-content');
     if (!container) return;
 
@@ -2141,6 +2148,7 @@ const SocialOSUI = (() => {
           <span class="tag">${escapeHtml(draft.agent)}</span>
         </div>
         <h4>${escapeHtml(draft.title)}</h4>
+        ${thumb ? `<div class="approval-thumb" style="margin:8px 0"><img src="${thumb.dataUri}" alt="${escapeHtml(thumb.alt || 'Attached image')}" loading="lazy"></div>` : ''}
         <div class="form-group" style="margin-top:12px">
           <label for="queue-edit-text">Post text</label>
           <textarea id="queue-edit-text" class="input textarea" rows="10">${escapeHtml(draft.body)}</textarea>
