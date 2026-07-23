@@ -959,7 +959,7 @@ const SocialOSUI = (() => {
 
     html += data.tab === 'engagement'
       ? renderEngagementTabContent(data.engagement, data.engagementSubTab)
-      : renderPostsTabContent(data.posts, data.directPlatforms || {}, data.scheduled || [], !!data.autoPost, data.thumbs || {});
+      : renderPostsTabContent(data.posts, data.directPlatforms || {}, data.scheduled || [], !!data.autoPost, data.thumbs || {}, data.handoffs || []);
 
     container.innerHTML = html;
   }
@@ -970,11 +970,33 @@ const SocialOSUI = (() => {
    * @param {ScheduledPost[]} [scheduled] - approved posts waiting on their scheduled time
    * @param {boolean} [autoPost] - settings.auto_post_scheduled: due posts publish themselves
    * @param {Object<string, {url: string, title: string, flagged: boolean, contentId: string}>} [thumbs] - postId → attached-media thumbnail, pre-resolved by app.js (Visuals)
+   * @param {import('./db.js').Handoff[]} [handoffs] - assisted handoffs awaiting "did it post?" confirmation
    * @returns {string}
    */
-  function renderPostsTabContent(posts, directPlatforms, scheduled, autoPost, thumbs) {
+  function renderPostsTabContent(posts, directPlatforms, scheduled, autoPost, thumbs, handoffs) {
     const sched = scheduled || [];
+    const pendingHandoffs = handoffs || [];
     let html = '';
+
+    if (pendingHandoffs.length) {
+      html += `
+        <h3 style="margin:12px 0 4px">Handed off — confirm posted</h3>
+        <p class="text-secondary" style="font-size:0.8rem;margin:0 0 8px">
+          Copied &amp; opened for you to paste. SocialOS can't see these platforms to check, so tell it what happened.
+        </p>
+        <div class="approval-list">
+          ${pendingHandoffs.map(renderHandoffCard).join('')}
+        </div>
+        ${sched.length || posts.length ? '<hr style="border:none;border-top:1px solid var(--border,#2a2a2a);margin:16px 0">' : ''}`;
+    }
+
+    if (!posts.length && !sched.length && !pendingHandoffs.length) {
+      return `
+        <div class="empty-state">
+          <h2>All caught up</h2>
+          <p class="text-secondary">No posts waiting for approval.</p>
+        </div>`;
+    }
 
     if (sched.length) {
       html += `
@@ -983,14 +1005,6 @@ const SocialOSUI = (() => {
           ${sched.map(post => renderScheduledCard(post, !!directPlatforms[post.platform], !!autoPost, thumbs?.[post.id])).join('')}
         </div>
         ${posts.length ? '<h3 style="margin:16px 0 8px">Waiting for approval</h3>' : ''}`;
-    }
-
-    if (!posts.length && !sched.length) {
-      return `
-        <div class="empty-state">
-          <h2>All caught up</h2>
-          <p class="text-secondary">No posts waiting for approval.</p>
-        </div>`;
     }
 
     if (posts.length) {
@@ -1050,6 +1064,36 @@ const SocialOSUI = (() => {
             ? (autoPost ? 'it posts <b>itself</b> at the scheduled time (auto-post is on).' : 'it posts with one tap.')
             : `SocialOS can't auto-post to ${post.platform}, so one tap copies it and opens the app.${withImageNote}`}
           ${due || (direct && autoPost) ? '' : 'A reminder arrives at the scheduled time (push notification, if enabled in Settings).'}
+        </p>
+      </div>`;
+  }
+
+  /**
+   * One assisted handoff awaiting confirmation: the approved text was copied &
+   * the destination opened; SocialOS can't read the platform back, so it asks
+   * whether it landed. "Posted ✓" confirms, "Didn't post" clears the nudge,
+   * "Open again" reopens the exact thread/app to finish.
+   * @param {import('./db.js').Handoff} h
+   * @returns {string}
+   */
+  function renderHandoffCard(h) {
+    const label = PLATFORM_LABELS[h.channel] || (h.channel ? h.channel.charAt(0).toUpperCase() + h.channel.slice(1) : 'Elsewhere');
+    return `
+      <div class="card approval-card" data-handoff-id="${h.id}">
+        <div class="card-header">
+          ${queueChannelBadge(h.channel)}
+          <span>${escapeHtml(label)}</span>
+          <span class="text-secondary" style="margin-left:auto">${SocialOSUtils.formatDate(h.created_at)} ${SocialOSUtils.formatTime(h.created_at)}</span>
+        </div>
+        ${h.title ? `<h4 style="margin:4px 0 8px">${escapeHtml(h.title)}</h4>` : ''}
+        <div class="post-text">${escapeHtml(h.text)}</div>
+        <div class="card-actions">
+          ${h.url ? `<button class="btn btn-secondary btn-sm" data-action="handoff-reopen" data-id="${h.id}" data-open="1">Open again</button>` : ''}
+          <button class="btn btn-secondary btn-sm" data-action="handoff-skip" data-id="${h.id}">Didn't post</button>
+          <button class="btn btn-success btn-sm" data-action="handoff-confirm" data-id="${h.id}">Posted &#10003;</button>
+        </div>
+        <p class="text-secondary" style="font-size:0.75rem;margin-top:6px">
+          SocialOS handed this to you to paste — it can't verify ${escapeHtml(label)} on its own. Confirm once it's live so it counts.
         </p>
       </div>`;
   }

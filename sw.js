@@ -7,7 +7,7 @@
  * approval notifications with one-tap actions and routes taps into the app.
  */
 
-const CACHE_NAME = 'socialos-v25'; // v25: Queue media (receiving end) — thumbnails + approve-time screening
+const CACHE_NAME = 'socialos-v26'; // v26: assisted handoff trail + "did it post?" confirm nudge
 const SHELL_ASSETS = [
   './',
   './index.html',

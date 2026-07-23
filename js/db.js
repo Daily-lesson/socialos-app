@@ -76,6 +76,19 @@
  */
 
 /**
+ * @typedef {Object} Handoff
+ * @property {string} id
+ * @property {string} channel - lowercased channel/platform ('hn', 'linkedin', 'reddit', 'tiktok', …)
+ * @property {string} title
+ * @property {string} text - the approved text, handed over verbatim (gotcha 6)
+ * @property {string|null} url - the thread / platform URL opened for the paste-and-post
+ * @property {'queue'|'composer'|'scheduled'} source
+ * @property {string|null} post_id - linked ScheduledPost id when one exists (composer/scheduled sources); null for pure-assisted channels like Hacker News
+ * @property {'handed_off'|'posted'|'skipped'} status
+ * @property {string} created_at
+ * @property {string|null} confirmed_at - when the user confirmed it posted (or it auto-reconciled from a published linked post)
+ * @property {string} check_at - created_at + a few minutes; when the confirm nudge is due
+ *
  * @typedef {Object} PostDraft
  * @property {string} text
  * @property {string[]} hashtags
@@ -225,7 +238,7 @@ const SocialOSDB = (() => {
   // v2 added socialos_archive (BUILD_PLAN §14) on one line of history and
   // socialos_projects (PM capability) on another; v3 unifies both.
   // v4 adds socialos_auth (SocialOS account session — js/auth.js).
-  const DB_VERSION = 4;
+  const DB_VERSION = 5;
 
   /** Store names map 1:1 to section 4 keys */
   const STORES = {
@@ -238,7 +251,12 @@ const SocialOSDB = (() => {
     projects:   'socialos_projects',
     settings:   'socialos_settings',
     archive:    'socialos_archive',
-    auth:       'socialos_auth'
+    auth:       'socialos_auth',
+    // v5: an honest audit trail for assisted "copy & open" handoffs. SocialOS
+    // can't read an assisted post back (Hacker News has no API; an unconnected
+    // LinkedIn/Reddit likewise), so a handoff records what was handed to the
+    // user to paste + when to nudge them to confirm it actually went live.
+    handoffs:   'socialos_handoffs'
   };
 
   /** @type {IDBDatabase|null} */
@@ -603,6 +621,23 @@ const SocialOSDB = (() => {
   }
 
   /**
+   * All assisted-handoff records, newest first.
+   * @returns {Promise<Handoff[]>}
+   */
+  async function getHandoffs() {
+    const all = await getAll(STORES.handoffs);
+    return all.sort((a, b) => (b.created_at || '').localeCompare(a.created_at || ''));
+  }
+
+  /**
+   * Handoffs still awaiting the user's "did it post?" confirmation.
+   * @returns {Promise<Handoff[]>}
+   */
+  async function getPendingHandoffs() {
+    return (await getHandoffs()).filter(h => h.status === 'handed_off');
+  }
+
+  /**
    * Wipe all stores (settings reset).
    * @returns {Promise<void>}
    */
@@ -703,6 +738,19 @@ const SocialOSDB = (() => {
       }
     }
 
+    // Resolved handoffs (posted / skipped) age out on the same 7-day window as
+    // posts; unconfirmed ones stay put so a forgotten confirmation never
+    // silently disappears.
+    const handoffs = await getHandoffs();
+    for (const h of handoffs) {
+      if (!['posted', 'skipped'].includes(h.status)) continue;
+      const ts = h.confirmed_at || h.created_at;
+      if (ts && now - new Date(ts).getTime() > POST_CUTOFF) {
+        await moveToArchive(STORES.handoffs, h);
+        moved++;
+      }
+    }
+
     return moved;
   }
 
@@ -740,6 +788,8 @@ const SocialOSDB = (() => {
     deleteProject,
     getPendingPosts,
     getScheduledPosts,
+    getHandoffs,
+    getPendingHandoffs,
     getAuthSession,
     saveAuthSession,
     clearAuthSession,

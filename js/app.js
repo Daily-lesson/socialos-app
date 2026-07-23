@@ -67,6 +67,11 @@ const SocialOS = (() => {
   // link" request overwriting fresher results (or a since-cleared composer).
   let linkFindEpoch = 0;
 
+  // Minutes after an assisted "copy & open" before SocialOS nudges "did it
+  // post?" — long enough to actually paste and submit, short enough to still
+  // be top of mind.
+  const CONFIRM_DELAY_MIN = 5;
+
   // ── Router ────────────────────────────────────────────────────────────
 
   /**
@@ -495,9 +500,24 @@ const SocialOS = (() => {
    * mobile, clipboard + image download + deep link on desktop. Consumes a
    * publishOne result's mediaDataUri. Single source of truth for composer
    * copy-open, due-post, queue-approve, and approvals.
-   * @param {{text: string, deepLink?: string|null, mediaDataUri?: string|null, label: string, preopened?: Window|null}} opts
+   * When `channel` is supplied, the handoff is recorded (SocialOSDB.handoffs)
+   * so it lands in Approvals → "Handed off" with an honest "did it post?"
+   * confirmation and a short nudge — SocialOS can't read an assisted post back
+   * (gotcha 6), so it asks rather than assuming.
+   * @param {{text: string, deepLink?: string|null, mediaDataUri?: string|null, label: string, preopened?: Window|null, channel?: string, title?: string, source?: 'queue'|'composer'|'scheduled', postId?: string|null}} opts
    */
-  async function assistedHandoff({ text, deepLink, mediaDataUri, label, preopened }) {
+  async function assistedHandoff({ text, deepLink, mediaDataUri, label, preopened, channel, title, source, postId }) {
+    // Record the handoff once the copy/share/open actually happened (never on a
+    // cancelled share). `url` is the destination we opened, so "Open again"
+    // later reopens the exact same place.
+    let handoffRecorded = false;
+    const recordHandoff = async (url) => {
+      if (handoffRecorded || !channel) return;
+      handoffRecorded = true;
+      try {
+        await saveHandoff({ channel, title: title || label || channel, text, url: url || null, source: source || 'queue', postId: postId || null });
+      } catch { /* audit trail is best-effort — never block the handoff itself */ }
+    };
     // `preopened` is a tab the click dispatcher reserved SYNCHRONOUSLY, inside
     // the user gesture, precisely because the deep link below opens only after
     // the awaited approve/publish above — by which point window.open() has lost
@@ -515,7 +535,7 @@ const SocialOS = (() => {
     if (mediaDataUri && typeof SocialOSMedia !== 'undefined') {
       const filename = SocialOSMedia.filenameForDataUri(mediaDataUri, 'socialos');
       const res = await SocialOSMedia.shareMedia({ text, dataUri: mediaDataUri, filename });
-      if (res.shared) { releaseWindow(); SocialOSUI.toast(`Opened the share sheet with your image — pick ${label} to finish.`, 'success'); return; }
+      if (res.shared) { releaseWindow(); await recordHandoff(deepLink); SocialOSUI.toast(`Opened the share sheet with your image — pick ${label} to finish.`, 'success'); return; }
       if (res.reason === 'cancelled') { releaseWindow(); return; }
       if (res.reason === 'retry') {
         releaseWindow();
@@ -541,6 +561,97 @@ const SocialOS = (() => {
     }
     if (deepLink) openLink(deepLink);
     else releaseWindow();
+    await recordHandoff(deepLink);
+  }
+
+  /**
+   * Persist an assisted handoff + schedule the "did it post?" nudge. A short
+   * delay later (CONFIRM_DELAY_MIN) a push reminder — if push is set up —
+   * routes to '#handoff/<id>' to ask; either way the record sits in
+   * Approvals → "Handed off" until confirmed. Honest by design: SocialOS can't
+   * verify an assisted post landed, so it asks (gotcha 6).
+   * @param {{channel: string, title: string, text: string, url: string|null, source: 'queue'|'composer'|'scheduled', postId: string|null}} input
+   * @returns {Promise<import('./db.js').Handoff>}
+   */
+  async function saveHandoff(input) {
+    const now = SocialOSUtils.now();
+    const checkAt = new Date(Date.now() + CONFIRM_DELAY_MIN * 60 * 1000).toISOString();
+    /** @type {import('./db.js').Handoff} */
+    const handoff = {
+      id: SocialOSUtils.uuid(),
+      channel: (input.channel || '').toLowerCase(),
+      title: input.title || '',
+      text: input.text || '',
+      url: input.url || null,
+      source: input.source || 'queue',
+      post_id: input.postId || null,
+      status: 'handed_off',
+      created_at: now,
+      confirmed_at: null,
+      check_at: checkAt
+    };
+    await SocialOSDB.put(SocialOSDB.STORES.handoffs, handoff);
+
+    const label = SocialOSUI.PLATFORM_LABELS[handoff.channel] || handoff.channel;
+    // Best-effort push nudge; no-ops when push isn't configured — the in-app
+    // checkDueHandoffs() on next open covers that case.
+    SocialOSPush.scheduleReminder({
+      send_at: checkAt,
+      title: `Did your ${label} post go live?`,
+      body: SocialOSUtils.truncate((handoff.text || '').replace(/\s+/g, ' '), 140),
+      url: `handoff/${handoff.id}`,
+      kind: 'confirm'
+    }).catch(() => { /* best-effort */ });
+
+    return handoff;
+  }
+
+  /**
+   * Mark an assisted handoff posted (the user confirmed it went live). Resolves
+   * any linked ScheduledPost to 'published' too so it leaves the Scheduled
+   * rail, and refreshes the weekly truth line.
+   * @param {string} id
+   */
+  async function confirmHandoffPosted(id) {
+    const handoff = await SocialOSDB.get(SocialOSDB.STORES.handoffs, id);
+    if (!handoff) return;
+    handoff.status = 'posted';
+    handoff.confirmed_at = SocialOSUtils.now();
+    await SocialOSDB.put(SocialOSDB.STORES.handoffs, handoff);
+    if (handoff.post_id) {
+      const post = await SocialOSDB.get(SocialOSDB.STORES.posts, handoff.post_id);
+      if (post && post.status !== 'published') {
+        post.status = 'published';
+        post.published_time = SocialOSUtils.now();
+        await SocialOSDB.put(SocialOSDB.STORES.posts, post);
+      }
+    }
+  }
+
+  /**
+   * Resolve any pending handoff whose linked post is already published (e.g.
+   * the user posted it from the composer, or a direct retry succeeded) — the
+   * one case SocialOS CAN confirm without asking. Returns the still-pending
+   * handoffs, and whether it wrote anything (so callers can decide to re-render).
+   * @param {import('./db.js').Handoff[]} handoffs
+   * @returns {Promise<import('./db.js').Handoff[]>}
+   */
+  async function reconcileHandoffs(handoffs) {
+    const pending = [];
+    for (const h of handoffs) {
+      if (h.status !== 'handed_off') continue;
+      if (h.post_id) {
+        const post = await SocialOSDB.get(SocialOSDB.STORES.posts, h.post_id);
+        if (post && post.status === 'published') {
+          h.status = 'posted';
+          h.confirmed_at = post.published_time || SocialOSUtils.now();
+          await SocialOSDB.put(SocialOSDB.STORES.handoffs, h);
+          continue;
+        }
+      }
+      pending.push(h);
+    }
+    return pending;
   }
 
   /**
@@ -775,14 +886,24 @@ const SocialOS = (() => {
 
   async function renderApprovals() {
     const posts = await SocialOSDB.getPendingPosts();
-    const scheduled = await SocialOSDB.getScheduledPosts();
+    const scheduledAll = await SocialOSDB.getScheduledPosts();
     const engagement = await SocialOSEngagement.getQueues();
     const settings = await SocialOSDB.getSettings();
+
+    // Assisted handoffs awaiting the user's "did it post?" confirmation. First
+    // auto-resolve any whose linked post is already published (the one case
+    // SocialOS can confirm without asking), then drop those still-pending
+    // posts out of the Scheduled rail so nothing shows in two places at once.
+    const handoffs = await reconcileHandoffs(await SocialOSDB.getPendingHandoffs());
+    const handoffPostIds = new Set(handoffs.map(h => h.post_id).filter(Boolean));
+    const scheduled = scheduledAll.filter(p => !handoffPostIds.has(p.id));
+
     const thumbs = await resolvePostThumbnails([...posts, ...scheduled]);
     SocialOSUI.renderApprovals({
       tab: /** @type {any} */ (state.approvalsTab),
       posts,
       scheduled,
+      handoffs,
       autoPost: !!settings?.auto_post_scheduled,
       engagement,
       engagementSubTab: /** @type {any} */ (state.engagementSubTab),
@@ -1051,7 +1172,7 @@ const SocialOS = (() => {
     const label = SocialOSUI.PLATFORM_LABELS[channel] || draft.channel;
     // Copy the approved reply + open the exact thread (single gesture). The
     // approved text is handed over VERBATIM — no AI re-draft (gotcha 6).
-    await assistedHandoff({ text: draft.body || '', deepLink: SocialOSQueue.assistedLink(draft), label, preopened });
+    await assistedHandoff({ text: draft.body || '', deepLink: SocialOSQueue.assistedLink(draft), label, preopened, channel, title: draft.title, source: 'queue', postId: null });
     await renderQueue();
   }
 
@@ -1159,7 +1280,7 @@ const SocialOS = (() => {
           c.posts = [post];
           c.results = [result];
           const label = SocialOSUI.PLATFORM_LABELS[channel] || channel;
-          await assistedHandoff({ text: result.text, deepLink: result.deepLink, mediaDataUri: result.mediaDataUri, label, preopened });
+          await assistedHandoff({ text: result.text, deepLink: result.deepLink, mediaDataUri: result.mediaDataUri, label, preopened, channel, title: draft.title, source: 'queue', postId: post.id });
           await navigate('compose');
           return;
         }
@@ -1286,7 +1407,7 @@ const SocialOS = (() => {
           // C2: route through the shared handoff so a scheduled/due post's
           // image (result.mediaDataUri) rides along instead of being dropped.
           const label = SocialOSUI.PLATFORM_LABELS[result.platform] || result.platform;
-          await assistedHandoff({ text: result.text, deepLink: result.deepLink, mediaDataUri: result.mediaDataUri, label, preopened });
+          await assistedHandoff({ text: result.text, deepLink: result.deepLink, mediaDataUri: result.mediaDataUri, label, preopened, channel: result.platform, title: SocialOSUtils.truncate((result.text || '').replace(/\s+/g, ' '), 60), source: 'scheduled', postId });
         } else {
           releaseWindow();
           SocialOSUI.toast(`Posting failed — ${result.error || 'unknown error'}. Tap POST NOW to retry.`, 'error', 8000);
@@ -1340,7 +1461,8 @@ const SocialOS = (() => {
   async function updateBadge() {
     const pending = await SocialOSDB.getPendingPosts();
     const engagementPending = await SocialOSEngagement.pendingCount();
-    SocialOSUI.updateApprovalBadge(pending.length + engagementPending);
+    const handoffs = await SocialOSDB.getPendingHandoffs();
+    SocialOSUI.updateApprovalBadge(pending.length + engagementPending + handoffs.length);
   }
 
   // ── Onboarding logic ──────────────────────────────────────────────────
@@ -2003,6 +2125,25 @@ const SocialOS = (() => {
     }
   }
 
+  /**
+   * On app open: nudge for assisted handoffs whose confirm time has passed and
+   * that are still unconfirmed — the in-app half of the "did it post?" check
+   * (the push reminder covers the app-closed case). Auto-reconciles any whose
+   * linked post already published first, so a post the user finished elsewhere
+   * doesn't nag. SocialOS can't read an assisted post back, so this only ever
+   * reminds — it never marks anything posted on its own (gotcha 6).
+   */
+  async function checkDueHandoffs() {
+    const pending = await reconcileHandoffs(await SocialOSDB.getPendingHandoffs());
+    const due = pending.filter(h => h.check_at && new Date(h.check_at).getTime() <= Date.now());
+    await updateBadge();
+    if (!due.length) return;
+    SocialOSUI.toast(
+      `Confirm ${due.length} handed-off post${due.length > 1 ? 's' : ''} actually went live — Approvals → Handed off.`,
+      'info', 8000
+    );
+  }
+
   // ── Push / notification deep links (sw.js notificationclick) ──────────
   // The service worker routes notification taps here: either via the URL
   // hash on a cold open ('#queue-post/<id>') or a postMessage when a
@@ -2053,6 +2194,13 @@ const SocialOS = (() => {
         await navigate('approvals');
         return true;
 
+      // The "did it post?" nudge (saveHandoff) lands here — open Approvals →
+      // Posts where the Handed-off section shows the confirm buttons.
+      case 'handoff':
+        state.approvalsTab = 'posts';
+        await navigate('approvals');
+        return true;
+
       case 'compose':
         await navigate('compose');
         return true;
@@ -2073,7 +2221,7 @@ const SocialOS = (() => {
     const h = (location.hash || '').replace(/^#\/?/, '');
     if (!h) return null;
     const cmd = h.split('/')[0];
-    if (!['queue', 'queue-post', 'queue-edit', 'due', 'approvals', 'compose'].includes(cmd)) return null;
+    if (!['queue', 'queue-post', 'queue-edit', 'due', 'approvals', 'handoff', 'compose'].includes(cmd)) return null;
     history.replaceState(null, '', location.pathname + location.search);
     return h;
   }
@@ -2415,6 +2563,50 @@ const SocialOS = (() => {
           break;
         }
 
+        // ── Assisted handoffs (Approvals → Handed off) ─────────────────
+        // The user confirms an assisted post actually went live.
+        case 'handoff-confirm': {
+          if (!id) break;
+          await confirmHandoffPosted(id);
+          SocialOSUI.toast('Marked as posted ✓', 'success');
+          await renderApprovals();
+          await updateBadge();
+          break;
+        }
+
+        // The user says it didn't post (or they changed their mind) — keep the
+        // record but stop nagging.
+        case 'handoff-skip': {
+          if (!id) break;
+          const handoff = await SocialOSDB.get(SocialOSDB.STORES.handoffs, id);
+          if (handoff) {
+            handoff.status = 'skipped';
+            await SocialOSDB.put(SocialOSDB.STORES.handoffs, handoff);
+          }
+          SocialOSUI.toast('Cleared from the confirm list.', 'info');
+          await renderApprovals();
+          await updateBadge();
+          break;
+        }
+
+        // Reopen the exact thread / platform to finish posting. Uses the tab
+        // reserved in the click gesture (data-open) so it isn't popup-blocked.
+        case 'handoff-reopen': {
+          if (!id) break;
+          const handoff = await SocialOSDB.get(SocialOSDB.STORES.handoffs, id);
+          const url = handoff?.url;
+          try { await navigator.clipboard.writeText(handoff?.text || ''); } catch { /* manual */ }
+          if (url) {
+            if (preopened && !preopened.closed) preopened.location.href = url;
+            else window.open(url, '_blank');
+            SocialOSUI.toast('Reopened — text copied, paste and post.', 'success');
+          } else {
+            try { if (preopened && !preopened.closed) preopened.close(); } catch { /* best-effort */ }
+            SocialOSUI.toast('No link saved for this one — text copied, place it yourself.', 'info');
+          }
+          break;
+        }
+
         case 'unschedule-post': {
           if (!id) break;
           const post = await SocialOSDB.get(SocialOSDB.STORES.posts, id);
@@ -2443,7 +2635,7 @@ const SocialOS = (() => {
             if (media?.thumbnail_url) mediaDataUri = media.thumbnail_url;
           }
 
-          await assistedHandoff({ text, deepLink: SocialOSUI.PLATFORM_DEEP_LINKS[post.platform], mediaDataUri, label });
+          await assistedHandoff({ text, deepLink: SocialOSUI.PLATFORM_DEEP_LINKS[post.platform], mediaDataUri, label, channel: post.platform, title: SocialOSUtils.truncate((text || '').replace(/\s+/g, ' '), 60), source: 'composer', postId: post.id });
           break;
         }
 
@@ -3314,7 +3506,7 @@ const SocialOS = (() => {
               return;
             }
             if (result.mode === 'assisted') {
-              await assistedHandoff({ text: result.text, deepLink: result.deepLink, mediaDataUri: result.mediaDataUri, label });
+              await assistedHandoff({ text: result.text, deepLink: result.deepLink, mediaDataUri: result.mediaDataUri, label, channel: post.platform, title: SocialOSUtils.truncate((result.text || '').replace(/\s+/g, ' '), 60), source: 'composer', postId: post.id });
               // Assisted posts aren't published yet — keep them actionable on
               // the publish flow ("I've Posted It" completes them) instead of
               // dropping an approved-but-unscheduled post out of both rails.
@@ -4059,6 +4251,7 @@ const SocialOS = (() => {
     SocialOSDB.archiveStaleRecords().catch(() => {});
     checkApprovalReminders().catch(() => {});
     checkDuePosts().catch(() => {});
+    checkDueHandoffs().catch(() => {});
     SocialOSPush.syncSubscription().catch(() => {});
 
     if (profile?.onboarding_complete) {
