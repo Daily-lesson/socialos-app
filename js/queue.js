@@ -171,6 +171,34 @@ const SocialOSQueue = (() => {
   }
 
   /**
+   * Some channels SocialOS can't publish to directly can still be *opened*
+   * for a paste-and-post: Hacker News has no write API (no cross-origin
+   * comment/submit from a browser — see gotcha 6), so the honest ceiling is
+   * assisted. The Community Scout writes HN drafts as replies with the
+   * thread URL in `notes` (community-scout routine — the human needs it to
+   * post), so we open that exact thread and let the approved reply be pasted
+   * in place. Falls back to HN's submit page when no thread URL is present.
+   * Returns null for channels that are truly place-yourself (blog/x/email).
+   * @param {MktDraft} draft
+   * @returns {string|null} URL to open on approve, or null
+   */
+  function assistedLink(draft) {
+    const channel = (draft.channel || '').toLowerCase();
+    if (channel !== 'hn' && channel !== 'hackernews') return null;
+    return firstUrl(draft.notes) || firstUrl(draft.body) || 'https://news.ycombinator.com/submit';
+  }
+
+  /**
+   * First http(s) URL in a string, or null.
+   * @param {string} [text]
+   * @returns {string|null}
+   */
+  function firstUrl(text) {
+    const m = String(text || '').match(/https?:\/\/[^\s)]+/);
+    return m ? m[0] : null;
+  }
+
+  /**
    * Build the composer handoff for an approved draft: the text to publish
    * and the platform preselection. app.js applies this to
    * SocialOS.state.composer and navigates — reusing the existing composer
@@ -195,6 +223,7 @@ const SocialOSQueue = (() => {
     fetchMedia,
     isComposerChannel,
     redditMeta,
+    assistedLink,
     composerHandoff
   };
 })();

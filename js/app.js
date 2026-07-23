@@ -277,9 +277,10 @@ const SocialOS = (() => {
    * never per platform.
    * @param {ScheduledPost[]} posts
    * @param {() => Promise<void>} onProceed
+   * @param {() => void} [onCancel] - runs if the confirm sheet is dismissed
    * @returns {Promise<void>}
    */
-  async function withSensitivityConfirm(posts, onProceed) {
+  async function withSensitivityConfirm(posts, onProceed, onCancel) {
     const contentIds = new Set((posts || []).map(p => p.media_content_id).filter(Boolean));
     let facesVisible = false, screeningUnavailable = false;
     for (const contentId of contentIds) {
@@ -304,7 +305,8 @@ const SocialOS = (() => {
         'A face is visible',
         "The image on this post shows someone's face. Post it as-is?",
         confirmLabel,
-        () => { onProceed(); }
+        () => { onProceed(); },
+        onCancel
       );
       return;
     }
@@ -313,7 +315,8 @@ const SocialOS = (() => {
       "Couldn't screen this image",
       "This image couldn't be checked for faces or sensitive content — the screener was unreachable. Post it anyway?",
       confirmLabel,
-      () => { onProceed(); }
+      () => { onProceed(); },
+      onCancel
     );
   }
 
@@ -492,15 +495,30 @@ const SocialOS = (() => {
    * mobile, clipboard + image download + deep link on desktop. Consumes a
    * publishOne result's mediaDataUri. Single source of truth for composer
    * copy-open, due-post, queue-approve, and approvals.
-   * @param {{text: string, deepLink?: string|null, mediaDataUri?: string|null, label: string}} opts
+   * @param {{text: string, deepLink?: string|null, mediaDataUri?: string|null, label: string, preopened?: Window|null}} opts
    */
-  async function assistedHandoff({ text, deepLink, mediaDataUri, label }) {
+  async function assistedHandoff({ text, deepLink, mediaDataUri, label, preopened }) {
+    // `preopened` is a tab the click dispatcher reserved SYNCHRONOUSLY, inside
+    // the user gesture, precisely because the deep link below opens only after
+    // the awaited approve/publish above — by which point window.open() has lost
+    // the browser's transient user activation and Safari/strict Chrome silently
+    // block it (reported: "copies but doesn't open the link"). Navigate the
+    // reserved tab if we end up with a link; release it otherwise. Same fix as
+    // js/google.js pickPhotos. No 'noopener' on the fallback: with it,
+    // window.open() returns null even on success, which this code would misread.
+    const openLink = (url) => {
+      if (preopened && !preopened.closed) preopened.location.href = url;
+      else window.open(url, '_blank');
+    };
+    const releaseWindow = () => { try { if (preopened && !preopened.closed) preopened.close(); } catch { /* best-effort */ } };
+
     if (mediaDataUri && typeof SocialOSMedia !== 'undefined') {
       const filename = SocialOSMedia.filenameForDataUri(mediaDataUri, 'socialos');
       const res = await SocialOSMedia.shareMedia({ text, dataUri: mediaDataUri, filename });
-      if (res.shared) { SocialOSUI.toast(`Opened the share sheet with your image — pick ${label} to finish.`, 'success'); return; }
-      if (res.reason === 'cancelled') return;
+      if (res.shared) { releaseWindow(); SocialOSUI.toast(`Opened the share sheet with your image — pick ${label} to finish.`, 'success'); return; }
+      if (res.reason === 'cancelled') { releaseWindow(); return; }
       if (res.reason === 'retry') {
+        releaseWindow();
         try { await navigator.clipboard.writeText(text); } catch { /* manual */ }
         SocialOSUI.toast(`Tap Share again to hand the image to ${label}.`, 'info', 6000);
         return;
@@ -521,7 +539,8 @@ const SocialOS = (() => {
       a.download = SocialOSMedia.filenameForDataUri(mediaDataUri, 'socialos');
       a.click();
     }
-    if (deepLink) window.open(deepLink, '_blank', 'noopener');
+    if (deepLink) openLink(deepLink);
+    else releaseWindow();
   }
 
   /**
@@ -1004,6 +1023,39 @@ const SocialOS = (() => {
   }
 
   /**
+   * ONE TAP for channels SocialOS can't publish but CAN open (Hacker News):
+   * approve the draft, copy the exact approved reply, and open the thread so
+   * Scot pastes and posts it in place. HN has no write API — assisted is the
+   * honest ceiling (CLAUDE.md gotcha 6). The destination comes from
+   * SocialOSQueue.assistedLink (the thread URL in the draft's notes).
+   * @param {string} id
+   * @param {string} [bodyOverride] - Scot's edit from the edit view
+   * @param {Window|null} [preopened] - tab reserved in the click gesture (see setupEventDelegation)
+   */
+  async function approveAndOpenQueueDraft(id, bodyOverride, preopened) {
+    SocialOSUI.loading(true, 'Approving…');
+    /** @type {import('./queue.js').MktDraft} */
+    let draft;
+    try {
+      draft = await SocialOSQueue.approveDraft(id, bodyOverride);
+      state.queue.drafts = state.queue.drafts.filter(d => d.id !== id);
+    } catch (err) {
+      try { if (preopened && !preopened.closed) preopened.close(); } catch { /* best-effort */ }
+      SocialOSUI.loading(false);
+      SocialOSUI.toast(`Couldn't approve — ${queueErrMsg(err)}`, 'error', 6000);
+      await renderQueue();
+      return;
+    }
+    SocialOSUI.loading(false);
+    const channel = (draft.channel || '').toLowerCase();
+    const label = SocialOSUI.PLATFORM_LABELS[channel] || draft.channel;
+    // Copy the approved reply + open the exact thread (single gesture). The
+    // approved text is handed over VERBATIM — no AI re-draft (gotcha 6).
+    await assistedHandoff({ text: draft.body || '', deepLink: SocialOSQueue.assistedLink(draft), label, preopened });
+    await renderQueue();
+  }
+
+  /**
    * ONE TAP: approve a Front Office draft and carry it as far as its
    * platform honestly allows in the same gesture (CLAUDE.md gotcha 6):
    *   - connected LinkedIn/Reddit → published, for real, right now
@@ -1014,8 +1066,13 @@ const SocialOS = (() => {
    * text Scot reviewed and what lands.
    * @param {string} id
    * @param {string} [bodyOverride] - Scot's edit from the edit view
+   * @param {Window|null} [preopened] - tab reserved in the click gesture (see setupEventDelegation)
    */
-  async function approveAndPostQueueDraft(id, bodyOverride) {
+  async function approveAndPostQueueDraft(id, bodyOverride, preopened) {
+    // The reserved tab (assisted composer channels only) is navigated by
+    // assistedHandoff on the assisted branch below; every other exit path
+    // releases it so it never lingers as a stray blank tab.
+    const releaseWindow = () => { try { if (preopened && !preopened.closed) preopened.close(); } catch { /* best-effort */ } };
     SocialOSUI.loading(true, 'Approving…');
     /** @type {import('./queue.js').MktDraft} */
     let draft;
@@ -1023,6 +1080,7 @@ const SocialOS = (() => {
       draft = await SocialOSQueue.approveDraft(id, bodyOverride);
       state.queue.drafts = state.queue.drafts.filter(d => d.id !== id);
     } catch (err) {
+      releaseWindow();
       SocialOSUI.loading(false);
       SocialOSUI.toast(`Couldn't approve — ${queueErrMsg(err)}`, 'error', 6000);
       await renderQueue();
@@ -1032,6 +1090,7 @@ const SocialOS = (() => {
     const channel = (draft.channel || '').toLowerCase();
     if (!SocialOSQueue.isComposerChannel(draft)) {
       // Defensive: the UI never routes these here, but keep the copy path.
+      releaseWindow();
       SocialOSUI.loading(false);
       try {
         await navigator.clipboard.writeText(draft.body || '');
@@ -1066,6 +1125,7 @@ const SocialOS = (() => {
         ...redditExtra
       });
     } catch (err) {
+      releaseWindow();
       SocialOSUI.loading(false);
       SocialOSUI.toast(`Approved, but posting hit an error — ${composerErrMsg(err)}. The draft is approved server-side; retry from Approvals.`, 'error', 8000);
       await renderQueue();
@@ -1079,6 +1139,7 @@ const SocialOS = (() => {
         SocialOSUI.loading(false);
 
         if (result.mode === 'published') {
+          releaseWindow();
           SocialOSUI.toast(`Approved & posted to ${channel} ✓`, 'success', 5000);
           await renderQueue();
           await updateBadge();
@@ -1098,16 +1159,18 @@ const SocialOS = (() => {
           c.posts = [post];
           c.results = [result];
           const label = SocialOSUI.PLATFORM_LABELS[channel] || channel;
-          await assistedHandoff({ text: result.text, deepLink: result.deepLink, mediaDataUri: result.mediaDataUri, label });
+          await assistedHandoff({ text: result.text, deepLink: result.deepLink, mediaDataUri: result.mediaDataUri, label, preopened });
           await navigate('compose');
           return;
         }
 
         // Failed direct publish — the approved post is parked as due-now
         // under Approvals → Scheduled for a one-tap retry.
+        releaseWindow();
         SocialOSUI.toast(`Approved, but posting failed — ${result.error || 'unknown error'}. It's saved under Approvals → Scheduled; tap POST NOW to retry.`, 'error', 8000);
         await renderQueue();
       } catch (err) {
+        releaseWindow();
         SocialOSUI.loading(false);
         SocialOSUI.toast(`Approved, but posting hit an error — ${composerErrMsg(err)}. The draft is approved server-side; retry from Approvals.`, 'error', 8000);
         await renderQueue();
@@ -1118,7 +1181,9 @@ const SocialOS = (() => {
     // confirm renders under the still-showing spinner (invisible + untappable,
     // and Cancel would never clear it). doPublish re-raises 'Posting…'.
     SocialOSUI.loading(false);
-    await withSensitivityConfirm([post], doPublish);
+    // If the sensitivity sheet is cancelled, doPublish never runs — release
+    // the reserved tab so it doesn't linger as a stray blank window.
+    await withSensitivityConfirm([post], doPublish, releaseWindow);
   }
 
   /**
@@ -1190,14 +1255,19 @@ const SocialOS = (() => {
    * assisted ones copy the text and open the platform app.
    * @param {string} postId
    */
-  async function publishDuePost(postId) {
+  async function publishDuePost(postId, preopened) {
+    // `preopened` (assisted "COPY & OPEN" only) is navigated by assistedHandoff
+    // on the assisted branch; every other path releases it.
+    const releaseWindow = () => { try { if (preopened && !preopened.closed) preopened.close(); } catch { /* best-effort */ } };
     const post = await SocialOSDB.get(SocialOSDB.STORES.posts, postId);
     if (!post) {
+      releaseWindow();
       SocialOSUI.toast('That post is gone — maybe already published from another device.', 'info', 5000);
       await navigate('approvals');
       return;
     }
     if (post.status === 'published') {
+      releaseWindow();
       SocialOSUI.toast('Already posted ✓', 'info');
       await navigate('approvals');
       return;
@@ -1210,16 +1280,19 @@ const SocialOS = (() => {
         SocialOSUI.loading(false);
 
         if (result.mode === 'published') {
+          releaseWindow();
           SocialOSUI.toast(`Posted to ${result.platform} ✓`, 'success', 5000);
         } else if (result.mode === 'assisted') {
           // C2: route through the shared handoff so a scheduled/due post's
           // image (result.mediaDataUri) rides along instead of being dropped.
           const label = SocialOSUI.PLATFORM_LABELS[result.platform] || result.platform;
-          await assistedHandoff({ text: result.text, deepLink: result.deepLink, mediaDataUri: result.mediaDataUri, label });
+          await assistedHandoff({ text: result.text, deepLink: result.deepLink, mediaDataUri: result.mediaDataUri, label, preopened });
         } else {
+          releaseWindow();
           SocialOSUI.toast(`Posting failed — ${result.error || 'unknown error'}. Tap POST NOW to retry.`, 'error', 8000);
         }
       } catch (err) {
+        releaseWindow();
         SocialOSUI.loading(false);
         SocialOSUI.toast(`Posting error — ${composerErrMsg(err)}`, 'error', 6000);
       }
@@ -1232,7 +1305,7 @@ const SocialOS = (() => {
     // not here — this covers the sw.js swAutoPostDue exclusion for that
     // case). Shared gate with composer-scheduled posts — a second
     // face-confirm on non-queue posts is harmless, never dishonest.
-    await withSensitivityConfirm([post], doPublish);
+    await withSensitivityConfirm([post], doPublish, releaseWindow);
   }
 
   async function renderCalendar() {
@@ -2065,6 +2138,17 @@ const SocialOS = (() => {
       const id = actionEl.dataset?.id;
       const postId = actionEl.dataset?.postId;
 
+      // Some one-tap actions copy the approved text and then OPEN a thread /
+      // platform link — but only after an awaited approve/publish. A
+      // window.open() issued after those awaits has lost the browser's
+      // transient user activation, so Safari/strict Chrome silently block it
+      // (reported: the button "only copies and does not open the link"). For
+      // buttons that declare they'll open a link (data-open="1"), reserve the
+      // tab NOW — synchronously, inside this user gesture — and hand it to the
+      // handler, which navigates it once it has the URL (or releases it). Same
+      // fix already used in js/google.js pickPhotos.
+      const preopened = actionEl.dataset?.open ? window.open('about:blank', '_blank') : null;
+
       switch (action) {
         // ── Navigation ─────────────────────────────────
         case 'go-dashboard':   navigate('dashboard'); break;
@@ -2327,7 +2411,7 @@ const SocialOS = (() => {
         // ── Scheduled posts (Approvals → Scheduled rail) ───────────────
         case 'post-scheduled-now': {
           if (!id) break;
-          await publishDuePost(id);
+          await publishDuePost(id, preopened);
           break;
         }
 
@@ -3389,13 +3473,23 @@ const SocialOS = (() => {
           break;
         }
 
+        // Edited reply + approve + open the thread (Hacker News).
+        case 'queue-save-approve-open': {
+          if (!id) break;
+          const ta = /** @type {HTMLTextAreaElement} */ (SocialOSUI.$('queue-edit-text'));
+          const text = ta?.value?.trim();
+          if (!text) { try { if (preopened && !preopened.closed) preopened.close(); } catch { /* best-effort */ } SocialOSUI.toast('The post text can\'t be empty.', 'warning'); break; }
+          await approveAndOpenQueueDraft(id, text, preopened);
+          break;
+        }
+
         // Edited text + one-tap approve & post/copy (composer channels).
         case 'queue-save-post': {
           if (!id) break;
           const ta = /** @type {HTMLTextAreaElement} */ (SocialOSUI.$('queue-edit-text'));
           const text = ta?.value?.trim();
-          if (!text) { SocialOSUI.toast('The post text can\'t be empty.', 'warning'); break; }
-          await approveAndPostQueueDraft(id, text);
+          if (!text) { try { if (preopened && !preopened.closed) preopened.close(); } catch { /* best-effort */ } SocialOSUI.toast('The post text can\'t be empty.', 'warning'); break; }
+          await approveAndPostQueueDraft(id, text, preopened);
           break;
         }
 
@@ -3405,10 +3499,17 @@ const SocialOS = (() => {
           break;
         }
 
+        // ONE TAP: approve + copy the reply + open the thread (Hacker News).
+        case 'queue-approve-open': {
+          if (!id) break;
+          await approveAndOpenQueueDraft(id, undefined, preopened);
+          break;
+        }
+
         // ONE TAP: approve + publish (direct) / copy & open (assisted).
         case 'queue-post': {
           if (!id) break;
-          await approveAndPostQueueDraft(id);
+          await approveAndPostQueueDraft(id, undefined, preopened);
           break;
         }
 

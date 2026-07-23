@@ -123,8 +123,9 @@ const SocialOSUI = (() => {
    * @param {string} message
    * @param {string} confirmText
    * @param {() => void} onConfirm
+   * @param {() => void} [onCancel] - runs when the sheet is dismissed via Cancel
    */
-  function confirm(title, message, confirmText, onConfirm) {
+  function confirm(title, message, confirmText, onConfirm, onCancel) {
     const sheet = $('bottom-sheet');
     if (!sheet) return;
 
@@ -148,6 +149,7 @@ const SocialOSUI = (() => {
       } else if (action === 'sheet-cancel') {
         sheet.classList.remove('open');
         sheet.removeEventListener('click', handleClick);
+        if (typeof onCancel === 'function') onCancel();
       }
     };
     sheet.addEventListener('click', handleClick);
@@ -1039,7 +1041,7 @@ const SocialOSUI = (() => {
         <div class="card-actions">
           <button class="btn btn-secondary btn-sm" data-action="unschedule-post" data-id="${post.id}">Unschedule</button>
           ${direct ? '' : `<button class="btn btn-secondary btn-sm" data-action="mark-published" data-id="${post.id}">Mark posted</button>`}
-          <button class="btn ${due ? 'btn-success' : 'btn-accent'} btn-sm" data-action="post-scheduled-now" data-id="${post.id}">
+          <button class="btn ${due ? 'btn-success' : 'btn-accent'} btn-sm" data-action="post-scheduled-now" data-id="${post.id}"${direct ? '' : ' data-open="1"'}>
             ${direct ? 'POST NOW' : 'COPY & OPEN'}
           </button>
         </div>
@@ -2031,11 +2033,18 @@ const SocialOSUI = (() => {
     const isDirect = composerCapable && !!direct[channel];
     const scheduledFuture = draft.scheduled_for && new Date(draft.scheduled_for).getTime() > Date.now();
 
+    const assistedLink = SocialOSQueue.assistedLink(draft);
+
     let primary;
     if (isDirect) {
       primary = `<button class="btn btn-success btn-lg" data-action="queue-post" data-id="${draft.id}">APPROVE &amp; POST</button>`;
     } else if (composerCapable) {
-      primary = `<button class="btn btn-success btn-lg" data-action="queue-post" data-id="${draft.id}">APPROVE &amp; COPY</button>`;
+      // Assisted: this tap copies the text and OPENS the platform app to paste
+      // — data-open lets the dispatcher reserve the tab in the gesture so the
+      // deep link isn't popup-blocked after the awaited approve/publish.
+      primary = `<button class="btn btn-success btn-lg" data-action="queue-post" data-id="${draft.id}" data-open="1">APPROVE &amp; COPY</button>`;
+    } else if (assistedLink) {
+      primary = `<button class="btn btn-success btn-lg" data-action="queue-approve-open" data-id="${draft.id}" data-open="1">APPROVE &amp; OPEN</button>`;
     } else {
       primary = `<button class="btn btn-success btn-lg" data-action="queue-approve" data-id="${draft.id}">APPROVE</button>`;
     }
@@ -2067,7 +2076,9 @@ const SocialOSUI = (() => {
           </button>` : ''}
         ${composerCapable
           ? (isDirect ? '' : `<p class="text-secondary" style="font-size:0.75rem;margin-top:6px">${PLATFORM_LABELS[channel] || escapeHtml(channel)} can't be auto-posted — one tap approves, copies the text, and opens the app to paste.</p>`)
-          : `<p class="text-secondary" style="font-size:0.75rem;margin-top:6px">SocialOS doesn't publish ${escapeHtml(channel)} — approving marks it approved and copies the text for you to place.</p>`}
+          : (assistedLink
+              ? `<p class="text-secondary" style="font-size:0.75rem;margin-top:6px">${PLATFORM_LABELS[channel] || escapeHtml(channel)} has no posting API — one tap approves, copies your reply, and opens the thread so you paste and post.</p>`
+              : `<p class="text-secondary" style="font-size:0.75rem;margin-top:6px">SocialOS doesn't publish ${escapeHtml(channel)} — approving marks it approved and copies the text for you to place.</p>`)}
       </div>`;
   }
 
@@ -2156,12 +2167,15 @@ const SocialOSUI = (() => {
         <div class="card-actions">
           <button class="btn btn-secondary btn-sm" data-action="queue-refresh">Cancel</button>
           ${composerCapable ? `
-            <button class="btn btn-success btn-lg" data-action="queue-save-post" data-id="${draft.id}">
+            <button class="btn btn-success btn-lg" data-action="queue-save-post" data-id="${draft.id}"${isDirect ? '' : ' data-open="1"'}>
               ${isDirect ? 'SAVE &amp; POST' : 'SAVE &amp; COPY'}
+            </button>` : (SocialOSQueue.assistedLink(draft) ? `
+            <button class="btn btn-success btn-lg" data-action="queue-save-approve-open" data-id="${draft.id}" data-open="1">
+              SAVE &amp; OPEN
             </button>` : `
             <button class="btn btn-success btn-lg" data-action="queue-save-approve" data-id="${draft.id}">
               SAVE &amp; APPROVE
-            </button>`}
+            </button>`)}
         </div>
       </div>`;
   }
@@ -2408,7 +2422,9 @@ const SocialOSUI = (() => {
     reddit: 'Reddit',
     tiktok: 'TikTok',
     facebook: 'Facebook',
-    instagram: 'Instagram'
+    instagram: 'Instagram',
+    hn: 'Hacker News',
+    hackernews: 'Hacker News'
   };
 
   /**
