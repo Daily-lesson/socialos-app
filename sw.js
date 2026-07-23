@@ -7,7 +7,7 @@
  * approval notifications with one-tap actions and routes taps into the app.
  */
 
-const CACHE_NAME = 'socialos-v26'; // v26: assisted handoff trail + "did it post?" confirm nudge
+const CACHE_NAME = 'socialos-v27'; // v27: rebuilt app icons from the brand mark (iOS/maskable/favicon)
 const SHELL_ASSETS = [
   './',
   './index.html',
@@ -36,8 +36,11 @@ const SHELL_ASSETS = [
   './manifest.json',
   './icons/icon-192.png',
   './icons/icon-512.png',
+  './icons/icon-192-maskable.png',
+  './icons/icon-512-maskable.png',
   './icons/apple-touch-icon.png',
   './icons/favicon-32.png',
+  './icons/favicon-48.png',
   './icons/logo.svg' // the in-app brand mark (index.html nav + landing) — a
                      // cache bump wipes the runtime cache, so it must be
                      // precached or the logo 404s offline right after updates

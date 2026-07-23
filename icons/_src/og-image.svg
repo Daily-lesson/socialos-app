@@ -1,0 +1,39 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 630">
+  <!-- SOURCE MASTER — social share card (og:image / twitter:image), 1200x630.
+       Rasterized by icons/_src/build-icons.py. Brand mark + wordmark on the
+       dark field so shared links carry SocialOS branding. -->
+  <defs>
+    <linearGradient id="stroke" x1="0" y1="1" x2="1" y2="0">
+      <stop offset="0" stop-color="#4F8EF7"/>
+      <stop offset="1" stop-color="#A855F7"/>
+    </linearGradient>
+    <radialGradient id="bg" cx="0.30" cy="0.18" r="1.1">
+      <stop offset="0" stop-color="#181828"/>
+      <stop offset="1" stop-color="#0A0A0F"/>
+    </radialGradient>
+    <linearGradient id="word" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#8FB4FF"/>
+      <stop offset="1" stop-color="#C9A2FF"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="1200" height="630" fill="url(#bg)"/>
+
+  <!-- Mark: reuse the 512 art, placed left-of-centre at ~300px tall -->
+  <g transform="translate(150 119) scale(0.765)">
+    <path d="M 328 184 A 72 72 0 1 0 256 256 A 72 72 0 1 1 184 328"
+          fill="none" stroke="url(#stroke)" stroke-width="46" stroke-linecap="round"/>
+    <circle cx="184" cy="328" r="32" fill="#4F8EF7"/>
+    <circle cx="184" cy="328" r="12" fill="#0A0A0F"/>
+    <circle cx="328" cy="184" r="38" fill="#A855F7"/>
+    <circle cx="328" cy="184" r="14" fill="#0A0A0F"/>
+    <circle cx="328" cy="184" r="64" fill="none" stroke="#A855F7" stroke-width="7" opacity="0.35"/>
+    <circle cx="375" cy="140" r="11" fill="#F0F0FF"/>
+  </g>
+
+  <!-- Wordmark + tagline -->
+  <text x="560" y="300" font-family="Poppins, 'Segoe UI', Helvetica, Arial, sans-serif"
+        font-size="104" font-weight="700" fill="url(#word)">SocialOS</text>
+  <text x="562" y="360" font-family="'Segoe UI', Helvetica, Arial, sans-serif"
+        font-size="38" font-weight="400" fill="#9A9AB0">Your AI social-media manager</text>
+</svg>

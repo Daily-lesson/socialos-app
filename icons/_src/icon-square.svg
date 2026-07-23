@@ -1,0 +1,36 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <!--
+    SOURCE MASTER — app icon (full-bleed square). Rasterized to the app icon
+    PNGs by icons/_src/build-icons.py. Full opaque square: Apple home-screen
+    icons must NOT be transparent (iOS renders transparency as black) and it
+    rounds the corners itself, so the art is a plain square here. The mark sits
+    within the maskable safe zone, so the same square is safe under Android's
+    adaptive-icon crop too. Keep in sync with icons/logo.svg (the in-app mark).
+  -->
+  <defs>
+    <linearGradient id="stroke" x1="0" y1="1" x2="1" y2="0">
+      <stop offset="0" stop-color="#4F8EF7"/>
+      <stop offset="1" stop-color="#A855F7"/>
+    </linearGradient>
+    <radialGradient id="bg" cx="0.32" cy="0.22" r="1.15">
+      <stop offset="0" stop-color="#181828"/>
+      <stop offset="1" stop-color="#0A0A0F"/>
+    </radialGradient>
+  </defs>
+
+  <!-- Full-bleed square field (no rounding — the OS masks/rounds) -->
+  <rect width="512" height="512" fill="url(#bg)"/>
+
+  <!-- The route: a proper S from two 270° arcs -->
+  <path d="M 328 184 A 72 72 0 1 0 256 256 A 72 72 0 1 1 184 328"
+        fill="none" stroke="url(#stroke)" stroke-width="46" stroke-linecap="round"/>
+  <!-- Origin node (small, blue, bottom-left) -->
+  <circle cx="184" cy="328" r="32" fill="#4F8EF7"/>
+  <circle cx="184" cy="328" r="12" fill="#0A0A0F"/>
+  <!-- Destination node (larger, purple, top-right) with broadcast halo -->
+  <circle cx="328" cy="184" r="38" fill="#A855F7"/>
+  <circle cx="328" cy="184" r="14" fill="#0A0A0F"/>
+  <circle cx="328" cy="184" r="64" fill="none" stroke="#A855F7" stroke-width="7" opacity="0.35"/>
+  <!-- Satellite on the halo -->
+  <circle cx="375" cy="140" r="11" fill="#F0F0FF"/>
+</svg>

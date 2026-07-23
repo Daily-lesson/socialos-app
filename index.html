@@ -6,7 +6,23 @@
   <meta name="theme-color" content="#06060B">
   <meta name="description" content="SocialOS — AI-powered personal social media manager">
   <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="SocialOS">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+
+  <!-- Social share (link previews — Slack / iMessage / X / Facebook). Absolute
+       URLs so crawlers resolve the image from the canonical origin. -->
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="SocialOS">
+  <meta property="og:title" content="SocialOS">
+  <meta property="og:description" content="AI-powered personal social media manager">
+  <meta property="og:url" content="https://socialos.fyi/">
+  <meta property="og:image" content="https://socialos.fyi/icons/og-image.png">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="SocialOS">
+  <meta name="twitter:description" content="AI-powered personal social media manager">
+  <meta name="twitter:image" content="https://socialos.fyi/icons/og-image.png">
 
   <!-- CSP: no third-party scripts (Section 9 security rule) -->
   <!-- style-src needs 'unsafe-inline': UI templates set platform colors and
@@ -41,6 +57,9 @@
   <!-- PWA -->
   <link rel="manifest" href="manifest.json">
   <link rel="icon" type="image/png" sizes="32x32" href="icons/favicon-32.png">
+  <link rel="icon" type="image/png" sizes="48x48" href="icons/favicon-48.png">
+  <link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png">
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
   <link rel="apple-touch-icon" sizes="180x180" href="icons/apple-touch-icon.png">
 
   <!-- Fonts (Section 6 typography) -->
