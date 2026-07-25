@@ -284,11 +284,44 @@ const SocialOSDB = (() => {
 
       req.onsuccess = (event) => {
         _db = /** @type {IDBOpenDBRequest} */ (event.target).result;
+        // Drop the cached handle if the browser closes the connection out from
+        // under us — iOS / Firefox-iOS force-close IndexedDB connections when
+        // the tab is backgrounded or restored from the BFCache — so the next
+        // open() reopens a fresh connection instead of reusing a dead handle
+        // that throws "The database connection is closing." (SOCIALOS-4).
+        _db.onclose = () => { _db = null; };
+        _db.onversionchange = () => {
+          try { if (_db) _db.close(); } finally { _db = null; }
+        };
         resolve(_db);
       };
 
       req.onerror = () => reject(req.error);
     });
+  }
+
+  /**
+   * Create a transaction, transparently reopening the connection once if the
+   * cached handle is mid-close. iOS / Firefox-iOS force-close IndexedDB
+   * connections when the tab is backgrounded, so a cached `_db` can throw
+   * "The database connection is closing." *synchronously* on `.transaction()`
+   * (SOCIALOS-4). Dropping the stale handle, reopening, and retrying once
+   * turns that transient into a normal success instead of an unhandled
+   * rejection. A second failure propagates as a normal rejection.
+   * @param {string} storeName
+   * @param {IDBTransactionMode} mode
+   * @returns {Promise<IDBTransaction>}
+   */
+  async function tx(storeName, mode) {
+    const db = await open();
+    try {
+      return db.transaction(storeName, mode);
+    } catch {
+      // Stale/closing handle — drop it, reopen fresh, and try once more.
+      _db = null;
+      const fresh = await open();
+      return fresh.transaction(storeName, mode);
+    }
   }
 
   /**
@@ -298,10 +331,9 @@ const SocialOSDB = (() => {
    * @returns {Promise<any>}
    */
   async function get(storeName, id) {
-    const db = await open();
+    const t = await tx(storeName, 'readonly');
     return new Promise((resolve, reject) => {
-      const tx = db.transaction(storeName, 'readonly');
-      const req = tx.objectStore(storeName).get(id);
+      const req = t.objectStore(storeName).get(id);
       req.onsuccess = () => resolve(req.result || null);
       req.onerror = () => reject(req.error);
     });
@@ -314,12 +346,11 @@ const SocialOSDB = (() => {
    * @returns {Promise<void>}
    */
   async function put(storeName, value) {
-    const db = await open();
+    const t = await tx(storeName, 'readwrite');
     return new Promise((resolve, reject) => {
-      const tx = db.transaction(storeName, 'readwrite');
-      tx.objectStore(storeName).put(value);
-      tx.oncomplete = () => resolve();
-      tx.onerror = () => reject(tx.error);
+      t.objectStore(storeName).put(value);
+      t.oncomplete = () => resolve();
+      t.onerror = () => reject(t.error);
     });
   }
 
@@ -329,10 +360,9 @@ const SocialOSDB = (() => {
    * @returns {Promise<any[]>}
    */
   async function getAll(storeName) {
-    const db = await open();
+    const t = await tx(storeName, 'readonly');
     return new Promise((resolve, reject) => {
-      const tx = db.transaction(storeName, 'readonly');
-      const req = tx.objectStore(storeName).getAll();
+      const req = t.objectStore(storeName).getAll();
       req.onsuccess = () => resolve(req.result || []);
       req.onerror = () => reject(req.error);
     });
@@ -345,12 +375,11 @@ const SocialOSDB = (() => {
    * @returns {Promise<void>}
    */
   async function del(storeName, id) {
-    const db = await open();
+    const t = await tx(storeName, 'readwrite');
     return new Promise((resolve, reject) => {
-      const tx = db.transaction(storeName, 'readwrite');
-      tx.objectStore(storeName).delete(id);
-      tx.oncomplete = () => resolve();
-      tx.onerror = () => reject(tx.error);
+      t.objectStore(storeName).delete(id);
+      t.oncomplete = () => resolve();
+      t.onerror = () => reject(t.error);
     });
   }
 
@@ -360,12 +389,11 @@ const SocialOSDB = (() => {
    * @returns {Promise<void>}
    */
   async function clear(storeName) {
-    const db = await open();
+    const t = await tx(storeName, 'readwrite');
     return new Promise((resolve, reject) => {
-      const tx = db.transaction(storeName, 'readwrite');
-      tx.objectStore(storeName).clear();
-      tx.oncomplete = () => resolve();
-      tx.onerror = () => reject(tx.error);
+      t.objectStore(storeName).clear();
+      t.oncomplete = () => resolve();
+      t.onerror = () => reject(t.error);
     });
   }
 
