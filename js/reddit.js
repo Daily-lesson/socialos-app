@@ -468,7 +468,11 @@ const SocialOSReddit = (() => {
     const postUrl = data?.json?.data?.url || null;
     const postId = data?.json?.data?.id || data?.json?.data?.name || null;
 
-    post.platform_post_id = postUrl || postId;
+    // A 200 with neither url nor id means the post genuinely landed but Reddit
+    // gave us no receipt. Keep it null and say why: the queue write-back treats
+    // "published, no receipt, no human confirm" as UNREPORTABLE rather than
+    // laundering it into an 'assisted, confirmed' claim nobody made (gotcha 6).
+    post.platform_post_id = postUrl || postId || null;
     post.status = 'published';
     post.published_time = SocialOSUtils.now();
     await SocialOSDB.put(SocialOSDB.STORES.posts, post);

@@ -1995,6 +1995,7 @@ const SocialOSUI = (() => {
               <p class="text-secondary"><b>Add the Front Office shared secret above first</b> — push rides the same connection.</p>` : ''}
             ${ps.supported && ps.permission === 'denied' ? `
               <p class="text-secondary"><b>Notifications are blocked</b> for SocialOS in your browser/OS settings — allow them, then enable here.</p>` : ''}
+            <p class="text-secondary" id="set-push-liveness">Background service: checking…</p>
             <div style="display:flex;gap:8px;flex-wrap:wrap">
               ${on
                 ? `<button class="btn btn-secondary btn-sm" data-action="push-test">Send a test</button>
@@ -2128,11 +2129,22 @@ const SocialOSUI = (() => {
 
   /**
    * Render the Front Office approval queue screen.
-   * @param {{configured: boolean, drafts: import('./queue.js').MktDraft[], error: string|null, direct?: Object<string, boolean>, media?: Object<string,{dataUri:string,alt:string}>, week?: {direct:number, assisted:number}}} data
+   * @param {{configured: boolean, drafts: import('./queue.js').MktDraft[], error: string|null, direct?: Object<string, boolean>, media?: Object<string,{dataUri:string,alt:string}>, week?: {direct:number, assisted:number}, reconnect?: string[]}} data
    */
   function renderQueue(data) {
     const container = $('queue-content');
     if (!container) return;
+
+    const reconnect = data.reconnect || [];
+    // Only show the banner when a QUEUED draft's channel is actually in the
+    // reconnect set — no banner for a platform nothing is waiting on.
+    const reconnectHere = reconnect.filter(p => (data.drafts || []).some(d => (d.channel || '').toLowerCase() === p));
+    const reconnectBanner = reconnectHere.length ? `
+      <div class="cmp-reconnect" role="status">
+        ⚠️ Your <b>${reconnectHere.map(p => escapeHtml(PLATFORM_LABELS[p] || p)).join(', ')}</b>
+        sign-in expired — those drafts will be copy-and-paste until you reconnect.
+        <button type="button" class="btn btn-secondary btn-sm" data-action="go-settings">Reconnect</button>
+      </div>` : '';
 
     let html = `
       <div class="screen-title-row" style="display:flex;align-items:center;gap:12px">
@@ -2143,7 +2155,8 @@ const SocialOSUI = (() => {
         Drafts your agents queued for review. One tap approves and posts as
         far as each platform allows — nothing is published without you.
       </p>
-      ${data.week ? `<p class="text-secondary" style="margin:0 0 12px;font-weight:500">This week: ${data.week.direct} posted direct, ${data.week.assisted} assisted.</p>` : ''}`;
+      ${data.week ? `<p class="text-secondary" style="margin:0 0 12px;font-weight:500">This week: ${data.week.direct} posted direct, ${data.week.assisted} assisted.</p>` : ''}
+      ${reconnectBanner}`;
 
     if (!data.configured) {
       html += `
@@ -2492,7 +2505,8 @@ const SocialOSUI = (() => {
    *   attach?: {contentId: string, thumbUrl: string, title: string, flagged: boolean, auto?: boolean}|null,
    *   attachPicker?: boolean,
    *   gen?: {show: boolean, template: string, size: string, text: string, note: string},
-   *   mediaItems?: ContentItem[]
+   *   mediaItems?: ContentItem[],
+   *   reconnect?: string[]
    * }} data
    */
   function renderComposer(data) {
@@ -2508,6 +2522,17 @@ const SocialOSUI = (() => {
     const gen = data.gen || { show: false, template: 'clean', size: 'square', text: '', note: '' };
     const mediaItems = data.mediaItems || [];
     const linkFind = data.linkFind || null;
+    const reconnect = data.reconnect || [];
+    // Token-decay visibility: only warn about a reconnect if the composer is
+    // actually offering that platform right now — no banner for a platform
+    // nothing here is waiting on.
+    const reconnectHere = reconnect.filter(p => offer.includes(p));
+    const reconnectBanner = reconnectHere.length ? `
+      <div class="cmp-reconnect" role="status">
+        ⚠️ Your <b>${reconnectHere.map(p => escapeHtml(PLATFORM_LABELS[p] || p)).join(', ')}</b>
+        sign-in expired — those posts will be copy-and-paste until you reconnect.
+        <button type="button" class="btn btn-secondary btn-sm" data-action="go-settings">Reconnect</button>
+      </div>` : '';
 
     const chip = (p) => {
       const isDirect = cap.direct.includes(p);
@@ -2658,6 +2683,7 @@ const SocialOSUI = (() => {
       ${genPanel}
       ${pickerBlock}
 
+      ${reconnectBanner}
       <div class="cmp-chips" role="group" aria-label="Platforms">
         ${offer.map(chip).join('')}
       </div>

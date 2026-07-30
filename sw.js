@@ -7,7 +7,7 @@
  * approval notifications with one-tap actions and routes taps into the app.
  */
 
-const CACHE_NAME = 'socialos-v27'; // v27: rebuilt app icons from the brand mark (iOS/maskable/favicon)
+const CACHE_NAME = 'socialos-v28'; // v28: stale zero-tap guard + reconnect nudge + queue write-back
 const SHELL_ASSETS = [
   './',
   './index.html',
@@ -130,6 +130,11 @@ self.addEventListener('fetch', (event) => {
 //   type 'draft'     — a Front Office draft needs review (new or due)
 //   type 'due'       — a scheduled, already-approved post is due to publish
 //   type 'test'      — Settings "send test" button
+//   type 'digest'    — the daily "N drafts waiting" pile-up nudge (mkt-push
+//                      slow lane). Falls through to the generic
+//                      showNotification below with no dedicated branch —
+//                      data.url === 'queue' already routes through the
+//                      existing notificationclick path. Don't add one.
 //
 // Action buttons show on Android/desktop; iOS shows none — there, tapping
 // the notification opens the app at `url`, which lands on the same flow.
@@ -137,6 +142,14 @@ self.addEventListener('fetch', (event) => {
 // the composer engine — the SW itself never posts (honest boundary: direct
 // platforms publish, assisted ones copy & open, and the app reports which).
 // "Deny" is handled here in the background — one tap, no app open.
+//
+// Three staleness cutoffs guard the same hazard at three different layers
+// (CLAUDE.md gotcha 9): mkt-push's dispatcher-delivery cutoff (12h,
+// QUEUE_STALE_HOURS server-side), js/app.js's app-open cutoff
+// (APP_OPEN_STALE_AUTOPOST_MS, 24h), and this file's zero-tap cutoff
+// (SW_STALE_AUTOPOST_MS, 2h — below). They differ on purpose: this is the
+// most dangerous path (publishing with no human present), so it gets the
+// tightest cutoff.
 
 /** Read the app settings record straight from IndexedDB (js/db.js layout). */
 function swReadSettings() {
@@ -163,6 +176,58 @@ function swReadSettings() {
 }
 
 const SW_DEFAULT_MKT_QUEUE_URL = 'https://ehgnxblgiyqtxypkoioc.supabase.co/functions/v1/mkt-queue';
+
+// D2 layer 3 of 3 (CLAUDE.md gotcha 9) — the tightest of the three staleness
+// cutoffs. A device re-subscribing after a quiet week can receive a burst of
+// expired "time to post" reminders; zero-tap must never publish days-old
+// content with no human present. An unreadable scheduled_time counts as
+// stale (refuse), not fresh.
+const SW_STALE_AUTOPOST_MS = 2 * 60 * 60 * 1000;
+
+// Throttle for the reconnect nudge below — an expired token doesn't need a
+// push every 5 minutes.
+const RECONNECT_NUDGE_MIN_HOURS = 20;
+
+/**
+ * Best-effort "your <platform> sign-in expired" push, throttled so a
+ * persistently-expired token doesn't nudge every 5-minute tick. Uses the
+ * same push-schedule/X-FrontOffice-Secret path swRejectDraft already uses.
+ * Swallows every failure — this is a nicety, never allowed to break
+ * auto-post's fallback to the interactive card.
+ * @param {string} platform
+ */
+async function swBookReconnectNudge(platform) {
+  // Feature-detect first (N8): an older cached js/db.js won't have this.
+  if (typeof SocialOSDB === 'undefined' || typeof SocialOSDB.getSwState !== 'function') return;
+  try {
+    const state = await SocialOSDB.getSwState();
+    const key = 'reconnect_nudge_' + platform;
+    const last = state[key] ? new Date(state[key]).getTime() : 0;
+    if (Date.now() - last < RECONNECT_NUDGE_MIN_HOURS * 3600 * 1000) return;
+
+    const settings = await swReadSettings();
+    const secret = settings && settings.front_office_secret;
+    if (!settings || !settings.push_enabled || !secret) return;
+    const url = (settings && settings.mkt_queue_url) || SW_DEFAULT_MKT_QUEUE_URL;
+    const label = platform === 'linkedin' ? 'LinkedIn' : platform === 'reddit' ? 'Reddit' : platform;
+
+    await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-FrontOffice-Secret': secret },
+      body: JSON.stringify({
+        action: 'push-schedule',
+        kind: 'reminder',
+        send_at: new Date(Date.now() + 30 * 60 * 1000).toISOString(),
+        title: 'Reconnect ' + label + ' to keep auto-posting',
+        body: 'Platform sign-ins expire (LinkedIn: 60 days). Open Settings → Reconnect; scheduled posts wait until you do.',
+        url: 'settings'
+      })
+    });
+    await SocialOSDB.saveSwState({ [key]: new Date().toISOString() });
+  } catch {
+    // best-effort — never breaks the caller
+  }
+}
 
 /** Reject a Front Office draft without opening the app. */
 async function swRejectDraft(draftId) {
@@ -219,7 +284,7 @@ async function swOpenApp(route) {
  * platforms (LinkedIn/Reddit) can auto-post; the post record only exists
  * in the IndexedDB of the device that scheduled it, so no other
  * subscribed device can double-post.
- * @returns {Promise<{ok: boolean, platform?: string, already?: boolean, error?: string}|null>}
+ * @returns {Promise<{ok: boolean, platform?: string, already?: boolean, error?: string, reason?: string}|null>}
  *   null = auto-post doesn't apply (off / other device / assisted platform)
  */
 async function swAutoPostDue(data) {
@@ -234,6 +299,14 @@ async function swAutoPostDue(data) {
       return { ok: true, platform: post.platform, already: true };
     }
 
+    // STALE GUARD (ecosystem wave): a device re-subscribing after a quiet
+    // week can receive a burst of expired "time to post" reminders. Zero-tap
+    // must never publish days-old content — hand it to the human "🚀 Post
+    // now" card instead (still one tap, and honest). An unreadable
+    // scheduled_time is treated as UNKNOWN, i.e. refused, not assumed fresh.
+    const sched = post.scheduled_time ? new Date(post.scheduled_time).getTime() : NaN;
+    if (!Number.isFinite(sched) || Date.now() - sched > SW_STALE_AUTOPOST_MS) return null;
+
     // v4: media needs a human gesture the SW can't provide — either because
     // it wasn't screened at approve time (screening_unavailable) or shows a
     // face, or because reddit+image has no direct-post path at all (only
@@ -244,6 +317,15 @@ async function swAutoPostDue(data) {
       const media = await SocialOSDB.get(SocialOSDB.STORES.content, post.media_content_id);
       const flags = (media && media.sensitivity_flags) || [];
       if (flags.includes('faces_visible') || flags.includes('screening_unavailable')) return null; // the human confirm can't run in the SW
+    }
+
+    if (post.platform === 'linkedin' && !(await SocialOSLinkedIn.isConnected())) {
+      await swBookReconnectNudge('linkedin');
+      return { ok: false, reason: 'reconnect', platform: 'linkedin' };
+    }
+    if (post.platform === 'reddit' && !(await SocialOSReddit.isConnected())) {
+      await swBookReconnectNudge('reddit');
+      return { ok: false, reason: 'reconnect', platform: 'reddit' };
     }
 
     let published;
@@ -259,6 +341,42 @@ async function swAutoPostDue(data) {
     post.status = 'published';
     post.published_time = new Date().toISOString();
     if (published && published.platform_post_id) post.platform_post_id = published.platform_post_id;
+
+    // Zero-tap write-back (CLAUDE.md gotcha 10). Never send mode:'direct'
+    // without a receipt: js/reddit.js can publish successfully and still
+    // leave platform_post_id null, and the broker correctly 400s that.
+    // Skipping here leaves the draft 'approved' and lets the app-open
+    // flusher decide with the full evidence picture. Stamp
+    // queue_writeback_at/_mode ONLY on a confirmed 2xx/already:true — never
+    // on failure, or the app-open flusher would never retry.
+    if (post.queue_draft_id && post.platform_post_id) {
+      try {
+        const wbSettings = await swReadSettings();
+        const secret = wbSettings && wbSettings.front_office_secret;
+        const url = (wbSettings && wbSettings.mkt_queue_url) || SW_DEFAULT_MKT_QUEUE_URL;
+        if (secret) {
+          const res = await fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'X-FrontOffice-Secret': secret },
+            body: JSON.stringify({
+              action: 'report-published',
+              id: post.queue_draft_id,
+              mode: 'direct',
+              platform_post_id: post.platform_post_id
+            })
+          });
+          let already = false;
+          try { already = !!(await res.clone().json()).already; } catch { /* non-JSON */ }
+          if (res.ok || already) {
+            post.queue_writeback_at = new Date().toISOString();
+            post.queue_writeback_mode = 'direct';
+          }
+        }
+      } catch {
+        // best-effort — the app-open flusher (flushQueueWriteBacks) retries
+      }
+    }
+
     await SocialOSDB.put(SocialOSDB.STORES.posts, post);
     if (post.content_id) {
       const content = await SocialOSDB.get(SocialOSDB.STORES.content, post.content_id);
@@ -284,6 +402,12 @@ async function swHandlePush(data) {
   };
 
   // A due scheduled post: try to publish it right now, no tap needed.
+  // This guard is load-bearing beyond tidiness. push-schedule allowlists
+  // `kind` to ['reminder','test'], and the dispatcher maps anything that is
+  // not draft-due/test to type:'due' — so the reconnect nudge booked by
+  // swBookReconnectNudge also arrives as type:'due' with postId: null.
+  // Relaxing `&& data.postId` would turn that nudge into an auto-post
+  // trigger.
   if (type === 'due' && data.postId) {
     const auto = await swAutoPostDue(data);
     if (auto && auto.ok) {
@@ -300,14 +424,19 @@ async function swHandlePush(data) {
       );
     }
     // Fall back to the interactive "Post now" card (auto-post off, another
-    // device, assisted platform, or the publish failed).
-    const hint = auto && auto.ok === false ? ` — auto-post failed: ${auto.error}` : '';
+    // device, assisted platform, the token expired, or the publish failed).
+    const isReconnect = auto && auto.reason === 'reconnect';
+    const hint = isReconnect
+      ? ` — your ${auto.platform} sign-in expired; tap to reconnect.`
+      : (auto && auto.ok === false ? ` — auto-post failed: ${auto.error}` : '');
     return self.registration.showNotification(data.title || 'SocialOS', {
       ...base,
       body: (data.body || '') + hint,
       tag: data.tag || 'due-' + data.postId,
-      data,
-      actions: [{ action: 'post', title: '🚀 Post now' }]
+      data: isReconnect ? { ...data, url: 'settings' } : data,
+      actions: isReconnect
+        ? [{ action: 'post', title: '🚀 Post now' }, { action: 'fix', title: '🔑 Reconnect' }]
+        : [{ action: 'post', title: '🚀 Post now' }]
     });
   }
 
@@ -349,6 +478,7 @@ self.addEventListener('notificationclick', (event) => {
   if (action === 'approve' && data.draftId) route = 'queue-post/' + data.draftId;
   else if (action === 'edit' && data.draftId) route = 'queue-edit/' + data.draftId;
   else if (action === 'post' && data.postId) route = 'due/' + data.postId;
+  else if (action === 'fix') route = 'settings';
   else if (!route && data.draftId) route = 'queue';
   else if (!route && data.postId) route = 'approvals';
 

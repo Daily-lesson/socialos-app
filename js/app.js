@@ -72,6 +72,19 @@ const SocialOS = (() => {
   // be top of mind.
   const CONFIRM_DELAY_MIN = 5;
 
+  // D2 layer 2 of 3 (CLAUDE.md gotcha 9). sw.js refuses a zero-tap publish
+  // more than 2h past the scheduled time (a push should arrive roughly on
+  // time); the app-open path (checkDuePosts, below) can legitimately be
+  // hours late and still be the feature the user asked for, so it gets its
+  // own, larger cutoff. A week-old post is not that feature. An unparseable
+  // scheduled_time counts as stale (refuse), not fresh.
+  const APP_OPEN_STALE_AUTOPOST_MS = 24 * 60 * 60 * 1000;
+
+  // Once per session — flushQueueWriteBacks is a small best-effort catch-up
+  // pass, not something that needs to re-scan every posts/handoffs record on
+  // every renderQueue() call.
+  let queueWriteBacksFlushed = false;
+
   // ── Router ────────────────────────────────────────────────────────────
 
   /**
@@ -190,6 +203,7 @@ const SocialOS = (() => {
       const all = await SocialOSDB.getAllContent();
       mediaItems = all.filter(i => i.type === 'photo' && i.thumbnail_url);
     }
+    const reconnect = await reconnectNeededPlatforms();
     SocialOSUI.renderComposer({
       cap,
       mode: /** @type {'post'|'reply'} */ (c.mode),
@@ -208,7 +222,8 @@ const SocialOS = (() => {
       attachPicker: c.attachPicker,
       gen: c.gen,
       linkFind: c.linkFind,
-      mediaItems
+      mediaItems,
+      reconnect
     });
   }
 
@@ -504,9 +519,9 @@ const SocialOS = (() => {
    * so it lands in Approvals → "Handed off" with an honest "did it post?"
    * confirmation and a short nudge — SocialOS can't read an assisted post back
    * (gotcha 6), so it asks rather than assuming.
-   * @param {{text: string, deepLink?: string|null, mediaDataUri?: string|null, label: string, preopened?: Window|null, channel?: string, title?: string, source?: 'queue'|'composer'|'scheduled', postId?: string|null}} opts
+   * @param {{text: string, deepLink?: string|null, mediaDataUri?: string|null, label: string, preopened?: Window|null, channel?: string, title?: string, source?: 'queue'|'composer'|'scheduled', postId?: string|null, draftId?: string|null}} opts
    */
-  async function assistedHandoff({ text, deepLink, mediaDataUri, label, preopened, channel, title, source, postId }) {
+  async function assistedHandoff({ text, deepLink, mediaDataUri, label, preopened, channel, title, source, postId, draftId }) {
     // Record the handoff once the copy/share/open actually happened (never on a
     // cancelled share). `url` is the destination we opened, so "Open again"
     // later reopens the exact same place.
@@ -515,7 +530,7 @@ const SocialOS = (() => {
       if (handoffRecorded || !channel) return;
       handoffRecorded = true;
       try {
-        await saveHandoff({ channel, title: title || label || channel, text, url: url || null, source: source || 'queue', postId: postId || null });
+        await saveHandoff({ channel, title: title || label || channel, text, url: url || null, source: source || 'queue', postId: postId || null, draftId: draftId || null });
       } catch { /* audit trail is best-effort — never block the handoff itself */ }
     };
     // `preopened` is a tab the click dispatcher reserved SYNCHRONOUSLY, inside
@@ -570,7 +585,7 @@ const SocialOS = (() => {
    * routes to '#handoff/<id>' to ask; either way the record sits in
    * Approvals → "Handed off" until confirmed. Honest by design: SocialOS can't
    * verify an assisted post landed, so it asks (gotcha 6).
-   * @param {{channel: string, title: string, text: string, url: string|null, source: 'queue'|'composer'|'scheduled', postId: string|null}} input
+   * @param {{channel: string, title: string, text: string, url: string|null, source: 'queue'|'composer'|'scheduled', postId: string|null, draftId?: string|null}} input
    * @returns {Promise<import('./db.js').Handoff>}
    */
   async function saveHandoff(input) {
@@ -585,6 +600,7 @@ const SocialOS = (() => {
       url: input.url || null,
       source: input.source || 'queue',
       post_id: input.postId || null,
+      draft_id: input.draftId || null,
       status: 'handed_off',
       created_at: now,
       confirmed_at: null,
@@ -618,13 +634,31 @@ const SocialOS = (() => {
     handoff.status = 'posted';
     handoff.confirmed_at = SocialOSUtils.now();
     await SocialOSDB.put(SocialOSDB.STORES.handoffs, handoff);
+    let post = null;
     if (handoff.post_id) {
-      const post = await SocialOSDB.get(SocialOSDB.STORES.posts, handoff.post_id);
+      post = await SocialOSDB.get(SocialOSDB.STORES.posts, handoff.post_id);
       if (post && post.status !== 'published') {
         post.status = 'published';
         post.published_time = SocialOSUtils.now();
         await SocialOSDB.put(SocialOSDB.STORES.posts, post);
       }
+    }
+    // The Front Office queue write-back (CLAUDE.md gotcha 10): the user's tap
+    // here IS the human evidence — prefer 'direct' when the linked post
+    // somehow carries a platform_post_id (a retry that actually landed
+    // directly), else this is exactly the 'assisted, confirmed' case.
+    if (handoff.draft_id) {
+      try {
+        const outcome = post?.platform_post_id
+          ? { mode: /** @type {'direct'} */ ('direct'), platformPostId: post.platform_post_id }
+          : { mode: /** @type {'assisted'} */ ('assisted'), confirmed: true };
+        const res = await SocialOSQueue.reportPublished(handoff.draft_id, outcome);
+        if ((res.ok || res.already) && post) {
+          post.queue_writeback_at = SocialOSUtils.now();
+          post.queue_writeback_mode = outcome.mode;
+          await SocialOSDB.put(SocialOSDB.STORES.posts, post);
+        }
+      } catch { /* best-effort — never block the confirm itself */ }
     }
   }
 
@@ -646,12 +680,79 @@ const SocialOS = (() => {
           h.status = 'posted';
           h.confirmed_at = post.published_time || SocialOSUtils.now();
           await SocialOSDB.put(SocialOSDB.STORES.handoffs, h);
+          // M5: reconcile is "the post published elsewhere" — NOT a human
+          // confirm. Only report DIRECT here, and only with a real
+          // platform_post_id; claiming {mode:'assisted', confirmed:true}
+          // would fabricate a confirmation nobody made. A published-with-
+          // no-id post is left unreportable (flushQueueWriteBacks picks it
+          // up if a Handoff later confirms it).
+          if (h.draft_id && post.platform_post_id && !post.queue_writeback_at) {
+            try {
+              const res = await SocialOSQueue.reportPublished(h.draft_id, { mode: 'direct', platformPostId: post.platform_post_id });
+              if (res.ok || res.already) {
+                post.queue_writeback_at = SocialOSUtils.now();
+                post.queue_writeback_mode = 'direct';
+                await SocialOSDB.put(SocialOSDB.STORES.posts, post);
+              }
+            } catch { /* best-effort */ }
+          }
           continue;
         }
       }
       pending.push(h);
     }
     return pending;
+  }
+
+  /**
+   * Best-effort catch-up: report any queue-originated post that published
+   * since the last time this ran but never got a write-back (the app closed
+   * before the write-back call, or the broker was briefly unreachable).
+   * Bounded, evidence-driven, once per session. Never re-derives 'assisted'
+   * from an absent platform_post_id — see M5 in
+   * waves/socialos/final-plan.md / CLAUDE.md gotcha 10.
+   */
+  async function flushQueueWriteBacks() {
+    if (queueWriteBacksFlushed) return;
+    queueWriteBacksFlushed = true;
+    try {
+      const posts = await SocialOSDB.getAllPosts();
+      const handoffs = await SocialOSDB.getHandoffs();
+      // S9: strictly INSIDE the 7-day archiveStaleRecords() cutoff, so the
+      // flusher can never re-put a post the archiver just moved.
+      const WINDOW_MS = 6 * 24 * 60 * 60 * 1000;
+      const candidates = posts.filter(p =>
+        p.queue_draft_id && p.status === 'published' && !p.queue_writeback_at &&
+        p.published_time && Date.now() - new Date(p.published_time).getTime() < WINDOW_MS
+      ).slice(0, 20);
+
+      for (const p of candidates) {
+        // M5: mode from EVIDENCE, never from absence.
+        let outcome = null;
+        if (p.platform_post_id) {
+          outcome = { mode: 'direct', platformPostId: p.platform_post_id };
+        } else if (handoffs.some(h => h.post_id === p.id && h.status === 'posted' && h.confirmed_at)) {
+          outcome = { mode: 'assisted', confirmed: true };
+        }
+        // Neither → published with no receipt and no human confirm.
+        // UNREPORTABLE. The draft stays 'approved' and the rollup counts it
+        // nowhere. Honest unknown beats a fabricated 'assisted, confirmed'
+        // in a receipts surface (contract RECEIPTS + gotcha 6).
+        if (!outcome) continue;
+
+        const res = await SocialOSQueue.reportPublished(p.queue_draft_id, outcome);
+        if (res.unsupported) break; // un-deployed broker — don't hammer it
+        if (!res.ok && !res.already) continue;
+
+        // Re-read immediately before the stamping put — archiveStaleRecords()
+        // runs concurrently from init() and may have moved this post already.
+        const fresh = await SocialOSDB.get(SocialOSDB.STORES.posts, p.id);
+        if (!fresh) continue;
+        fresh.queue_writeback_at = SocialOSUtils.now();
+        fresh.queue_writeback_mode = outcome.mode;
+        await SocialOSDB.put(SocialOSDB.STORES.posts, fresh);
+      }
+    } catch { /* best-effort — never throws into a caller */ }
   }
 
   /**
@@ -1044,6 +1145,22 @@ const SocialOS = (() => {
   }
 
   /**
+   * Platforms whose direct connection has expired and needs a reconnect —
+   * shared by the composer reconnect banner and the Queue reconnect banner
+   * (token-decay visibility, USER ZERO: works for any user with an expired
+   * token, whether or not they use the Front Office queue at all).
+   * @returns {Promise<string[]>}
+   */
+  async function reconnectNeededPlatforms() {
+    const conn = {
+      linkedin: await SocialOSLinkedIn.getConnectionStatus(),
+      reddit: await SocialOSReddit.getConnectionStatus(),
+      tiktok: await SocialOSTikTok.getConnectionStatus()
+    };
+    return Object.keys(conn).filter(p => conn[p].needsReconnect);
+  }
+
+  /**
    * Lazy, silent (hard rule 3) thumbnail fetch for has_media cards. Fetch
    * failures are swallowed — the card just shows no thumb, never an error.
    * @param {import('./queue.js').MktDraft[]} drafts
@@ -1062,9 +1179,10 @@ const SocialOS = (() => {
     }
     if (any && state.currentScreen === 'queue') {
       const week = await weeklyPostCounts();
+      const reconnect = await reconnectNeededPlatforms();
       SocialOSUI.renderQueue({
         configured: true, drafts: state.queue.drafts, error: null,
-        direct: state.queue.direct, media: state.queue.media, week
+        direct: state.queue.direct, media: state.queue.media, week, reconnect
       });
     }
   }
@@ -1073,6 +1191,7 @@ const SocialOS = (() => {
    * Load + render the Front Office approval queue (js/queue.js).
    */
   async function renderQueue() {
+    flushQueueWriteBacks().catch(() => {}); // best-effort catch-up, fire-and-forget
     if (!(await SocialOSQueue.isConfigured())) {
       SocialOSUI.renderQueue({ configured: false, drafts: [], error: null, direct: {} });
       return;
@@ -1086,13 +1205,14 @@ const SocialOS = (() => {
     };
     state.queue.direct = direct;
     const week = await weeklyPostCounts();
+    const reconnect = await reconnectNeededPlatforms();
     try {
       const drafts = await SocialOSQueue.fetchQueue();
       state.queue.drafts = drafts;
-      SocialOSUI.renderQueue({ configured: true, drafts, error: null, direct, media: state.queue.media, week });
+      SocialOSUI.renderQueue({ configured: true, drafts, error: null, direct, media: state.queue.media, week, reconnect });
       loadQueueThumbnails(drafts); // fire-and-forget
     } catch (err) {
-      SocialOSUI.renderQueue({ configured: true, drafts: [], error: queueErrMsg(err), direct, media: state.queue.media, week });
+      SocialOSUI.renderQueue({ configured: true, drafts: [], error: queueErrMsg(err), direct, media: state.queue.media, week, reconnect });
     }
     SocialOSUI.loading(false);
   }
@@ -1172,7 +1292,7 @@ const SocialOS = (() => {
     const label = SocialOSUI.PLATFORM_LABELS[channel] || draft.channel;
     // Copy the approved reply + open the exact thread (single gesture). The
     // approved text is handed over VERBATIM — no AI re-draft (gotcha 6).
-    await assistedHandoff({ text: draft.body || '', deepLink: SocialOSQueue.assistedLink(draft), label, preopened, channel, title: draft.title, source: 'queue', postId: null });
+    await assistedHandoff({ text: draft.body || '', deepLink: SocialOSQueue.assistedLink(draft), label, preopened, channel, title: draft.title, source: 'queue', postId: null, draftId: id });
     await renderQueue();
   }
 
@@ -1243,6 +1363,7 @@ const SocialOS = (() => {
         source: 'queue',
         scheduledTime: SocialOSUtils.now(),
         mediaContentId: media.mediaContentId,
+        queueDraftId: id,
         ...redditExtra
       });
     } catch (err) {
@@ -1262,6 +1383,21 @@ const SocialOS = (() => {
         if (result.mode === 'published') {
           releaseWindow();
           SocialOSUI.toast(`Approved & posted to ${channel} ✓`, 'success', 5000);
+          // Queue write-back (CLAUDE.md gotcha 10): the platform's own
+          // receipt (result.url) is the evidence — never stamped on failure.
+          if (result.url) {
+            try {
+              const res = await SocialOSQueue.reportPublished(id, { mode: 'direct', platformPostId: result.url });
+              if (res.ok || res.already) {
+                const fresh = await SocialOSDB.get(SocialOSDB.STORES.posts, post.id);
+                if (fresh) {
+                  fresh.queue_writeback_at = SocialOSUtils.now();
+                  fresh.queue_writeback_mode = 'direct';
+                  await SocialOSDB.put(SocialOSDB.STORES.posts, fresh);
+                }
+              }
+            } catch { /* best-effort — never affects the toast/UI above */ }
+          }
           await renderQueue();
           await updateBadge();
           return;
@@ -1280,7 +1416,11 @@ const SocialOS = (() => {
           c.posts = [post];
           c.results = [result];
           const label = SocialOSUI.PLATFORM_LABELS[channel] || channel;
-          await assistedHandoff({ text: result.text, deepLink: result.deepLink, mediaDataUri: result.mediaDataUri, label, preopened, channel, title: draft.title, source: 'queue', postId: post.id });
+          // No write-back yet here — an assisted publish only becomes
+          // reportable once a human confirms it landed (the handoff's
+          // confirm nudge, or flushQueueWriteBacks reading a confirmed
+          // Handoff later). See CLAUDE.md gotcha 10.
+          await assistedHandoff({ text: result.text, deepLink: result.deepLink, mediaDataUri: result.mediaDataUri, label, preopened, channel, title: draft.title, source: 'queue', postId: post.id, draftId: id });
           await navigate('compose');
           return;
         }
@@ -1339,6 +1479,7 @@ const SocialOS = (() => {
         source: 'queue',
         scheduledTime: new Date(when).toISOString(),
         mediaContentId: media.mediaContentId,
+        queueDraftId: id,
         ...redditExtra
       });
 
@@ -1403,11 +1544,26 @@ const SocialOS = (() => {
         if (result.mode === 'published') {
           releaseWindow();
           SocialOSUI.toast(`Posted to ${result.platform} ✓`, 'success', 5000);
+          // Queue write-back (CLAUDE.md gotcha 10): only when this post came
+          // from the Front Office queue AND the platform gave a real receipt.
+          if (post.queue_draft_id && result.url) {
+            try {
+              const res = await SocialOSQueue.reportPublished(post.queue_draft_id, { mode: 'direct', platformPostId: result.url });
+              if (res.ok || res.already) {
+                const fresh = await SocialOSDB.get(SocialOSDB.STORES.posts, postId);
+                if (fresh) {
+                  fresh.queue_writeback_at = SocialOSUtils.now();
+                  fresh.queue_writeback_mode = 'direct';
+                  await SocialOSDB.put(SocialOSDB.STORES.posts, fresh);
+                }
+              }
+            } catch { /* best-effort */ }
+          }
         } else if (result.mode === 'assisted') {
           // C2: route through the shared handoff so a scheduled/due post's
           // image (result.mediaDataUri) rides along instead of being dropped.
           const label = SocialOSUI.PLATFORM_LABELS[result.platform] || result.platform;
-          await assistedHandoff({ text: result.text, deepLink: result.deepLink, mediaDataUri: result.mediaDataUri, label, preopened, channel: result.platform, title: SocialOSUtils.truncate((result.text || '').replace(/\s+/g, ' '), 60), source: 'scheduled', postId });
+          await assistedHandoff({ text: result.text, deepLink: result.deepLink, mediaDataUri: result.mediaDataUri, label, preopened, channel: result.platform, title: SocialOSUtils.truncate((result.text || '').replace(/\s+/g, ' '), 60), source: 'scheduled', postId, draftId: post.queue_draft_id || null });
         } else {
           releaseWindow();
           SocialOSUI.toast(`Posting failed — ${result.error || 'unknown error'}. Tap POST NOW to retry.`, 'error', 8000);
@@ -1456,6 +1612,41 @@ const SocialOS = (() => {
     const account = await SocialOSAuth.accountStatus();
     const pushStatus = await SocialOSPush.status();
     SocialOSUI.renderSettings(settings, profile, googleConnected, linkedinStatus, redditStatus, tiktokStatus, account, pushStatus);
+    refreshPushLiveness().catch(() => {}); // fire-and-forget, patches in place
+  }
+
+  /**
+   * Background dispatcher-liveness check for Settings — patches
+   * #set-push-liveness in place (never a re-render, matching the existing
+   * "patch in place, don't steal focus" discipline elsewhere in this file).
+   * Never says "down", only "may have stopped" (contract RECEIPTS).
+   */
+  async function refreshPushLiveness() {
+    const el = document.getElementById('set-push-liveness');
+    if (!el) return;
+    const info = await SocialOSPush.serverInfo();
+    let text;
+    if (info === null) {
+      text = 'Background service: couldn\'t check (offline, or the secret isn\'t saved).';
+    } else if (info.lastDispatchAt === undefined) {
+      text = 'Background service: this dispatcher build doesn\'t report liveness yet.';
+    } else if (info.lastDispatchAt === null) {
+      text = 'Background service: hasn\'t reported a run yet.';
+    } else {
+      const minsAgo = Math.max(0, Math.round((Date.now() - new Date(info.lastDispatchAt).getTime()) / 60000));
+      if (minsAgo < 20) {
+        text = `Background service last ran ${minsAgo} min ago ✓`;
+      } else if (minsAgo < 60) {
+        text = `Background service last ran ${minsAgo} min ago.`;
+      } else {
+        const hrsAgo = Math.round(minsAgo / 60);
+        text = `⚠️ Background service last ran ${hrsAgo}h ago — the 5-minute cron may have stopped. Check the pg_cron job.`;
+      }
+    }
+    // Re-check the element still exists — a background async check can
+    // resolve after the user has navigated away from Settings.
+    const live = document.getElementById('set-push-liveness');
+    if (live) live.textContent = text;
   }
 
   async function updateBadge() {
@@ -2082,16 +2273,26 @@ const SocialOS = (() => {
 
     const settings = await SocialOSDB.getSettings();
     let remaining = due;
+    let reconnectPlatforms = new Set();
 
     if (settings?.auto_post_scheduled) {
+      const linkedinStatus = await SocialOSLinkedIn.getConnectionStatus();
+      const redditStatus = await SocialOSReddit.getConnectionStatus();
       const direct = {
-        linkedin: await SocialOSLinkedIn.isConnected(),
-        reddit: await SocialOSReddit.isConnected()
+        linkedin: linkedinStatus.connected,
+        reddit: redditStatus.connected
       };
+      const needsReconnect = { linkedin: linkedinStatus.needsReconnect, reddit: redditStatus.needsReconnect };
       let posted = 0;
       remaining = [];
       for (const p of due) {
         if (direct[p.platform]) {
+          // M3 (CLAUDE.md gotcha 9, layer 2 of 3): never auto-publish a post
+          // more than APP_OPEN_STALE_AUTOPOST_MS past its scheduled time — an
+          // unreadable scheduled_time counts as stale (refuse), not fresh.
+          const sched = p.scheduled_time ? new Date(p.scheduled_time).getTime() : NaN;
+          const tooStale = !Number.isFinite(sched) || Date.now() - sched > APP_OPEN_STALE_AUTOPOST_MS;
+
           // v4 hard rule 2: a flagged / unscreened image must never zero-tap —
           // it needs the visible confirm, which can't run in a silent auto-post.
           // Mirror sw.js swAutoPostDue; fall to the manual POST NOW list (the
@@ -2102,12 +2303,34 @@ const SocialOS = (() => {
             const flags = (media && media.sensitivity_flags) || [];
             needsConfirm = flags.includes('faces_visible') || flags.includes('screening_unavailable');
           }
-          if (!needsConfirm) {
+          if (!tooStale && !needsConfirm) {
             try {
               const r = await SocialOSComposer.publishOne(p.id);
-              if (r.mode === 'published') { posted++; continue; }
+              if (r.mode === 'published') {
+                posted++;
+                // Queue write-back (CLAUDE.md gotcha 10): only with a real
+                // platform receipt AND only for a queue-originated post.
+                if (p.queue_draft_id && r.url) {
+                  try {
+                    const res = await SocialOSQueue.reportPublished(p.queue_draft_id, { mode: 'direct', platformPostId: r.url });
+                    if (res.ok || res.already) {
+                      const fresh = await SocialOSDB.get(SocialOSDB.STORES.posts, p.id);
+                      if (fresh) {
+                        fresh.queue_writeback_at = SocialOSUtils.now();
+                        fresh.queue_writeback_mode = 'direct';
+                        await SocialOSDB.put(SocialOSDB.STORES.posts, fresh);
+                      }
+                    }
+                  } catch { /* best-effort */ }
+                }
+                continue;
+              }
             } catch { /* fall through to the manual list */ }
           }
+        } else if (needsReconnect[p.platform]) {
+          // (h) The app is already open — signal via toast, not a push (the
+          // push nudge, sw.js swBookReconnectNudge, is the app-closed path).
+          reconnectPlatforms.add(p.platform);
         }
         remaining.push(p);
       }
@@ -2115,6 +2338,11 @@ const SocialOS = (() => {
         SocialOSUI.toast(`${posted} scheduled post${posted > 1 ? 's' : ''} auto-posted ✓`, 'success', 6000);
         await updateBadge();
       }
+    }
+
+    if (reconnectPlatforms.size) {
+      const labels = [...reconnectPlatforms].map(p => SocialOSUI.PLATFORM_LABELS[p] || p).join(', ');
+      SocialOSUI.toast(`Your ${labels} sign-in expired — reconnect in Settings to keep auto-posting.`, 'warning', 8000);
     }
 
     if (remaining.length) {
@@ -2205,6 +2433,13 @@ const SocialOS = (() => {
         await navigate('compose');
         return true;
 
+      // The reconnect nudge (sw.js swBookReconnectNudge) routes here — the
+      // token-decay push tap lands on Settings, where the LinkedIn/Reddit
+      // card shows the Reconnect button.
+      case 'settings':
+        await navigate('settings');
+        return true;
+
       default:
         return false;
     }
@@ -2221,7 +2456,7 @@ const SocialOS = (() => {
     const h = (location.hash || '').replace(/^#\/?/, '');
     if (!h) return null;
     const cmd = h.split('/')[0];
-    if (!['queue', 'queue-post', 'queue-edit', 'due', 'approvals', 'handoff', 'compose'].includes(cmd)) return null;
+    if (!['queue', 'queue-post', 'queue-edit', 'due', 'approvals', 'handoff', 'compose', 'settings'].includes(cmd)) return null;
     history.replaceState(null, '', location.pathname + location.search);
     return h;
   }
@@ -4253,6 +4488,7 @@ const SocialOS = (() => {
     checkDuePosts().catch(() => {});
     checkDueHandoffs().catch(() => {});
     SocialOSPush.syncSubscription().catch(() => {});
+    flushQueueWriteBacks().catch(() => {});
 
     if (profile?.onboarding_complete) {
       // A notification tap may have cold-opened the app with a route in

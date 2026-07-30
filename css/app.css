@@ -2488,6 +2488,22 @@ body.nav-visible .version-badge {
 .cmp-hint b { color: var(--text-secondary); font-weight: 600; }
 .cmp-warn { color: var(--warning); }
 
+/* Token-decay visibility (2026-07-30 ecosystem wave): a block warning notice
+ * with an inline reconnect button — composer + Queue reconnect banners.
+ * A NEW class, deliberately not .cmp-warn (that one is an existing
+ * colour-only utility used inline elsewhere; repurposing it would silently
+ * restyle those spots). */
+.cmp-reconnect {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 8px;
+  font-size: 0.82rem; color: var(--warning);
+  background: rgba(251, 191, 36, 0.1);
+  border: 1px solid rgba(251, 191, 36, 0.3);
+  border-radius: var(--radius-md);
+  padding: 10px 12px;
+  margin: 0 0 var(--space-md);
+}
+.cmp-reconnect b { font-weight: 600; }
+
 .cmp-onetap {
   display: flex; align-items: center; gap: 10px;
   font-size: 0.85rem; color: var(--text-secondary);

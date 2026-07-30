@@ -73,6 +73,9 @@
  * @property {string[]} edit_history
  * @property {string|null} platform_post_id
  * @property {{likes: number, comments: number, shares: number, last_checked: string}} engagement_stats
+ * @property {string|null} [queue_draft_id] - mkt_drafts.id this post came from (Front Office queue), so publishing can report the landing back. Absent on composer-authored posts.
+ * @property {string|null} [queue_writeback_at] - when the broker CONFIRMED status='published' for queue_draft_id (2xx or already:true ONLY — never stamped on a failure, or flushQueueWriteBacks would never retry). Null/absent = not yet reported.
+ * @property {'direct'|'assisted'} [queue_writeback_mode]
  */
 
 /**
@@ -88,6 +91,7 @@
  * @property {string} created_at
  * @property {string|null} confirmed_at - when the user confirmed it posted (or it auto-reconciled from a published linked post)
  * @property {string} check_at - created_at + a few minutes; when the confirm nudge is due
+ * @property {string|null} [draft_id] - mkt_drafts.id when this handoff came from a Front Office draft. The human "I've posted it" confirm is the ONLY thing that authorises an assisted write-back (gotcha 6).
  *
  * @typedef {Object} PostDraft
  * @property {string} text
@@ -782,6 +786,29 @@ const SocialOSDB = (() => {
     return moved;
   }
 
+  // ── Service-worker scratch state ────────────────────────────────────────
+
+  /**
+   * Service-worker-owned scratch state (reconnect-nudge throttle, etc.). A
+   * SIBLING record in the settings store ({id:'sw_state'}), deliberately NOT
+   * a field on the settings object: the SW would otherwise read-modify-write
+   * the whole record and could clobber a concurrent page edit. Never synced —
+   * js/sync.js only ever touches the 'settings' record's SYNCED_SETTINGS_KEYS.
+   * @returns {Promise<{id: 'sw_state', [k: string]: any}>}
+   */
+  async function getSwState() {
+    return (await get(STORES.settings, 'sw_state')) || { id: 'sw_state' };
+  }
+
+  /**
+   * @param {Object<string, any>} patch
+   * @returns {Promise<void>}
+   */
+  async function saveSwState(patch) {
+    const s = await getSwState();
+    return put(STORES.settings, { ...s, ...patch, id: 'sw_state' });
+  }
+
   // ── Public API ────────────────────────────────────────────────────────
 
   return {
@@ -821,6 +848,8 @@ const SocialOSDB = (() => {
     getAuthSession,
     saveAuthSession,
     clearAuthSession,
+    getSwState,
+    saveSwState,
     resetAll,
     moveToArchive,
     archiveStaleRecords

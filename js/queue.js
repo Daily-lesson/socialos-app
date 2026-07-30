@@ -76,7 +76,7 @@ const SocialOSQueue = (() => {
 
   /**
    * One POST to the edge function.
-   * @param {{action: string, id?: string, body?: string, notes?: string}} payload
+   * @param {{action: string, id?: string, body?: string, notes?: string, [k: string]: any}} payload
    * @returns {Promise<any>}
    */
   async function call(payload) {
@@ -214,6 +214,57 @@ const SocialOSQueue = (() => {
     };
   }
 
+  /**
+   * Report to the broker that an approved draft actually LANDED.
+   *
+   * Honest by construction (CLAUDE.md gotcha 6/10): a 'direct' report needs
+   * the platform's own receipt; an 'assisted' report needs an explicit human
+   * confirmation, and the server refuses anything else (400). The server
+   * cannot DISPROVE a confirmed:true, which is why callers in js/app.js
+   * derive mode from EVIDENCE (a platform_post_id, or a Handoff with status
+   * 'posted' and a confirmed_at) and never from the absence of one.
+   *
+   * Never throws — publishing must never fail because bookkeeping did.
+   *
+   * @param {string} draftId
+   * @param {{mode: 'direct'|'assisted', platformPostId?: string|null, publishedUrl?: string|null, confirmed?: boolean}} outcome
+   * @returns {Promise<{ok: boolean, already?: boolean, unsupported?: boolean}>}
+   *   ok:true          → the broker confirmed it (2xx). ONLY then may a caller
+   *                      stamp queue_writeback_at.
+   *   already:true     → the row was already 'published' (idempotent retry);
+   *                      treat exactly like ok:true.
+   *   unsupported:true → the DEPLOYED broker predates report-published. Callers
+   *                      must stop retrying this session (the client must not
+   *                      hard-depend on an un-deployed action).
+   */
+  async function reportPublished(draftId, outcome) {
+    if (!draftId) return { ok: false };
+    if (!(await isConfigured())) return { ok: false };
+
+    // Refuse to send a malformed report rather than let the server 400 —
+    // never stamp anything on this path, so a later retry (with real
+    // evidence) still has a chance.
+    if (outcome.mode === 'direct' && !outcome.platformPostId) return { ok: false };
+    if (outcome.mode === 'assisted' && outcome.confirmed !== true) return { ok: false };
+
+    /** @type {{action: string, id: string, mode: string, platform_post_id?: string, published_url?: string, confirmed?: boolean}} */
+    const payload = { action: 'report-published', id: draftId, mode: outcome.mode };
+    if (outcome.mode === 'direct') payload.platform_post_id = /** @type {string} */ (outcome.platformPostId);
+    if (outcome.publishedUrl) payload.published_url = outcome.publishedUrl;
+    // Send confirmed ONLY when the caller passed it — never synthesise a
+    // human confirmation here.
+    if (outcome.confirmed === true) payload.confirmed = true;
+
+    try {
+      const data = await call(payload);
+      return { ok: true, already: !!data?.already };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (/unknown action/i.test(msg)) return { ok: false, unsupported: true };
+      return { ok: false };
+    }
+  }
+
   return {
     COMPOSER_CHANNELS,
     isConfigured,
@@ -224,6 +275,7 @@ const SocialOSQueue = (() => {
     isComposerChannel,
     redditMeta,
     assistedLink,
-    composerHandoff
+    composerHandoff,
+    reportPublished
   };
 })();

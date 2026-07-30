@@ -265,6 +265,31 @@ const SocialOSPush = (() => {
     }
   }
 
+  /**
+   * Dispatcher liveness for Settings. Three-state on purpose — never infer
+   * "the service is down" from a shape we can't read (contract RECEIPTS):
+   *   null                          → couldn't ask (offline / secret not saved)
+   *   {lastDispatchAt: undefined}   → the DEPLOYED mkt-queue can't report it yet
+   *   {lastDispatchAt: null}        → it can, and the cron has never run
+   *   {lastDispatchAt: '<iso>'}     → it ran then
+   * @returns {Promise<{lastDispatchAt: string|null|undefined, lastDigestAt: string|null|undefined}|null>}
+   */
+  async function serverInfo() {
+    try {
+      const info = await call({ action: 'push-info' });
+      if (!info || typeof info !== 'object') return null;
+      // Presence, not truthiness — 'last_dispatch_at' in info distinguishes
+      // "this deployment doesn't report it" (absent) from "it does, and the
+      // cron has never run" (present but null).
+      return {
+        lastDispatchAt: 'last_dispatch_at' in info ? info.last_dispatch_at : undefined,
+        lastDigestAt: 'last_digest_at' in info ? info.last_digest_at : undefined
+      };
+    } catch {
+      return null;
+    }
+  }
+
   return {
     isSupported,
     status,
@@ -272,6 +297,7 @@ const SocialOSPush = (() => {
     disable,
     syncSubscription,
     scheduleReminder,
-    sendTest
+    sendTest,
+    serverInfo
   };
 })();

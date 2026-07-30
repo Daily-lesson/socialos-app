@@ -140,7 +140,14 @@ const SocialOSComposer = (() => {
    * reviewed is published verbatim (the platform publishers still run the
    * scrubber as defense in depth).
    *
-   * @param {{platform: string, text: string, title?: string, redditTitle?: string, subreddit?: string, scheduledTime?: string, source?: string, mediaContentId?: string|null}} input
+   * `queueDraftId` (when the post originated in the Front Office queue) is
+   * stored as-is on the post so a later publish can report the landing back
+   * to `mkt-queue`'s `report-published` action — that write-back is js/app.js's
+   * job, not this module's; composer.js stays a pure engine. The proof of
+   * landing is `publishOne`'s own return value: it resolves `mode:'published'`
+   * (never `'direct'`) with `url` set to the platform's own post id.
+   *
+   * @param {{platform: string, text: string, title?: string, redditTitle?: string, subreddit?: string, scheduledTime?: string, source?: string, mediaContentId?: string|null, queueDraftId?: string|null}} input
    * @returns {Promise<ScheduledPost>}
    */
   async function createReadyPost(input) {
@@ -190,6 +197,7 @@ const SocialOSComposer = (() => {
       id: SocialOSUtils.uuid(),
       content_id: item.id,
       media_content_id: input.mediaContentId || null,
+      queue_draft_id: input.queueDraftId || null,
       platform: /** @type {any} */ (platform),
       status: 'approved',
       scheduled_time: input.scheduledTime || '',
