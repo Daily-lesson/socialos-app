@@ -90,29 +90,54 @@ const SocialOSAI = (() => {
   // ── System prompt builder ─────────────────────────────────────────────
 
   /**
-   * Build the base system prompt per Section 11.
+   * Build the base system prompt per Section 11. Personal installs
+   * (default) get zero behaviour change. Brand installs (persona/brand-
+   * account) get a "Brand account:" block sourced from the same profile
+   * fields — never a separate name/tagline/topics input, see js/db.js's
+   * Persona typedef — and the first-person-life rule swapped for an
+   * editorial-voice rule plus a disclosure boundary.
    * @param {string} platform
    * @returns {Promise<string>}
    */
   async function buildSystemPrompt(platform) {
     const profile = await SocialOSDB.getProfile();
     if (!profile) throw new Error('Profile not found');
+    const persona = await SocialOSDB.getPersona();
 
-    return `You are the AI engine for SocialOS, a personal social media manager.
-
-User profile:
+    const identityBlock = persona.kind === 'brand'
+      ? `Brand account:
+- Masthead: ${profile.name}
+- About: ${profile.title}
+- Topics: ${profile.topics.join(', ')}
+- Tone preference: ${profile.tone[platform] || 'professional'}
+- Target audience on ${platform}: ${profile.target_audience[platform] || 'professionals'}`
+      : `User profile:
 - Name: ${profile.name}
 - Title: ${profile.title}
 - Expertise: ${profile.topics.join(', ')}
 - Tone preference: ${profile.tone[platform] || 'professional'}
-- Target audience on ${platform}: ${profile.target_audience[platform] || 'professionals'}
+- Target audience on ${platform}: ${profile.target_audience[platform] || 'professionals'}`;
+
+    const voiceRule = persona.kind === 'brand'
+      ? 'Write as the brand\'s editorial voice. Never claim personal experiences, a job history, or first-person life events — this account is not a person.'
+      : 'Always write in first person as the user.';
+
+    const disclosureRule = persona.kind === 'brand'
+      ? (persona.disclosure
+        ? `Never imply the account is a human individual. If the account's relationship to its operator comes up, use exactly this disclosure line and nothing more: ${persona.disclosure}`
+        : 'Never imply the account is a human individual. If the account\'s relationship to its operator comes up, the account does not discuss its operator.')
+      : '';
+
+    return `You are the AI engine for SocialOS, a personal social media manager.
+
+${identityBlock}
 
 Rules you must follow:
 1. Never include: client names, employer name, facility locations, financial figures, proprietary information, or any information marked as off-limits.
-2. Always write in first person as the user.
+2. ${voiceRule}
 3. Content must sound authentic, not like AI-generated corporate speak.
 4. Platform-specific rules must be followed exactly.
-5. Always return exactly what is requested — no preamble, no explanation.`;
+5. Always return exactly what is requested — no preamble, no explanation.${disclosureRule ? `\n6. ${disclosureRule}` : ''}`;
   }
 
   // ── Post draft generation ─────────────────────────────────────────────
@@ -448,7 +473,17 @@ Return JSON only — no explanation:
   async function analysePhoto(imageDataUri, mimeType, filename) {
     const base64Data = imageDataUri.slice(imageDataUri.indexOf(',') + 1);
 
-    const prompt = `Analyse this photo for a robotics/autonomous systems professional's social media.
+    // De-hardcoded (persona/brand-account): derive the domain wording from
+    // the profile's own topics rather than assuming robotics/autonomous
+    // systems, with the original string as the fallback when topics is
+    // empty. Only this site — see the file-level note at the other
+    // robotics-hardcoded prompts for why they're untouched.
+    const profile = await SocialOSDB.getProfile();
+    const domainWording = profile?.topics?.length
+      ? `a ${profile.topics.join('/')} professional's`
+      : 'a robotics/autonomous systems professional\'s';
+
+    const prompt = `Analyse this photo for ${domainWording} social media.
 
 Filename: ${filename}
 

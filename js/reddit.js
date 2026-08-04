@@ -192,6 +192,11 @@ const SocialOSReddit = (() => {
       }
 
       rd.connected = !!rd.access_token;
+      // Ownership stamp (persona/brand-account): see js/linkedin.js's
+      // matching comment — this, not the persona declaration itself, is the
+      // publish-time enforcement (composer.js publishOne).
+      const persona = await SocialOSDB.getPersona();
+      rd.linked_under = persona.kind;
       await SocialOSDB.saveSettings(settings);
 
       window.history.replaceState({}, document.title, REDIRECT_URI);
@@ -480,6 +485,35 @@ const SocialOSReddit = (() => {
     return post;
   }
 
+  // ── Growth (follower snapshots, js/growth.js) ──────────────────────────
+
+  /**
+   * Read the PUBLIC profile-subreddit subscriber count for a Reddit handle —
+   * NOT a platform-wide "followers" concept; Reddit's own follower system is
+   * a different, non-public number. This reuses relayFetch/REDDIT_USER_AGENT
+   * (both private to this module) rather than living in js/growth.js, which
+   * is why it's exported from here instead. Never returns 0 as a substitute
+   * for "couldn't read" — 0 is only ever a genuine subscriber count.
+   * @param {string} handle
+   * @returns {Promise<{handle: string, subscribers: number}|null>}
+   */
+  async function getPublicProfileStats(handle) {
+    if (!handle) return null;
+    try {
+      const response = await relayFetch(`https://www.reddit.com/user/${encodeURIComponent(handle)}/about.json`, {
+        method: 'GET',
+        headers: { 'User-Agent': REDDIT_USER_AGENT }
+      });
+      if (!response.ok) return null;
+      const data = await response.json().catch(() => null);
+      const subscribers = data?.data?.subreddit?.subscribers;
+      if (!Number.isInteger(subscribers)) return null;
+      return { handle, subscribers };
+    } catch {
+      return null;
+    }
+  }
+
   // ── Public API ────────────────────────────────────────────────────────
 
   return {
@@ -491,6 +525,7 @@ const SocialOSReddit = (() => {
     getConnectionStatus,
     disconnect,
     stripHashtags,
-    redditPublish
+    redditPublish,
+    getPublicProfileStats
   };
 })();

@@ -882,6 +882,8 @@ const SocialOSUI = (() => {
         </div>
 
         <div class="dash-col-side">
+          ${renderGrowthCard(data.growth || {})}
+
           <div class="card quick-actions">
             <h3>Quick Actions</h3>
             <div class="action-grid">
@@ -921,6 +923,51 @@ const SocialOSUI = (() => {
     if (h < 12) return 'Good morning';
     if (h < 18) return 'Good afternoon';
     return 'Good evening';
+  }
+
+  /**
+   * Dashboard Growth card (honest follower-growth snapshots, js/growth.js).
+   * Never renders a fabricated "+0" — a null delta says "not enough
+   * history yet", and every count carries its 'public'/'manual' source and
+   * the platform's real capabilityNote so a manual-only platform doesn't
+   * look like it's being auto-tracked.
+   * @param {Object<string, {latest: {followers:number, source:string, captured_at:string}|null, delta: {change:number, actualDays:number, source:string}|null, note: string}>} growth
+   * @returns {string}
+   */
+  function renderGrowthCard(growth) {
+    const platforms = Object.keys(growth);
+    return `
+      <div class="card growth-card">
+        <div class="card-header">
+          <span>Growth</span>
+          <button class="btn btn-secondary btn-sm" data-action="growth-refresh">Refresh</button>
+        </div>
+        ${platforms.length ? platforms.map(platform => {
+          const g = growth[platform];
+          return `
+            <div class="growth-row">
+              <div class="growth-row-header">
+                <span class="platform-badge" style="background:${PLATFORM_COLORS[platform]}">${PLATFORM_ICONS[platform]}</span>
+                <span>${PLATFORM_LABELS[platform] || platform}</span>
+              </div>
+              ${g.latest ? `
+                <div class="growth-row-body">
+                  <span class="growth-count">${g.latest.followers.toLocaleString()} followers</span>
+                  <span class="text-secondary">(${g.latest.source})</span>
+                </div>
+                <div class="text-secondary">
+                  ${g.delta ? `${g.delta.change >= 0 ? '+' : ''}${g.delta.change} over ${g.delta.actualDays} day${g.delta.actualDays === 1 ? '' : 's'}` : 'Not enough history yet'}
+                </div>
+              ` : `<p class="text-secondary" style="margin:4px 0">No snapshot yet.</p>`}
+              <p class="text-secondary" style="margin:4px 0 8px;font-size:0.85em">${escapeHtml(g.note || '')}</p>
+              <button class="btn btn-secondary btn-sm" data-action="growth-manual" data-platform="${platform}">Enter count</button>
+            </div>
+          `;
+        }).join('') : `
+          <p class="text-secondary">Link an account in onboarding to see follower growth here.</p>
+        `}
+      </div>
+    `;
   }
 
   // ── Approvals screen ──────────────────────────────────────────────────
@@ -1769,6 +1816,10 @@ const SocialOSUI = (() => {
     const rdStatus = redditStatus || { connected: false, needsReconnect: false, handle: null };
     const tkStatus = tiktokStatus || { connected: false, needsReconnect: false, handle: null };
     const acct = account || { signedIn: false, email: null, lastSyncAt: null };
+    // getOrCreateSettings doesn't back-fill new keys into an existing record
+    // (js/db.js getPersona's own fallback) — mirror that here rather than
+    // assume settings.persona exists.
+    const persona = settings.persona?.kind ? settings.persona : SocialOSDB.DEFAULT_PERSONA;
 
     container.innerHTML = `
       <h2 class="screen-title">Settings</h2>
@@ -1952,6 +2003,32 @@ const SocialOSUI = (() => {
       </div>
 
       <div class="settings-section">
+        <h3>Identity <span class="text-secondary" style="font-weight:400">(who this install publishes as)</span></h3>
+        <div class="form-group">
+          <label for="set-persona-kind">This install is</label>
+          <select id="set-persona-kind" class="input">
+            <option value="personal" ${persona.kind !== 'brand' ? 'selected' : ''}>Personal (default)</option>
+            <option value="brand" ${persona.kind === 'brand' ? 'selected' : ''}>Brand</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label for="set-persona-disclosure">Disclosure line <span class="text-secondary">(brand only — the one exact line the account may say about who runs it)</span></label>
+          <input type="text" id="set-persona-disclosure" class="input" value="${escapeHtml(persona.disclosure || '')}" placeholder="e.g. This account is run by ___ on behalf of ___.">
+        </div>
+        <div class="form-group">
+          <label for="set-persona-queue-agents">Queue agents to review <span class="text-secondary">(brand only — comma-separated mkt_drafts.agent values, e.g. brand-engine)</span></label>
+          <input type="text" id="set-persona-queue-agents" class="input" value="${escapeHtml((persona.queue_agents || []).join(', '))}">
+        </div>
+        <p class="text-secondary" style="margin:8px 0">
+          This install publishes as one identity. Platform sign-ins are
+          shared by everything on this device — to run a second account, use
+          a separate browser profile or device. A second install of this PWA
+          on the same browser is the same identity.
+        </p>
+        <button class="btn btn-primary btn-sm" data-action="persona-save">Save Identity</button>
+      </div>
+
+      <div class="settings-section">
         <h3>Front Office Queue <span class="text-secondary" style="font-weight:400">(agent drafts)</span></h3>
         <div class="connection-status ${settings.front_office_secret ? 'connected' : 'disconnected'}">
           ${settings.front_office_secret ? 'Connected' : 'Not connected'}
@@ -2129,7 +2206,7 @@ const SocialOSUI = (() => {
 
   /**
    * Render the Front Office approval queue screen.
-   * @param {{configured: boolean, drafts: import('./queue.js').MktDraft[], error: string|null, direct?: Object<string, boolean>, media?: Object<string,{dataUri:string,alt:string}>, week?: {direct:number, assisted:number}, reconnect?: string[]}} data
+   * @param {{configured: boolean, drafts: import('./queue.js').MktDraft[], error: string|null, direct?: Object<string, boolean>, media?: Object<string,{dataUri:string,alt:string}>, week?: {direct:number, assisted:number}, reconnect?: string[], hiddenCount?: number, persona?: {kind:'personal'|'brand', queue_agents?:string[]}}} data
    */
   function renderQueue(data) {
     const container = $('queue-content');
@@ -2146,6 +2223,17 @@ const SocialOSUI = (() => {
         <button type="button" class="btn btn-secondary btn-sm" data-action="go-settings">Reconnect</button>
       </div>` : '';
 
+    // Identity line (persona/brand-account) — SocialOSQueue.personaFilter is
+    // a VIEW filter, never a silent one: say what's showing, and if any
+    // drafts are hidden, say how many rather than let them vanish quietly.
+    const persona = data.persona;
+    const identityLine = persona?.kind === 'brand'
+      ? `<p class="text-secondary" style="margin:0 0 8px">Reviewing as the brand identity — drafts from ${escapeHtml((persona.queue_agents || []).join(', ') || 'any agent (no queue_agents set)')}.</p>`
+      : '';
+    const hiddenLine = (data.hiddenCount || 0) > 0
+      ? `<p class="text-secondary" style="margin:0 0 8px">(${data.hiddenCount} draft${data.hiddenCount === 1 ? '' : 's'} for the other identity hidden)</p>`
+      : '';
+
     let html = `
       <div class="screen-title-row" style="display:flex;align-items:center;gap:12px">
         <h2 class="screen-title" style="margin:0">Front Office Queue</h2>
@@ -2155,6 +2243,8 @@ const SocialOSUI = (() => {
         Drafts your agents queued for review. One tap approves and posts as
         far as each platform allows — nothing is published without you.
       </p>
+      ${identityLine}
+      ${hiddenLine}
       ${data.week ? `<p class="text-secondary" style="margin:0 0 12px;font-weight:500">This week: ${data.week.direct} posted direct, ${data.week.assisted} assisted.</p>` : ''}
       ${reconnectBanner}`;
 

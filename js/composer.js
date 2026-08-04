@@ -223,6 +223,32 @@ const SocialOSComposer = (() => {
   }
 
   /**
+   * THE publish-time identity guard (persona/brand-account) — the single
+   * choke point that covers the composer, the Queue one-tap paths, and
+   * publishDuePost, since all three funnel through publishOne. A platform
+   * connection is stamped `linked_under` at connect time (js/linkedin.js,
+   * js/reddit.js, js/tiktok.js); if that stamp doesn't match this install's
+   * CURRENT persona, brand content can never reach the owner's personal
+   * account (or vice versa) even if the persona was flipped after
+   * connecting. Absent stamp (legacy connections) reads as 'personal'.
+   * Throws — callers already run this inside publishOne's try/catch, which
+   * reports it as an honest failed publish rather than a silent skip.
+   * @param {string} platform
+   * @param {{kind: 'personal'|'brand'}} persona
+   * @returns {Promise<void>}
+   */
+  async function assertPersonaMatch(platform, persona) {
+    const settings = await SocialOSDB.getSettings();
+    const connection = settings?.platform_connections?.[platform];
+    const linkedUnder = connection?.linked_under || 'personal';
+    if (linkedUnder !== persona.kind) {
+      throw new Error(
+        `This ${platform} account was connected under the ${linkedUnder} identity, but this install is now ${persona.kind} — refusing to publish. Reconnect the platform under this identity or switch persona.`
+      );
+    }
+  }
+
+  /**
    * Publish one already-drafted post as far as the platform allows.
    * Direct platforms (connected LinkedIn/Reddit) post immediately. Everything
    * else returns mode:'assisted' with the text + deep link for a copy-and-open
@@ -249,6 +275,8 @@ const SocialOSComposer = (() => {
 
     try {
       if (post.platform === 'linkedin' && await SocialOSLinkedIn.isConnected()) {
+        const persona = await SocialOSDB.getPersona();
+        await assertPersonaMatch('linkedin', persona);
         const published = await SocialOSLinkedIn.linkedinPublish(post);
         await markContentPosted(post);
         await markPostPublished(post, published.platform_post_id);
@@ -259,6 +287,8 @@ const SocialOSComposer = (() => {
       // honestly as assisted (UX matrix §3) — fall through to the assisted
       // return below instead of calling redditPublish at all.
       if (post.platform === 'reddit' && !mediaDataUri && await SocialOSReddit.isConnected()) {
+        const persona = await SocialOSDB.getPersona();
+        await assertPersonaMatch('reddit', persona);
         const published = await SocialOSReddit.redditPublish(post);
         await markContentPosted(post);
         await markPostPublished(post, published.platform_post_id);

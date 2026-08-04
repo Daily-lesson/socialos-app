@@ -202,6 +202,10 @@ const SocialOSTikTok = (() => {
       }
 
       tk.connected = !!tk.access_token;
+      // Ownership stamp (persona/brand-account): see js/linkedin.js's
+      // matching comment.
+      const persona = await SocialOSDB.getPersona();
+      tk.linked_under = persona.kind;
       await SocialOSDB.saveSettings(settings);
 
       window.history.replaceState({}, document.title, REDIRECT_URI);

@@ -183,6 +183,11 @@ const SocialOSLinkedIn = (() => {
       }
 
       li.connected = !!(li.access_token && li.member_urn);
+      // Ownership stamp (persona/brand-account): which identity this install
+      // was running under at connect time. Absent stamp (legacy connections)
+      // is treated as 'personal' by readers — see composer.js publishOne.
+      const persona = await SocialOSDB.getPersona();
+      li.linked_under = persona.kind;
       await SocialOSDB.saveSettings(settings);
 
       window.history.replaceState({}, document.title, REDIRECT_URI);

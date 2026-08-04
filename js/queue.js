@@ -55,6 +55,14 @@ const SocialOSQueue = (() => {
   const COMPOSER_CHANNELS = ['linkedin', 'reddit', 'tiktok', 'facebook', 'instagram'];
 
   /**
+   * mkt_drafts.agent values that produce brand (non-personal) content
+   * (persona/brand-account). A personal install hides these by default so
+   * it doesn't one-tap brand content by habit — back-compat: no agent in
+   * the current roster is in this list, so all current drafts still pass.
+   */
+  const BRAND_AGENTS = ['brand-engine'];
+
+  /**
    * Resolve the queue endpoint + secret from settings. The URL is baked in
    * (js/db.js DEFAULT_MKT_QUEUE_URL, overridable for local dev); the secret
    * has no default — until Scot enters it in Settings the screen shows a
@@ -265,8 +273,43 @@ const SocialOSQueue = (() => {
     }
   }
 
+  /**
+   * VIEW filter, not an access boundary — mkt-queue's `list` returns every
+   * row and this install holds the same shared secret as any other. The
+   * real enforcement is the `linked_under` publish guard (composer.js
+   * publishOne), not this function. This exists so the Queue screen only
+   * shows drafts this install actually reviews.
+   *
+   * brand persona: keep drafts whose (lowercased) agent is in
+   * persona.queue_agents, and — if persona.queue_products is non-empty —
+   * also require a product match. A brand persona with an EMPTY
+   * queue_agents keeps everything: a misconfigured brand install should be
+   * visibly showing too much, not silently showing nothing, and the real
+   * safety net is the publish guard, not this view.
+   *
+   * personal persona: hide drafts whose agent is in BRAND_AGENTS, so the
+   * personal install doesn't one-tap brand content out of habit.
+   * @param {MktDraft[]} drafts
+   * @param {{kind: 'personal'|'brand', queue_agents?: string[], queue_products?: string[]}} persona
+   * @returns {MktDraft[]}
+   */
+  function personaFilter(drafts, persona) {
+    if (persona.kind === 'brand') {
+      const agents = persona.queue_agents || [];
+      if (!agents.length) return drafts;
+      const products = persona.queue_products || [];
+      return drafts.filter(d => {
+        if (!agents.includes((d.agent || '').toLowerCase())) return false;
+        if (products.length && !products.includes(d.product)) return false;
+        return true;
+      });
+    }
+    return drafts.filter(d => !BRAND_AGENTS.includes((d.agent || '').toLowerCase()));
+  }
+
   return {
     COMPOSER_CHANNELS,
+    BRAND_AGENTS,
     isConfigured,
     fetchQueue,
     approveDraft,
@@ -276,6 +319,7 @@ const SocialOSQueue = (() => {
     redditMeta,
     assistedLink,
     composerHandoff,
-    reportPublished
+    reportPublished,
+    personaFilter
   };
 })();

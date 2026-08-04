@@ -176,13 +176,30 @@ const SocialOS = (() => {
     const pm = await SocialOSPM.portfolioSummary();
     const account = await SocialOSAuth.accountStatus();
 
+    // Growth card (persona/brand-account) — best-effort, one platform's
+    // failure never breaks the dashboard.
+    /** @type {Object<string, {latest: any, delta: any, note: string}>} */
+    let growth = {};
+    try {
+      const linked = profile?.linked_accounts || {};
+      for (const platform of Object.keys(linked)) {
+        if (!SocialOSGrowth.FOLLOWER_CAPABLE[platform]) continue;
+        growth[platform] = {
+          latest: await SocialOSGrowth.latest(platform),
+          delta: await SocialOSGrowth.delta(platform, 7),
+          note: SocialOSGrowth.capabilityNote(platform)
+        };
+      }
+    } catch { /* dashboard renders without the growth card */ }
+
     SocialOSUI.renderDashboard({
       profile,
       pendingCount: pending.length,
       nextPost,
       contentCount: content.length,
       pm,
-      account
+      account,
+      growth
     });
   }
 
@@ -281,6 +298,24 @@ const SocialOS = (() => {
       return "can't reach the account service. You're likely on a preview link or offline — open the live app (the installed / Add-to-Home-Screen URL), which is the origin the backend is configured for.";
     }
     return m;
+  }
+
+  /**
+   * Sign-in guard (persona/brand-account): sync is per-account last-write-
+   * wins (js/sync.js), so a brand install signing into the owner's personal
+   * SocialOS account would overwrite that profile everywhere within
+   * seconds. Refuse, don't warn — there's no undo for a clobbered profile.
+   * @returns {Promise<boolean>} true if the caller should stop (blocked)
+   */
+  async function blockSignInForBrand() {
+    const persona = await SocialOSDB.getPersona();
+    if (persona.kind !== 'brand') return false;
+    SocialOSUI.toast(
+      'A brand install must stay signed out or use its own SocialOS account — signing into a personal account would overwrite that profile everywhere within seconds.',
+      'error',
+      8000
+    );
+    return true;
   }
 
   /**
@@ -1161,6 +1196,26 @@ const SocialOS = (() => {
   }
 
   /**
+   * Front Office queue identity guard (persona/brand-account) — is this
+   * draft the OTHER identity's, so acting on it here would be wrong? A
+   * companion to SocialOSQueue.personaFilter (the VIEW filter, which only
+   * hides — never lies about existence): this is the action-time refusal
+   * for a route that can name a draft id directly (a push notification),
+   * bypassing the filtered view.
+   * @param {import('./queue.js').MktDraft} draft
+   * @param {{kind:'personal'|'brand', queue_agents?:string[]}} persona
+   * @returns {boolean}
+   */
+  function queueDraftBelongsToOtherIdentity(draft, persona) {
+    const agent = (draft?.agent || '').toLowerCase();
+    if (persona.kind === 'brand') {
+      const agents = persona.queue_agents || [];
+      return agents.length > 0 && !agents.includes(agent);
+    }
+    return SocialOSQueue.BRAND_AGENTS.includes(agent);
+  }
+
+  /**
    * Lazy, silent (hard rule 3) thumbnail fetch for has_media cards. Fetch
    * failures are swallowed — the card just shows no thumb, never an error.
    * @param {import('./queue.js').MktDraft[]} drafts
@@ -1180,8 +1235,10 @@ const SocialOS = (() => {
     if (any && state.currentScreen === 'queue') {
       const week = await weeklyPostCounts();
       const reconnect = await reconnectNeededPlatforms();
+      const persona = await SocialOSDB.getPersona();
+      const visible = SocialOSQueue.personaFilter(state.queue.drafts, persona);
       SocialOSUI.renderQueue({
-        configured: true, drafts: state.queue.drafts, error: null,
+        configured: true, drafts: visible, hiddenCount: state.queue.drafts.length - visible.length, persona, error: null,
         direct: state.queue.direct, media: state.queue.media, week, reconnect
       });
     }
@@ -1189,6 +1246,11 @@ const SocialOS = (() => {
 
   /**
    * Load + render the Front Office approval queue (js/queue.js).
+   * `state.queue.drafts` always stays the FULL list — push-tap routes
+   * (handleRoute's 'queue-post'/'queue-edit') resolve against it, and a
+   * filtered state would make a route claim a queued draft doesn't exist.
+   * The persona VIEW filter (SocialOSQueue.personaFilter) is applied only
+   * on the way to the renderer, never silently — `hiddenCount` says so.
    */
   async function renderQueue() {
     flushQueueWriteBacks().catch(() => {}); // best-effort catch-up, fire-and-forget
@@ -1206,13 +1268,21 @@ const SocialOS = (() => {
     state.queue.direct = direct;
     const week = await weeklyPostCounts();
     const reconnect = await reconnectNeededPlatforms();
+    const persona = await SocialOSDB.getPersona();
     try {
       const drafts = await SocialOSQueue.fetchQueue();
       state.queue.drafts = drafts;
-      SocialOSUI.renderQueue({ configured: true, drafts, error: null, direct, media: state.queue.media, week, reconnect });
+      const visible = SocialOSQueue.personaFilter(drafts, persona);
+      SocialOSUI.renderQueue({
+        configured: true, drafts: visible, hiddenCount: drafts.length - visible.length, persona, error: null,
+        direct, media: state.queue.media, week, reconnect
+      });
       loadQueueThumbnails(drafts); // fire-and-forget
     } catch (err) {
-      SocialOSUI.renderQueue({ configured: true, drafts: [], error: queueErrMsg(err), direct, media: state.queue.media, week, reconnect });
+      SocialOSUI.renderQueue({
+        configured: true, drafts: [], hiddenCount: 0, persona, error: queueErrMsg(err),
+        direct, media: state.queue.media, week, reconnect
+      });
     }
     SocialOSUI.loading(false);
   }
@@ -1314,6 +1384,21 @@ const SocialOS = (() => {
     // assistedHandoff on the assisted branch below; every other exit path
     // releases it so it never lingers as a stray blank tab.
     const releaseWindow = () => { try { if (preopened && !preopened.closed) preopened.close(); } catch { /* best-effort */ } };
+
+    // Identity guard (persona/brand-account): resolve against the FULL
+    // state list (not the persona-filtered view) so the refusal message is
+    // truthful even when this was reached via a push notification route.
+    const existingDraft = state.queue.drafts.find(d => d.id === id);
+    if (existingDraft) {
+      const persona = await SocialOSDB.getPersona();
+      if (queueDraftBelongsToOtherIdentity(existingDraft, persona)) {
+        releaseWindow();
+        const other = persona.kind === 'brand' ? 'personal' : 'brand';
+        SocialOSUI.toast(`This draft belongs to the ${other} identity — open it on that install.`, 'error', 6000);
+        return;
+      }
+    }
+
     SocialOSUI.loading(true, 'Approving…');
     /** @type {import('./queue.js').MktDraft} */
     let draft;
@@ -2403,8 +2488,18 @@ const SocialOS = (() => {
 
       case 'queue-edit': {
         await navigate('queue');
+        // Resolved from the FULL list (state.queue.drafts), not the
+        // persona-filtered view — a push notification can name a draft id
+        // directly, so the "no longer queued" vs "wrong identity" message
+        // has to be truthful either way.
         const draft = arg ? state.queue.drafts.find(d => d.id === arg) : null;
         if (draft) {
+          const persona = await SocialOSDB.getPersona();
+          if (queueDraftBelongsToOtherIdentity(draft, persona)) {
+            const other = persona.kind === 'brand' ? 'personal' : 'brand';
+            SocialOSUI.toast(`This draft belongs to the ${other} identity — open it on that install.`, 'error', 6000);
+            return true;
+          }
           SocialOSUI.renderQueueEdit(draft, state.queue.direct, state.queue.media[draft.id]);
         } else if (arg) {
           SocialOSUI.toast('That draft is no longer queued — it may already be handled.', 'info', 6000);
@@ -2914,6 +3009,40 @@ const SocialOS = (() => {
           break;
         }
 
+        // ── Growth (follower snapshots, js/growth.js — Dashboard card) ──
+        case 'growth-refresh': {
+          SocialOSUI.loading(true, 'Checking public follower counts…');
+          try {
+            await SocialOSGrowth.snapshotAll();
+          } catch { /* best-effort — see js/growth.js */ }
+          SocialOSUI.loading(false);
+          if (state.currentScreen === 'dashboard') await renderDashboard();
+          break;
+        }
+
+        case 'growth-manual': {
+          const platform = /** @type {string} */ (actionEl.dataset.platform || '');
+          if (!platform) break;
+          const label = SocialOSUI.PLATFORM_LABELS[platform] || platform;
+          const raw = window.prompt(`Current ${label} follower count:`);
+          if (raw === null) break; // cancelled
+          const count = parseInt(raw.trim(), 10);
+          if (!Number.isInteger(count) || count < 0) {
+            SocialOSUI.toast('Enter a whole number, 0 or more.', 'warning');
+            break;
+          }
+          const profile = await SocialOSDB.getProfile();
+          const handle = profile?.linked_accounts?.[platform] || '';
+          try {
+            await SocialOSGrowth.recordManual(platform, handle, count);
+            SocialOSUI.toast(`${label} follower count saved.`, 'success');
+          } catch (err) {
+            SocialOSUI.toast(err instanceof Error ? err.message : String(err), 'error');
+          }
+          if (state.currentScreen === 'dashboard') await renderDashboard();
+          break;
+        }
+
         // ── Landing page ───────────────────────────────
         case 'start-onboarding':
           navigate('onboarding');
@@ -2927,6 +3056,7 @@ const SocialOS = (() => {
         // link, js/auth.js) — NOT a platform connect; this button used to
         // start the LinkedIn OAuth flow by mistake.
         case 'landing-signin':
+          if (await blockSignInForBrand()) break;
           SocialOSUI.renderSigninSheet();
           break;
 
@@ -3204,6 +3334,7 @@ const SocialOS = (() => {
 
         // ── SocialOS account (js/auth.js + js/sync.js) ───────────────────
         case 'account-google': {
+          if (await blockSignInForBrand()) break;
           try {
             await SocialOSAuth.signInWithGoogle();
           } catch (err) {
@@ -3214,6 +3345,7 @@ const SocialOS = (() => {
 
         case 'account-magiclink':
         case 'landing-magiclink': {
+          if (await blockSignInForBrand()) break;
           // Same flow from two surfaces: Settings ('set-account-email') and
           // the landing sign-in sheet ('landing-account-email').
           const inputId = action === 'landing-magiclink' ? 'landing-account-email' : 'set-account-email';
@@ -3279,6 +3411,32 @@ const SocialOS = (() => {
           await SocialOSDB.saveSettings(settings);
           SocialOSUI.toast('Front Office settings saved.', 'success');
           await renderSettings(); // push section unlocks once the secret exists
+          break;
+        }
+
+        // ── Identity (persona/brand-account, js/db.js Persona) ───────────
+        case 'persona-save': {
+          const settings = await SocialOSDB.getOrCreateSettings();
+          const kindEl = /** @type {HTMLSelectElement} */ (SocialOSUI.$('set-persona-kind'));
+          const kind = kindEl?.value === 'brand' ? 'brand' : 'personal';
+          const disclosure = /** @type {HTMLInputElement} */ (SocialOSUI.$('set-persona-disclosure'))?.value?.trim() || '';
+          const agentsRaw = /** @type {HTMLInputElement} */ (SocialOSUI.$('set-persona-queue-agents'))?.value || '';
+          const queue_agents = agentsRaw.split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
+          const wasBrand = settings.persona?.kind === 'brand';
+
+          settings.persona = { kind, disclosure, queue_agents, queue_products: settings.persona?.queue_products || [] };
+
+          // Flipping to brand disables zero-tap auto-post — a brand install
+          // never publishes unattended (see sw.js swAutoPostDue's matching guard).
+          if (kind === 'brand' && !wasBrand && settings.auto_post_scheduled) {
+            settings.auto_post_scheduled = false;
+            await SocialOSDB.saveSettings(settings);
+            SocialOSUI.toast('Identity saved as brand — zero-tap auto-post is disabled for brand installs.', 'success', 7000);
+          } else {
+            await SocialOSDB.saveSettings(settings);
+            SocialOSUI.toast('Identity saved.', 'success');
+          }
+          await renderSettings();
           break;
         }
 
@@ -4489,6 +4647,9 @@ const SocialOS = (() => {
     checkDueHandoffs().catch(() => {});
     SocialOSPush.syncSubscription().catch(() => {});
     flushQueueWriteBacks().catch(() => {});
+    // App-open auto follower-growth snapshot — throttled to once/24h per
+    // platform (js/growth.js snapshotAll), never blocks boot on failure.
+    SocialOSGrowth.snapshotAll({ throttle: true }).catch(() => {});
 
     if (profile?.onboarding_complete) {
       // A notification tap may have cold-opened the app with a route in

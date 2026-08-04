@@ -208,6 +208,7 @@
  * @property {string|null} [member_urn] - LinkedIn only: `urn:li:person:{id}`, the `author` field required by /v2/ugcPosts.
  * @property {string|null} [open_id] - TikTok only: the user's app-scoped open_id from the token response.
  * @property {string|null} [relay_url] - Legacy/deprecated per-connection CORS relay URL field. Superseded by the top-level `social_relay_url`, which is now baked in — scrubbed-at-boot along with the legacy client_id/client_secret/client_key fields that earlier versions stored here (OAuth client credentials now live server-side in the social-oauth broker).
+ * @property {'personal'|'brand'} [linked_under] - The persona.kind this install was running under when the connection was made (persona/brand-account). Absent on legacy connections — readers treat that as 'personal'. This, not the Persona declaration itself, is the actual publish-time enforcement (composer.js publishOne).
  */
 
 /**
@@ -231,6 +232,36 @@
  * @property {{remove_client_names: boolean, remove_facility_locations: boolean, remove_proprietary_specs: boolean, remove_financial_data: boolean, custom_blocked_terms: string[]}} content_scrubbing
  * @property {string} theme
  * @property {number} onboarding_step
+ * @property {Persona} [persona] - WHO this install publishes as (default 'personal'). See the Persona typedef above.
+ */
+
+/**
+ * Persona — WHO this install publishes as. A declaration that selects
+ * prompts, filters the Queue view, and labels growth snapshots. It is NOT
+ * a token boundary: one install is one identity, and a second PWA install
+ * on the same browser is the SAME identity (same origin, same IndexedDB).
+ * Enforcement lives in the `linked_under` stamp on each platform
+ * connection + the publish-time check in composer.js publishOne.
+ * @typedef {Object} Persona
+ * @property {'personal'|'brand'} kind
+ * @property {string} [disclosure] - the one exact line the account may say about who runs it
+ * @property {string[]} [queue_agents]   - mkt_drafts.agent values this install reviews (brand installs). Empty = personal default.
+ * @property {string[]} [queue_products] - mkt_drafts.product values this install reviews. Empty = all.
+ */
+
+/**
+ * FollowerSnapshot — one capture of a platform audience count.
+ * `source` is load-bearing honesty: 'public' = read from a public endpoint
+ * this run; 'manual' = the owner typed it. Never blend the two into one
+ * trend line. A present integer 0 is a REAL value (a new account's day-0
+ * baseline) and is stored; an absent/unreadable field stores nothing.
+ * @typedef {Object} FollowerSnapshot
+ * @property {string} id
+ * @property {'linkedin'|'reddit'|'tiktok'|'facebook'|'instagram'} platform
+ * @property {string} handle
+ * @property {number} followers
+ * @property {'public'|'manual'} source
+ * @property {string} captured_at
  */
 
 // ── IndexedDB wrapper ───────────────────────────────────────────────────
@@ -439,6 +470,23 @@ const SocialOSDB = (() => {
     return settings;
   }
 
+  /** @type {Persona} */
+  const DEFAULT_PERSONA = { kind: 'personal', disclosure: '', queue_agents: [], queue_products: [] };
+
+  /**
+   * WHO this install publishes as (see the Persona typedef above).
+   * getOrCreateSettings() does NOT back-fill new keys into an existing
+   * record, so an older settings record has no `persona` field at all —
+   * fall back to DEFAULT_PERSONA, and fill in any missing sub-fields on a
+   * partial persona the same way.
+   * @returns {Promise<Persona>}
+   */
+  async function getPersona() {
+    const settings = await getSettings();
+    if (!settings?.persona?.kind) return { ...DEFAULT_PERSONA };
+    return { queue_agents: [], queue_products: [], disclosure: '', ...settings.persona };
+  }
+
   // AI proxy is baked in so the user is never asked to configure it — the
   // free tier "just works". The proxy authorizes this app by its Origin
   // (GitHub Pages), so no secret is needed or shipped in this public code.
@@ -573,7 +621,10 @@ const SocialOSDB = (() => {
         custom_blocked_terms: []
       },
       theme: 'dark',
-      onboarding_step: 0
+      onboarding_step: 0,
+      // WHO this install publishes as (js/growth.js, js/ai.js, js/queue.js,
+      // js/composer.js). Default personal — zero behavior change until set.
+      persona: { kind: 'personal', disclosure: '', queue_agents: [], queue_products: [] }
     };
   }
 
@@ -667,6 +718,34 @@ const SocialOSDB = (() => {
    */
   async function getPendingHandoffs() {
     return (await getHandoffs()).filter(h => h.status === 'handed_off');
+  }
+
+  // ── Follower snapshots (js/growth.js) ──────────────────────────────────
+  // No DB_VERSION bump / new object store: open() has no onblocked handler,
+  // so a blocked upgrade (another tab holding the old version open) would
+  // hang boot. Instead this is one more record in the EXISTING
+  // socialos_profile store, same pattern as sw_state living in settings.
+
+  const FOLLOWER_SNAPSHOTS_ID = 'follower_snapshots';
+  const FOLLOWER_SNAPSHOTS_CAP = 400;
+
+  /** @returns {Promise<FollowerSnapshot[]>} */
+  async function getFollowerSnapshots() {
+    const record = await get(STORES.profile, FOLLOWER_SNAPSHOTS_ID);
+    return record?.snapshots || [];
+  }
+
+  /**
+   * Read-modify-write append, capped oldest-first so the record can't grow
+   * unbounded.
+   * @param {FollowerSnapshot} snap
+   * @returns {Promise<void>}
+   */
+  async function saveFollowerSnapshot(snap) {
+    const snapshots = await getFollowerSnapshots();
+    snapshots.push(snap);
+    while (snapshots.length > FOLLOWER_SNAPSHOTS_CAP) snapshots.shift();
+    return put(STORES.profile, { id: FOLLOWER_SNAPSHOTS_ID, snapshots });
   }
 
   /**
@@ -832,6 +911,10 @@ const SocialOSDB = (() => {
     saveSettings,
     getOrCreateSettings,
     defaultSettings,
+    DEFAULT_PERSONA,
+    getPersona,
+    getFollowerSnapshots,
+    saveFollowerSnapshot,
     getAllContent,
     getAllPosts,
     getAllCalendarSlots,

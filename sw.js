@@ -7,7 +7,7 @@
  * approval notifications with one-tap actions and routes taps into the app.
  */
 
-const CACHE_NAME = 'socialos-v28'; // v28: stale zero-tap guard + reconnect nudge + queue write-back
+const CACHE_NAME = 'socialos-v29'; // v29: brand/persona (identity settings, growth.js — window-only, never importScripts'd)
 const SHELL_ASSETS = [
   './',
   './index.html',
@@ -22,6 +22,7 @@ const SHELL_ASSETS = [
   './js/db.js',
   './js/engagement.js',
   './js/google.js',
+  './js/growth.js',
   './js/linkedin.js',
   './js/media.js',
   './js/reddit.js',
@@ -292,6 +293,13 @@ async function swAutoPostDue(data) {
   try {
     const settings = await SocialOSDB.getSettings();
     if (!settings || !settings.auto_post_scheduled) return null;
+
+    // BRAND GUARD (persona/brand-account): a brand install never publishes
+    // unattended, full stop — no exceptions, no reconnect nudge, no partial
+    // credit. Same shape as the staleness refusals above/below: refuse here,
+    // fall back to the interactive "🚀 Post now" card, which still routes
+    // through the human-gated publishDuePost path.
+    if (settings.persona && settings.persona.kind === 'brand') return null;
 
     const post = await SocialOSDB.get(SocialOSDB.STORES.posts, data.postId);
     if (!post) return null; // scheduled on a different device — it will post
