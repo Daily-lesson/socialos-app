@@ -7,7 +7,7 @@
  * approval notifications with one-tap actions and routes taps into the app.
  */
 
-const CACHE_NAME = 'socialos-v30'; // v30: new brand icons (white mark on gradient) + ?v=2 icon cache-bust
+const CACHE_NAME = 'socialos-v31'; // v31: top safe-area insets (status-bar overlap made the landing Sign in untappable on iPhone)
 const SHELL_ASSETS = [
   './',
   './index.html',

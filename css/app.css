@@ -67,7 +67,11 @@
   --sidebar-width: 236px;
   --content-max: 1080px;
 
-  /* Safe areas */
+  /* Safe areas. --safe-top matters in the installed PWA: viewport-fit=cover
+     + the black-translucent status bar draw the page under the iPhone status
+     bar, so anything at the top edge needs this added to its padding or taps
+     on it land on the status bar instead. */
+  --safe-top: env(safe-area-inset-top, 0px);
   --safe-bottom: env(safe-area-inset-bottom, 0px);
 }
 
@@ -133,6 +137,7 @@ img { max-width: 100%; height: auto; }
   display: none;
   flex: 1;
   padding: var(--space-lg) var(--space-md);
+  padding-top: calc(var(--space-lg) + var(--safe-top));
   padding-bottom: calc(var(--nav-height) + var(--space-lg) + var(--safe-bottom));
   overflow-y: auto;
   -webkit-overflow-scrolling: touch;
@@ -432,6 +437,10 @@ img { max-width: 100%; height: auto; }
   align-items: center;
   justify-content: space-between;
   padding: var(--space-lg) 0;
+  /* The landing lives in a .screen-full (zero screen padding), so it must
+     clear the status bar itself or the Sign in button is untappable in the
+     installed PWA. */
+  padding-top: calc(var(--space-lg) + var(--safe-top));
 }
 
 .landing-logo {
@@ -1936,7 +1945,7 @@ select.input {
 
 #toast-container {
   position: fixed;
-  top: var(--space-md);
+  top: calc(var(--space-md) + var(--safe-top));
   left: 50%;
   transform: translateX(-50%);
   z-index: 1000;
@@ -2316,7 +2325,13 @@ body.nav-visible .version-badge {
 @media (min-width: 640px) {
   .content-grid { grid-template-columns: 1fr 1fr; }
 
-  .screen { padding: var(--space-lg) var(--space-xl); }
+  .screen {
+    padding: var(--space-lg) var(--space-xl);
+    /* Re-assert the safe insets + bottom-nav clearance the shorthand above
+       would otherwise wipe (the bottom nav is present up to 1024px). */
+    padding-top: calc(var(--space-lg) + var(--safe-top));
+    padding-bottom: calc(var(--nav-height) + var(--space-lg) + var(--safe-bottom));
+  }
   .screen-full { padding: 0; }
   .screen > div { max-width: 768px; }
   .screen-full > div { max-width: none; }
