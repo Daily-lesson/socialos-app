@@ -7,7 +7,7 @@
  * approval notifications with one-tap actions and routes taps into the app.
  */
 
-const CACHE_NAME = 'socialos-v29'; // v29: brand/persona (identity settings, growth.js — window-only, never importScripts'd)
+const CACHE_NAME = 'socialos-v30'; // v30: new brand icons (white mark on gradient) + ?v=2 icon cache-bust
 const SHELL_ASSETS = [
   './',
   './index.html',
@@ -35,13 +35,18 @@ const SHELL_ASSETS = [
   './js/ui.js',
   './js/utils.js',
   './manifest.json',
+  // Plain paths = manifest.json icon srcs + SW notification icons; the ?v=2
+  // variants = the <link> hrefs in index/privacy/terms (icon-cache bust —
+  // keep the query in step with the HTML whenever the art changes).
   './icons/icon-192.png',
+  './icons/icon-192.png?v=2',
   './icons/icon-512.png',
   './icons/icon-192-maskable.png',
   './icons/icon-512-maskable.png',
-  './icons/apple-touch-icon.png',
+  './icons/apple-touch-icon.png?v=2',
   './icons/favicon-32.png',
-  './icons/favicon-48.png',
+  './icons/favicon-32.png?v=2',
+  './icons/favicon-48.png?v=2',
   './icons/logo.svg' // the in-app brand mark (index.html nav + landing) — a
                      // cache bump wipes the runtime cache, so it must be
                      // precached or the logo 404s offline right after updates

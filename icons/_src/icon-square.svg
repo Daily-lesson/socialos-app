@@ -3,34 +3,53 @@
     SOURCE MASTER — app icon (full-bleed square). Rasterized to the app icon
     PNGs by icons/_src/build-icons.py. Full opaque square: Apple home-screen
     icons must NOT be transparent (iOS renders transparency as black) and it
-    rounds the corners itself, so the art is a plain square here. The mark sits
-    within the maskable safe zone, so the same square is safe under Android's
-    adaptive-icon crop too. Keep in sync with icons/logo.svg (the in-app mark).
+    rounds the corners itself, so the art is a plain square here.
+
+    v2 look: the mark is inverted for home-screen legibility — a bold WHITE
+    S-route on the brand blue→purple gradient field (the old gradient-S on a
+    near-black tile read as "a black square with an S" at 60px). Keep in sync
+    with icon-maskable.svg, og-image.svg and icons/logo.svg (the in-app mark).
+
+    The bg gradient is userSpaceOnUse so the punched node centres can fill
+    with the SAME gradient and sample the locally-correct colour.
   -->
   <defs>
-    <linearGradient id="stroke" x1="0" y1="1" x2="1" y2="0">
-      <stop offset="0" stop-color="#4F8EF7"/>
-      <stop offset="1" stop-color="#A855F7"/>
+    <linearGradient id="bg" x1="0" y1="512" x2="512" y2="0" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#3D7BF0"/>
+      <stop offset="0.5" stop-color="#7A66F4"/>
+      <stop offset="1" stop-color="#B04FF7"/>
     </linearGradient>
-    <radialGradient id="bg" cx="0.32" cy="0.22" r="1.15">
-      <stop offset="0" stop-color="#181828"/>
-      <stop offset="1" stop-color="#0A0A0F"/>
+    <radialGradient id="sheen" cx="0.30" cy="0.16" r="0.95">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.20"/>
+      <stop offset="1" stop-color="#FFFFFF" stop-opacity="0"/>
     </radialGradient>
   </defs>
 
-  <!-- Full-bleed square field (no rounding — the OS masks/rounds) -->
+  <!-- Full-bleed gradient field (no rounding — the OS masks/rounds) -->
   <rect width="512" height="512" fill="url(#bg)"/>
+  <rect width="512" height="512" fill="url(#sheen)"/>
 
-  <!-- The route: a proper S from two 270° arcs -->
-  <path d="M 328 184 A 72 72 0 1 0 256 256 A 72 72 0 1 1 184 328"
-        fill="none" stroke="url(#stroke)" stroke-width="46" stroke-linecap="round"/>
-  <!-- Origin node (small, blue, bottom-left) -->
-  <circle cx="184" cy="328" r="32" fill="#4F8EF7"/>
-  <circle cx="184" cy="328" r="12" fill="#0A0A0F"/>
-  <!-- Destination node (larger, purple, top-right) with broadcast halo -->
-  <circle cx="328" cy="184" r="38" fill="#A855F7"/>
-  <circle cx="328" cy="184" r="14" fill="#0A0A0F"/>
-  <circle cx="328" cy="184" r="64" fill="none" stroke="#A855F7" stroke-width="7" opacity="0.35"/>
-  <!-- Satellite on the halo -->
-  <circle cx="375" cy="140" r="11" fill="#F0F0FF"/>
+  <!-- Recentre the mark (visual centre ~(272,240)) onto the canvas centre -->
+  <g transform="translate(-16 16)">
+    <!-- Soft cast shadow for depth (no SVG filters — cairosvg-safe) -->
+    <g transform="translate(0 9)" opacity="0.18">
+      <path d="M 328 184 A 72 72 0 1 0 256 256 A 72 72 0 1 1 184 328"
+            fill="none" stroke="#141033" stroke-width="50" stroke-linecap="round"/>
+      <circle cx="184" cy="328" r="35" fill="#141033"/>
+      <circle cx="328" cy="184" r="41" fill="#141033"/>
+    </g>
+
+    <!-- The route: a proper S from two 270° arcs -->
+    <path d="M 328 184 A 72 72 0 1 0 256 256 A 72 72 0 1 1 184 328"
+          fill="none" stroke="#FFFFFF" stroke-width="50" stroke-linecap="round"/>
+    <!-- Origin node (small, bottom-left) -->
+    <circle cx="184" cy="328" r="35" fill="#FFFFFF"/>
+    <circle cx="184" cy="328" r="13" fill="url(#bg)"/>
+    <!-- Destination node (larger, top-right) with broadcast halo -->
+    <circle cx="328" cy="184" r="41" fill="#FFFFFF"/>
+    <circle cx="328" cy="184" r="15" fill="url(#bg)"/>
+    <circle cx="328" cy="184" r="67" fill="none" stroke="#FFFFFF" stroke-width="8" opacity="0.5"/>
+    <!-- Satellite on the halo -->
+    <circle cx="376" cy="139" r="12" fill="#FFFFFF"/>
+  </g>
 </svg>

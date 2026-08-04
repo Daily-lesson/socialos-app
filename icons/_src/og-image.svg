@@ -1,12 +1,18 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 630">
   <!-- SOURCE MASTER — social share card (og:image / twitter:image), 1200x630.
-       Rasterized by icons/_src/build-icons.py. Brand mark + wordmark on the
-       dark field so shared links carry SocialOS branding. -->
+       Rasterized by icons/_src/build-icons.py. v2 look: the new gradient app
+       tile (white mark on blue→purple, matching icon-square.svg) + wordmark
+       on the dark field so shared links carry SocialOS branding. -->
   <defs>
-    <linearGradient id="stroke" x1="0" y1="1" x2="1" y2="0">
-      <stop offset="0" stop-color="#4F8EF7"/>
-      <stop offset="1" stop-color="#A855F7"/>
+    <linearGradient id="tilebg" x1="0" y1="512" x2="512" y2="0" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#3D7BF0"/>
+      <stop offset="0.5" stop-color="#7A66F4"/>
+      <stop offset="1" stop-color="#B04FF7"/>
     </linearGradient>
+    <radialGradient id="sheen" cx="0.30" cy="0.16" r="0.95">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.20"/>
+      <stop offset="1" stop-color="#FFFFFF" stop-opacity="0"/>
+    </radialGradient>
     <radialGradient id="bg" cx="0.30" cy="0.18" r="1.1">
       <stop offset="0" stop-color="#181828"/>
       <stop offset="1" stop-color="#0A0A0F"/>
@@ -15,20 +21,35 @@
       <stop offset="0" stop-color="#8FB4FF"/>
       <stop offset="1" stop-color="#C9A2FF"/>
     </linearGradient>
+    <clipPath id="tile">
+      <rect width="512" height="512" rx="115"/>
+    </clipPath>
   </defs>
 
   <rect width="1200" height="630" fill="url(#bg)"/>
 
-  <!-- Mark: reuse the 512 art, placed left-of-centre at ~300px tall -->
-  <g transform="translate(150 119) scale(0.765)">
-    <path d="M 328 184 A 72 72 0 1 0 256 256 A 72 72 0 1 1 184 328"
-          fill="none" stroke="url(#stroke)" stroke-width="46" stroke-linecap="round"/>
-    <circle cx="184" cy="328" r="32" fill="#4F8EF7"/>
-    <circle cx="184" cy="328" r="12" fill="#0A0A0F"/>
-    <circle cx="328" cy="184" r="38" fill="#A855F7"/>
-    <circle cx="328" cy="184" r="14" fill="#0A0A0F"/>
-    <circle cx="328" cy="184" r="64" fill="none" stroke="#A855F7" stroke-width="7" opacity="0.35"/>
-    <circle cx="375" cy="140" r="11" fill="#F0F0FF"/>
+  <!-- The gradient app tile, left-of-centre at ~330px tall -->
+  <g transform="translate(150 148) scale(0.655)">
+    <g clip-path="url(#tile)">
+      <rect width="512" height="512" fill="url(#tilebg)"/>
+      <rect width="512" height="512" fill="url(#sheen)"/>
+    </g>
+    <g transform="translate(-16 16)">
+      <g transform="translate(0 9)" opacity="0.18">
+        <path d="M 328 184 A 72 72 0 1 0 256 256 A 72 72 0 1 1 184 328"
+              fill="none" stroke="#141033" stroke-width="50" stroke-linecap="round"/>
+        <circle cx="184" cy="328" r="35" fill="#141033"/>
+        <circle cx="328" cy="184" r="41" fill="#141033"/>
+      </g>
+      <path d="M 328 184 A 72 72 0 1 0 256 256 A 72 72 0 1 1 184 328"
+            fill="none" stroke="#FFFFFF" stroke-width="50" stroke-linecap="round"/>
+      <circle cx="184" cy="328" r="35" fill="#FFFFFF"/>
+      <circle cx="184" cy="328" r="13" fill="url(#tilebg)"/>
+      <circle cx="328" cy="184" r="41" fill="#FFFFFF"/>
+      <circle cx="328" cy="184" r="15" fill="url(#tilebg)"/>
+      <circle cx="328" cy="184" r="67" fill="none" stroke="#FFFFFF" stroke-width="8" opacity="0.5"/>
+      <circle cx="376" cy="139" r="12" fill="#FFFFFF"/>
+    </g>
   </g>
 
   <!-- Wordmark + tagline -->
