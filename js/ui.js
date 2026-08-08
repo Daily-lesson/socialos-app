@@ -1765,6 +1765,31 @@ const SocialOSUI = (() => {
       weeks.push(week);
     }
 
+    // Flatten the visible 4-week window's slots into a readable, chronological
+    // agenda. The colored dots in the grid above carry no text label and no tap
+    // target (and `title` tooltips don't appear on touch), so a user who
+    // generated a calendar couldn't actually see WHAT was scheduled (issue #51).
+    const agenda = weeks
+      .reduce((acc, week) => acc.concat(week), [])
+      .reduce((acc, day) => acc.concat(
+        day.slots
+          .slice()
+          .sort((a, b) => (a.time || '').localeCompare(b.time || ''))
+          .map(s => ({ slot: s, date: day.date }))
+      ), []);
+    const themeLabel = (t) => ({
+      milestone: 'Milestone',
+      technical_insight: 'Technical insight',
+      behind_the_scenes: 'Behind the scenes',
+      question: 'Question',
+      achievement: 'Achievement'
+    }[t] || (t ? String(t).replace(/_/g, ' ') : 'Post'));
+    const platformLabel = (p) => (p ? p.charAt(0).toUpperCase() + p.slice(1) : '');
+    const agendaWhen = (d, time) => {
+      const day = new Intl.DateTimeFormat('en-US', { weekday: 'short', month: 'short', day: 'numeric' }).format(d);
+      return time ? `${day} · ${time}` : day;
+    };
+
     container.innerHTML = `
       <h2 class="screen-title">Calendar</h2>
       <div class="calendar-nav">
@@ -1788,6 +1813,21 @@ const SocialOSUI = (() => {
             `).join('')}
           </div>
         `).join('')}
+      </div>
+      <div class="cal-agenda" style="margin-top:20px">
+        <h3 class="screen-subtitle" style="display:flex;align-items:center;gap:8px;margin:0 0 10px">
+          Scheduled these 4 weeks
+          <span style="font-size:12px;opacity:.6;font-weight:400">${agenda.length}</span>
+        </h3>
+        ${agenda.length ? agenda.map(({ slot, date }) => `
+          <div class="cal-agenda-item" style="display:flex;align-items:center;gap:10px;padding:9px 11px;margin-bottom:6px;border:1px solid rgba(128,128,128,.28);border-radius:8px;font-size:13px">
+            <span style="width:9px;height:9px;border-radius:50%;flex:0 0 auto;background:${PLATFORM_COLORS[slot.platform] || '#888'}"></span>
+            <span style="font-weight:600;flex:0 0 auto;min-width:104px">${escapeHtml(agendaWhen(date, slot.time))}</span>
+            <span style="opacity:.85">${escapeHtml(platformLabel(slot.platform))}</span>
+            <span style="opacity:.7">${escapeHtml(themeLabel(slot.theme))}</span>
+            <span style="margin-left:auto;opacity:.6;text-transform:capitalize;flex:0 0 auto">${escapeHtml((slot.status || '').replace(/_/g, ' '))}</span>
+          </div>
+        `).join('') : `<p style="opacity:.6;font-size:13px;margin:0">Nothing scheduled in these four weeks yet. Generate a calendar to plan posts, or add them from the composer.</p>`}
       </div>
       <button class="btn btn-primary" data-action="generate-calendar" style="width:100%;margin-top:16px">
         Generate 4-Week Calendar
