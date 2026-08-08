@@ -68,6 +68,11 @@ const SocialOSUI = (() => {
     document.querySelectorAll('.nav-tab').forEach(t => t.classList.remove('active'));
     const tab = document.querySelector(`.nav-tab[data-screen="${screenId}"]`);
     if (tab) tab.classList.add('active');
+
+    // The active tab may live in the More overflow menu — refresh it (also
+    // closes the popover, so a menu navigation dismisses it).
+    closeNavMoreMenu();
+    updateNavOverflow();
   }
 
   /**
@@ -79,7 +84,152 @@ const SocialOSUI = (() => {
     const nav = $('main-nav');
     if (nav) nav.style.display = visible ? 'flex' : 'none';
     document.body.classList.toggle('nav-visible', visible);
+    // Width is only measurable while the nav is displayed.
+    if (visible) updateNavOverflow();
+    else closeNavMoreMenu();
   }
+
+  // ── Responsive nav overflow — the "More" tab ─────────────────────────
+  // The bottom bar used to give all 8 tabs `flex: 1` with no overflow
+  // handling: on narrow windows the labels ellipsized to "Appr…"/"Cale…"
+  // and badges collided — choices were technically on screen but
+  // unreadable. Tabs that don't fit at the measured width now collapse
+  // into a trailing More tab that opens #nav-more-menu. Bottom-bar mode
+  // only: the ≥1024px sidebar is vertical (and scrolls), so there the JS
+  // shows everything and CSS force-hides the More tab as a static guard.
+
+  /** Floor below which one icon-over-label tab becomes unreadable
+   *  ("Approvals" at 0.625rem needs ~54px; 58 leaves breathing room). */
+  const NAV_MIN_TAB_PX = 58;
+  const navDesktopMq = window.matchMedia('(min-width: 1024px)');
+
+  /** The real (data-screen) tabs, in declared order. */
+  function navScreenTabs() {
+    return Array.from(document.querySelectorAll('#main-nav .nav-tab[data-screen]'));
+  }
+
+  function closeNavMoreMenu() {
+    const menu = $('nav-more-menu');
+    const moreTab = $('nav-more-tab');
+    if (menu) menu.hidden = true;
+    if (moreTab) moreTab.setAttribute('aria-expanded', 'false');
+  }
+
+  function toggleNavMoreMenu() {
+    const menu = $('nav-more-menu');
+    const moreTab = $('nav-more-tab');
+    if (!menu || !moreTab) return;
+    menu.hidden = !menu.hidden;
+    moreTab.setAttribute('aria-expanded', String(!menu.hidden));
+  }
+
+  /**
+   * Recompute which tabs fit the bar and rebuild the More menu. Safe to
+   * call any time — no-ops while the nav is hidden (width unmeasurable).
+   * Menu items navigate via the global data-action delegation (`go-*`),
+   * which survives re-renders — unlike the one-time `.nav-tab` click
+   * binding in app.js, which never sees injected elements.
+   */
+  function updateNavOverflow() {
+    const nav = $('main-nav');
+    const moreTab = $('nav-more-tab');
+    const menu = $('nav-more-menu');
+    const tabsRow = document.querySelector('#main-nav .nav-tabs');
+    if (!nav || !moreTab || !menu || !tabsRow) return;
+    if (nav.style.display === 'none') return;
+
+    const tabs = navScreenTabs();
+
+    // Sidebar mode: vertical list — nothing overflows horizontally.
+    if (navDesktopMq.matches) {
+      tabs.forEach(t => { t.style.display = ''; });
+      moreTab.style.display = 'none';
+      closeNavMoreMenu();
+      return;
+    }
+
+    const width = tabsRow.clientWidth || window.innerWidth;
+    const capacity = Math.floor(width / NAV_MIN_TAB_PX);
+    const overflowing = capacity < tabs.length;
+    // One slot goes to the More tab itself; always keep ≥1 real tab.
+    const visibleCount = overflowing ? Math.max(1, capacity - 1) : tabs.length;
+
+    const overflowTabs = [];
+    tabs.forEach((t, i) => {
+      const hide = i >= visibleCount;
+      t.style.display = hide ? 'none' : '';
+      if (hide) overflowTabs.push(t);
+    });
+
+    moreTab.style.display = overflowing ? '' : 'none';
+    const moreBadge = $('nav-more-badge');
+    if (!overflowing) {
+      closeNavMoreMenu();
+      menu.innerHTML = '';
+      if (moreBadge) moreBadge.style.display = 'none';
+      moreTab.classList.remove('active');
+      return;
+    }
+
+    // A hidden active tab lights up the More tab instead.
+    moreTab.classList.toggle('active', overflowTabs.some(t => t.classList.contains('active')));
+
+    // Roll the Approvals badge up onto More while Approvals is hidden —
+    // otherwise the count silently disappears with the tab.
+    const approvalBadge = $('approval-badge');
+    const badgeCount = approvalBadge && approvalBadge.style.display !== 'none'
+      ? (approvalBadge.textContent || '') : '';
+    const badgeLive = badgeCount !== '' && badgeCount !== '0';
+    const approvalsHidden = overflowTabs.some(t => t.dataset.screen === 'screen-approvals');
+    if (moreBadge) {
+      if (approvalsHidden && badgeLive) {
+        moreBadge.textContent = badgeCount;
+        moreBadge.style.display = 'flex';
+      } else {
+        moreBadge.style.display = 'none';
+      }
+    }
+
+    menu.innerHTML = overflowTabs.map(t => {
+      const screen = t.dataset.screen || '';
+      const route = screen.replace(/^screen-/, '');
+      const icon = t.querySelector('.nav-tab-icon');
+      const label = t.querySelector('.nav-tab-label');
+      const active = t.classList.contains('active') ? ' active' : '';
+      const badge = (screen === 'screen-approvals' && badgeLive)
+        ? `<span class="nav-more-badge-inline">${escapeHtml(badgeCount)}</span>`
+        : '';
+      return `<button class="nav-more-item${active}" role="menuitem" data-action="go-${route}">` +
+        `<span class="nav-tab-icon">${icon ? icon.innerHTML : ''}</span>` +
+        `<span>${label ? escapeHtml(label.textContent || route) : route}</span>${badge}</button>`;
+    }).join('');
+  }
+
+  // One-time wiring. Scripts load at the end of <body>, so the static nav
+  // markup already exists.
+  (function initNavOverflow() {
+    const moreTab = $('nav-more-tab');
+    if (moreTab) moreTab.addEventListener('click', toggleNavMoreMenu);
+    document.addEventListener('click', (e) => {
+      const menu = $('nav-more-menu');
+      if (!menu || menu.hidden) return;
+      const t = e.target;
+      if (t instanceof Element && !t.closest('#nav-more-tab') && !t.closest('#nav-more-menu')) {
+        closeNavMoreMenu();
+      }
+    });
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') closeNavMoreMenu();
+    });
+    let navOvfRaf = 0;
+    const requestUpdate = () => {
+      if (navOvfRaf) return;
+      navOvfRaf = requestAnimationFrame(() => { navOvfRaf = 0; updateNavOverflow(); });
+    };
+    window.addEventListener('resize', requestUpdate);
+    if (navDesktopMq.addEventListener) navDesktopMq.addEventListener('change', requestUpdate);
+    updateNavOverflow();
+  })();
 
   /**
    * Show a toast notification.
@@ -2597,6 +2747,9 @@ const SocialOSUI = (() => {
     if (!badge) return;
     badge.textContent = String(count);
     badge.style.display = count > 0 ? 'flex' : 'none';
+    // If Approvals is currently collapsed into More, its rolled-up badge
+    // must track the same count.
+    updateNavOverflow();
   }
 
   // ── Public API ────────────────────────────────────────────────────────

@@ -184,7 +184,20 @@
           </span>
           <span class="nav-tab-label">Settings</span>
         </button>
+        <!-- Responsive overflow: shown by ui.js only when the bottom bar is too
+             narrow for every tab; tabs that don't fit collapse into this menu.
+             No data-screen on purpose — it toggles #nav-more-menu, not a screen. -->
+        <button class="nav-tab" id="nav-more-tab" style="display:none" aria-haspopup="menu" aria-expanded="false">
+          <span class="nav-tab-icon">
+            <svg viewBox="0 0 24 24" fill="currentColor" stroke="none"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg>
+          </span>
+          <span class="nav-tab-label">More</span>
+          <span class="nav-badge" id="nav-more-badge">0</span>
+        </button>
       </div>
+      <!-- Popover listing the tabs the bar couldn't fit; items navigate via the
+           global data-action delegation (go-*), so they need no per-item wiring. -->
+      <div id="nav-more-menu" role="menu" aria-label="More screens" hidden></div>
     </nav>
 
   </div>

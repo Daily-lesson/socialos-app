@@ -7,7 +7,7 @@
  * approval notifications with one-tap actions and routes taps into the app.
  */
 
-const CACHE_NAME = 'socialos-v31'; // v31: top safe-area insets (status-bar overlap made the landing Sign in untappable on iPhone)
+const CACHE_NAME = 'socialos-v32'; // v32: responsive nav — tabs that don't fit collapse into a "More" tab (index.html/app.css/ui.js)
 const SHELL_ASSETS = [
   './',
   './index.html',

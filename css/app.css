@@ -272,6 +272,72 @@ img { max-width: 100%; height: auto; }
   box-shadow: 0 0 0 2px var(--bg-primary);
 }
 
+/* ── "More" overflow tab + popover (bottom-bar mode only, JS-driven) ──
+   ui.js updateNavOverflow() hides tabs that don't fit the bar's width and
+   lists them here instead — menu choices are never squeezed off-screen. */
+
+#nav-more-menu {
+  position: absolute;
+  bottom: calc(100% + 10px);
+  right: 10px;
+  min-width: 200px;
+  max-width: calc(100vw - 20px);
+  background: rgba(16, 16, 28, 0.96);
+  -webkit-backdrop-filter: blur(18px);
+  backdrop-filter: blur(18px);
+  border: 1px solid var(--bg-border);
+  border-radius: var(--radius-md);
+  padding: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.5);
+  z-index: 110;
+}
+
+#nav-more-menu[hidden] { display: none; }
+
+.nav-more-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 11px 12px;
+  min-height: 44px;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 0.875rem;
+  font-weight: 500;
+  font-family: var(--font-body);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  text-align: left;
+}
+
+.nav-more-item:hover { color: var(--text-primary); background: rgba(148, 156, 255, 0.06); }
+
+.nav-more-item.active {
+  color: var(--text-primary);
+  background: rgba(110, 123, 255, 0.12);
+}
+
+.nav-more-item .nav-tab-icon { width: 20px; height: 20px; flex: none; }
+
+.nav-more-badge-inline {
+  margin-left: auto;
+  background: var(--danger);
+  color: #fff;
+  font-size: 0.625rem;
+  font-weight: 700;
+  min-width: 17px;
+  height: 17px;
+  border-radius: var(--radius-full);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 4px;
+}
+
 /* ── Desktop: sidebar ──────────────────────────────────────────────── */
 
 @media (min-width: 1024px) {
@@ -283,7 +349,15 @@ img { max-width: 100%; height: auto; }
     border-right: 1px solid var(--bg-border);
     padding: var(--space-lg) var(--space-md);
     gap: var(--space-xl);
+    /* A short window (landscape phone/tablet) must scroll the stacked
+       tabs, not clip them off the bottom with no recovery. */
+    overflow-y: auto;
   }
+
+  /* The sidebar is vertical — nothing can overflow horizontally, so the
+     More tab/menu never appear here (static guard; JS also hides them). */
+  #nav-more-tab,
+  #nav-more-menu { display: none !important; }
 
   .nav-brand {
     display: flex;
