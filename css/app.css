@@ -834,6 +834,25 @@ img { max-width: 100%; height: auto; }
   box-shadow: var(--shadow-card);
 }
 
+/* The card a notification tap was about (js/app.js focusCard). Scrolled into
+   view, then flashed for ~2.4s so the eye lands on it in a long list. The
+   ring stays for the whole flash; only the wash fades, so the target is
+   findable even if the animation is suppressed. */
+.card-focused {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent), var(--shadow-card);
+  animation: card-focus-flash 2.4s ease-out;
+}
+
+@keyframes card-focus-flash {
+  0%   { background: color-mix(in srgb, var(--accent) 22%, var(--bg-card)); }
+  100% { background: var(--bg-card); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .card-focused { animation: none; }
+}
+
 .card-header {
   display: flex;
   align-items: center;

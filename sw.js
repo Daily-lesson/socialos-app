@@ -7,7 +7,7 @@
  * approval notifications with one-tap actions and routes taps into the app.
  */
 
-const CACHE_NAME = 'socialos-v32'; // v32: responsive nav — tabs that don't fit collapse into a "More" tab (index.html/app.css/ui.js)
+const CACHE_NAME = 'socialos-v33'; // v33: notifications deep-link to the exact draft/post/handoff they're about (sw.js/app.js/app.css)
 const SHELL_ASSETS = [
   './',
   './index.html',
@@ -266,9 +266,32 @@ async function swRejectDraft(draftId) {
       icon: './icons/icon-192.png',
       badge: './icons/icon-192.png',
       tag: 'draft-' + draftId, // replaces the original card
-      data: { type: 'info', url: 'queue' }
+      // On success the draft is gone, so the queue itself is the honest
+      // destination; on failure it is still sitting there and the tap should
+      // land on it.
+      data: { type: 'info', url: ok ? 'queue' : 'queue/' + draftId }
     }
   );
+}
+
+/**
+ * The live post on the platform, when the publish returned a real receipt.
+ * js/reddit.js stores the permalink URL itself; js/linkedin.js stores the
+ * share/ugcPost URN, which addresses the same public update. Anything else
+ * (including a successful publish that returned no id) yields '' — the same
+ * evidence-not-absence rule the queue write-back follows (CLAUDE.md gotcha
+ * 10): no receipt, no link, rather than a guessed URL that 404s.
+ * @param {{platform?: string, platform_post_id?: string|null}} post
+ * @returns {string}
+ */
+function swPostPermalink(post) {
+  const id = post && post.platform_post_id;
+  if (!id || typeof id !== 'string') return '';
+  if (/^https?:\/\//i.test(id)) return id;              // reddit: already a URL
+  if (post.platform === 'linkedin' && id.startsWith('urn:li:')) {
+    return 'https://www.linkedin.com/feed/update/' + encodeURIComponent(id) + '/';
+  }
+  return '';
 }
 
 /** Focus an open SocialOS window and route it, or open a new one. */
@@ -290,7 +313,7 @@ async function swOpenApp(route) {
  * platforms (LinkedIn/Reddit) can auto-post; the post record only exists
  * in the IndexedDB of the device that scheduled it, so no other
  * subscribed device can double-post.
- * @returns {Promise<{ok: boolean, platform?: string, already?: boolean, error?: string, reason?: string}|null>}
+ * @returns {Promise<{ok: boolean, platform?: string, already?: boolean, permalink?: string, error?: string, reason?: string}|null>}
  *   null = auto-post doesn't apply (off / other device / assisted platform)
  */
 async function swAutoPostDue(data) {
@@ -309,7 +332,7 @@ async function swAutoPostDue(data) {
     const post = await SocialOSDB.get(SocialOSDB.STORES.posts, data.postId);
     if (!post) return null; // scheduled on a different device — it will post
     if (post.status === 'published') {
-      return { ok: true, platform: post.platform, already: true };
+      return { ok: true, platform: post.platform, already: true, permalink: swPostPermalink(post) };
     }
 
     // STALE GUARD (ecosystem wave): a device re-subscribing after a quiet
@@ -400,7 +423,7 @@ async function swAutoPostDue(data) {
         await SocialOSDB.put(SocialOSDB.STORES.content, content);
       }
     }
-    return { ok: true, platform: post.platform };
+    return { ok: true, platform: post.platform, permalink: swPostPermalink(post) };
   } catch (err) {
     return { ok: false, error: (err && err.message) || String(err) };
   }
@@ -424,15 +447,21 @@ async function swHandlePush(data) {
   if (type === 'due' && data.postId) {
     const auto = await swAutoPostDue(data);
     if (auto && auto.ok) {
+      // This card is about a post that is now LIVE, so the thing to link to is
+      // the post itself, not a screen back in the app. `openUrl` is only set
+      // when the platform handed back a real receipt (swPostPermalink) — with
+      // no receipt the tap falls back to the app, unchanged.
+      const permalink = auto.permalink || '';
       return self.registration.showNotification(
         auto.already ? 'Already posted ✓' : `Posted to ${auto.platform} ✓`,
         {
           ...base,
           body: auto.already
             ? 'This scheduled post already went out.'
-            : 'Your scheduled post published itself — nothing to do.',
+            : `Your scheduled post published itself — ${permalink ? 'tap to see it live.' : 'nothing to do.'}`,
           tag: 'due-' + data.postId,
-          data: { type: 'info', url: 'approvals' }
+          data: { type: 'info', url: 'approvals', openUrl: permalink },
+          actions: permalink ? [{ action: 'app', title: '📱 Open SocialOS' }] : []
         }
       );
     }
@@ -487,13 +516,27 @@ self.addEventListener('notificationclick', (event) => {
     return;
   }
 
+  // A card about something already published links out to the live post
+  // (swPostPermalink). "📱 Open SocialOS" is the escape hatch back into the
+  // app — on iOS, which shows no action buttons, the body tap is the link,
+  // which is the right default for a post that has already gone out.
+  if (data.openUrl && action !== 'app') {
+    event.waitUntil(self.clients.openWindow(data.openUrl));
+    return;
+  }
+
   let route = data.url || '';
   if (action === 'approve' && data.draftId) route = 'queue-post/' + data.draftId;
   else if (action === 'edit' && data.draftId) route = 'queue-edit/' + data.draftId;
   else if (action === 'post' && data.postId) route = 'due/' + data.postId;
   else if (action === 'fix') route = 'settings';
-  else if (!route && data.draftId) route = 'queue';
-  else if (!route && data.postId) route = 'approvals';
+  // Land on the ITEM, not the list it lives in. The dispatcher may still send
+  // a bare screen — an older mkt-push, or a `mkt_push_queue` row written
+  // before this shipped — so upgrade it here whenever the payload names the
+  // one thing the notification is about. A digest ("N drafts waiting") is
+  // genuinely about the list and carries no id, so it is left alone.
+  else if (data.draftId && (!route || route === 'queue')) route = 'queue/' + data.draftId;
+  else if (data.postId && (!route || route === 'approvals')) route = 'approvals/' + data.postId;
 
   event.waitUntil(swOpenApp(route));
 });

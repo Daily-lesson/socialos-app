@@ -26,7 +26,13 @@ const SocialOS = (() => {
     queue: {
       /** @type {any[]} */ drafts: [],
       /** @type {Object<string, boolean>} */ direct: {},
-      /** @type {Object<string,{dataUri:string,alt:string}>} */ media: {}
+      /** @type {Object<string,{dataUri:string,alt:string}>} */ media: {},
+      // True only after a fetch that actually returned the queue. A
+      // notification deep link may name a draft that isn't on screen, and
+      // "it's no longer queued" is a claim we can only make when we HAVE the
+      // queue — not when the secret is missing or the fetch failed, where the
+      // screen is already saying what's wrong.
+      /** @type {boolean} */ loaded: false
     },
     // Quick Composer (js/composer.js) view state — all ephemeral, never persisted.
     composer: {
@@ -1255,6 +1261,7 @@ const SocialOS = (() => {
   async function renderQueue() {
     flushQueueWriteBacks().catch(() => {}); // best-effort catch-up, fire-and-forget
     if (!(await SocialOSQueue.isConfigured())) {
+      state.queue.loaded = false;
       SocialOSUI.renderQueue({ configured: false, drafts: [], error: null, direct: {} });
       return;
     }
@@ -1272,6 +1279,7 @@ const SocialOS = (() => {
     try {
       const drafts = await SocialOSQueue.fetchQueue();
       state.queue.drafts = drafts;
+      state.queue.loaded = true;
       const visible = SocialOSQueue.personaFilter(drafts, persona);
       SocialOSUI.renderQueue({
         configured: true, drafts: visible, hiddenCount: drafts.length - visible.length, persona, error: null,
@@ -1279,6 +1287,7 @@ const SocialOS = (() => {
       });
       loadQueueThumbnails(drafts); // fire-and-forget
     } catch (err) {
+      state.queue.loaded = false;
       SocialOSUI.renderQueue({
         configured: true, drafts: [], hiddenCount: 0, persona, error: queueErrMsg(err),
         direct, media: state.queue.media, week, reconnect
@@ -2463,16 +2472,88 @@ const SocialOS = (() => {
   // SocialOS window already exists. Every route lands on the same in-app
   // flow the buttons use — the SW itself never publishes anything.
 
+  // A notification is about ONE thing. Landing on the screen that thing lives
+  // on is not the same as landing on the thing: the Queue can hold twenty
+  // drafts and Approvals three sections, and "which of these did it mean?" is
+  // exactly the question the notification already answered. Every id-bearing
+  // route below therefore scrolls its card into view and flashes it.
+  // Cards already carry the ids — data-draft-id / data-post-id /
+  // data-handoff-id in js/ui.js — so this reads the rendered DOM rather than
+  // adding a parallel lookup that could drift from what's on screen.
+  const FOCUS_ATTR = { draft: 'data-draft-id', post: 'data-post-id', handoff: 'data-handoff-id' };
+  const FOCUS_FLASH_MS = 2400;
+
   /**
-   * @param {string} route - e.g. 'queue', 'queue-post/<draftId>', 'due/<postId>'
+   * Scroll the card for `id` into view and highlight it briefly.
+   * Matches on the dataset value rather than a built attribute selector, so an
+   * id carrying a quote can never break (or inject into) the query.
+   * @param {'draft'|'post'|'handoff'} kind
+   * @param {string} id
+   * @returns {boolean} false when no such card is on screen — the caller owns
+   *   the honest "it's not here any more / it's not yours" message.
+   */
+  function focusCard(kind, id) {
+    const attr = FOCUS_ATTR[kind];
+    if (!attr || !id) return false;
+    /** @type {HTMLElement|null} */
+    let el = null;
+    document.querySelectorAll('[' + attr + ']').forEach(node => {
+      if (!el && node.getAttribute(attr) === id) el = /** @type {HTMLElement} */ (node);
+    });
+    if (!el) return false;
+
+    const card = /** @type {HTMLElement} */ (el);
+    const reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    // One frame so the freshly-written innerHTML has been laid out — before
+    // that, scrollIntoView measures a card that has no position yet.
+    requestAnimationFrame(() => {
+      try { card.scrollIntoView({ behavior: reduce ? 'auto' : 'smooth', block: 'center' }); } catch { card.scrollIntoView(); }
+      card.classList.add('card-focused');
+      setTimeout(() => card.classList.remove('card-focused'), FOCUS_FLASH_MS);
+    });
+    return true;
+  }
+
+  /**
+   * Say why a deep-linked draft isn't on screen — without claiming more than
+   * we know. Shared by every queue route (`queue`, `queue-post`, `queue-edit`)
+   * because they share the hazard: if the queue never loaded (no Front Office
+   * secret, or the fetch failed) then "no longer queued" is a fabrication, and
+   * renderQueue has already put the real reason on screen.
+   */
+  function toastQueueDraftMissing() {
+    if (!state.queue.loaded) return; // the screen already explains itself
+    SocialOSUI.toast('That draft is no longer queued — it may already be handled.', 'info', 6000);
+  }
+
+  /**
+   * @param {string} route - e.g. 'queue/<draftId>', 'queue-post/<draftId>', 'due/<postId>'
    * @returns {Promise<boolean>} true if the route was recognized
    */
   async function handleRoute(route) {
     const [cmd, arg] = String(route || '').split('/');
     switch (cmd) {
-      case 'queue':
+      // 'queue' alone = the list (the daily digest is about N drafts, not one).
+      // 'queue/<draftId>' = the card that push was about.
+      case 'queue': {
         await navigate('queue');
+        if (!arg) return true;
+        if (focusCard('draft', arg)) return true;
+        // Not on screen: either handled elsewhere, or filtered out because it
+        // belongs to the other identity. Say which — same truthfulness rule
+        // queue-edit follows.
+        const draft = state.queue.drafts.find(d => d.id === arg);
+        if (draft) {
+          const persona = await SocialOSDB.getPersona();
+          if (queueDraftBelongsToOtherIdentity(draft, persona)) {
+            const other = persona.kind === 'brand' ? 'personal' : 'brand';
+            SocialOSUI.toast(`This draft belongs to the ${other} identity — open it on that install.`, 'error', 6000);
+            return true;
+          }
+        }
+        toastQueueDraftMissing();
         return true;
+      }
 
       case 'queue-post': {
         // "Approve & Post" straight from the notification: load the queue,
@@ -2481,7 +2562,7 @@ const SocialOS = (() => {
         if (arg && state.queue.drafts.some(d => d.id === arg)) {
           await approveAndPostQueueDraft(arg);
         } else if (arg) {
-          SocialOSUI.toast('That draft is no longer queued — it may already be handled.', 'info', 6000);
+          toastQueueDraftMissing();
         }
         return true;
       }
@@ -2502,7 +2583,7 @@ const SocialOS = (() => {
           }
           SocialOSUI.renderQueueEdit(draft, state.queue.direct, state.queue.media[draft.id]);
         } else if (arg) {
-          SocialOSUI.toast('That draft is no longer queued — it may already be handled.', 'info', 6000);
+          toastQueueDraftMissing();
         }
         return true;
       }
@@ -2512,17 +2593,37 @@ const SocialOS = (() => {
         await navigate('approvals');
         return true;
 
-      case 'approvals':
+      // 'approvals' alone = the list (a multi-post "N posts are due" reminder
+      // is honestly about all of them). 'approvals/<postId>' = one post.
+      case 'approvals': {
         state.approvalsTab = 'posts';
         await navigate('approvals');
+        if (!arg) return true;
+        if (focusCard('post', arg)) return true;
+        // Approvals only lists what still needs a human. A post that isn't
+        // there has either been published or been removed — check before
+        // claiming it's gone.
+        const post = await SocialOSDB.get(SocialOSDB.STORES.posts, arg);
+        SocialOSUI.toast(
+          post && post.status === 'published'
+            ? 'Already posted ✓'
+            : 'That post is no longer waiting — it may already be handled.',
+          'info', 5000
+        );
         return true;
+      }
 
-      // The "did it post?" nudge (saveHandoff) lands here — open Approvals →
-      // Posts where the Handed-off section shows the confirm buttons.
-      case 'handoff':
+      // The "did it post?" nudge (saveHandoff) lands here — Approvals → Posts,
+      // on the specific handed-off card whose confirm buttons it's asking about.
+      case 'handoff': {
         state.approvalsTab = 'posts';
         await navigate('approvals');
+        if (!arg) return true;
+        if (!focusCard('handoff', arg)) {
+          SocialOSUI.toast('That handoff is already settled — nothing left to confirm.', 'info', 5000);
+        }
         return true;
+      }
 
       case 'compose':
         await navigate('compose');
