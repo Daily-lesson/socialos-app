@@ -7,7 +7,7 @@
  * approval notifications with one-tap actions and routes taps into the app.
  */
 
-const CACHE_NAME = 'socialos-v33'; // v33: notifications deep-link to the exact draft/post/handoff they're about (sw.js/app.js/app.css)
+const CACHE_NAME = 'socialos-v34'; // v34: deep-link focus survives the queue's thumbnail re-render; "Posted ✓" keeps the body tap in-app (sw.js/app.js)
 const SHELL_ASSETS = [
   './',
   './index.html',
@@ -276,18 +276,26 @@ async function swRejectDraft(draftId) {
 
 /**
  * The live post on the platform, when the publish returned a real receipt.
- * js/reddit.js stores the permalink URL itself; js/linkedin.js stores the
- * share/ugcPost URN, which addresses the same public update. Anything else
- * (including a successful publish that returned no id) yields '' — the same
- * evidence-not-absence rule the queue write-back follows (CLAUDE.md gotcha
- * 10): no receipt, no link, rather than a guessed URL that 404s.
+ * js/reddit.js stores the permalink URL itself, so that case is exact.
+ *
+ * LinkedIn is BEST-EFFORT and deliberately not the primary tap target: the
+ * v2/ugcPosts response gives a share URN, while linkedin.com/feed/update/
+ * permalinks are usually written with an activity URN, and those are
+ * different id spaces. It has not been verified end-to-end against a live
+ * post, so this URL may not resolve — which is exactly why "View post" is a
+ * secondary action button and the notification body still opens the app.
+ * Anything else (including a successful publish that returned no id) yields
+ * '' — the evidence-not-absence rule the queue write-back follows
+ * (CLAUDE.md gotcha 10): no receipt, no link.
  * @param {{platform?: string, platform_post_id?: string|null}} post
  * @returns {string}
  */
 function swPostPermalink(post) {
   const id = post && post.platform_post_id;
   if (!id || typeof id !== 'string') return '';
-  if (/^https?:\/\//i.test(id)) return id;              // reddit: already a URL
+  // https only, and the same test the click handler re-applies — a link this
+  // builds that the consumer would reject is a button that does nothing.
+  if (/^https:\/\//i.test(id)) return id;              // reddit: already a URL
   if (post.platform === 'linkedin' && id.startsWith('urn:li:')) {
     return 'https://www.linkedin.com/feed/update/' + encodeURIComponent(id) + '/';
   }
@@ -447,10 +455,14 @@ async function swHandlePush(data) {
   if (type === 'due' && data.postId) {
     const auto = await swAutoPostDue(data);
     if (auto && auto.ok) {
-      // This card is about a post that is now LIVE, so the thing to link to is
-      // the post itself, not a screen back in the app. `openUrl` is only set
-      // when the platform handed back a real receipt (swPostPermalink) — with
-      // no receipt the tap falls back to the app, unchanged.
+      // The live post is offered as an ACTION, never as the body tap.
+      // js/push.js states the platform invariant this rests on: iOS renders
+      // no action buttons, so whatever the body tap does is the only thing an
+      // iPhone user can reach. Putting the permalink there made this one card
+      // a one-way door out of the app for exactly the users who see it
+      // (auto-post is on, so the notification is their only touchpoint with
+      // that post). The body tap therefore keeps opening the app, and
+      // "View post" is a bonus where buttons exist.
       const permalink = auto.permalink || '';
       return self.registration.showNotification(
         auto.already ? 'Already posted ✓' : `Posted to ${auto.platform} ✓`,
@@ -458,10 +470,10 @@ async function swHandlePush(data) {
           ...base,
           body: auto.already
             ? 'This scheduled post already went out.'
-            : `Your scheduled post published itself — ${permalink ? 'tap to see it live.' : 'nothing to do.'}`,
+            : 'Your scheduled post published itself — nothing to do.',
           tag: 'due-' + data.postId,
           data: { type: 'info', url: 'approvals', openUrl: permalink },
-          actions: permalink ? [{ action: 'app', title: '📱 Open SocialOS' }] : []
+          actions: permalink ? [{ action: 'view', title: '🔗 View post' }] : []
         }
       );
     }
@@ -516,11 +528,14 @@ self.addEventListener('notificationclick', (event) => {
     return;
   }
 
-  // A card about something already published links out to the live post
-  // (swPostPermalink). "📱 Open SocialOS" is the escape hatch back into the
-  // app — on iOS, which shows no action buttons, the body tap is the link,
-  // which is the right default for a post that has already gone out.
-  if (data.openUrl && action !== 'app') {
+  // "View post" on an already-published card — the ONLY route that leaves the
+  // app, and only on an explicit button press (never the body tap; see
+  // swHandlePush). The scheme is re-checked here rather than trusted from
+  // swPostPermalink: `data` on the generic push branch is the decrypted
+  // payload as sent, so a future field named openUrl would otherwise reach
+  // openWindow() from a service worker unvalidated. Validate where it is
+  // consumed, not only where today's one producer happens to build it.
+  if (action === 'view' && typeof data.openUrl === 'string' && /^https:\/\//i.test(data.openUrl)) {
     event.waitUntil(self.clients.openWindow(data.openUrl));
     return;
   }

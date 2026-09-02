@@ -1213,12 +1213,14 @@ const SocialOS = (() => {
    * @returns {boolean}
    */
   function queueDraftBelongsToOtherIdentity(draft, persona) {
-    const agent = (draft?.agent || '').toLowerCase();
-    if (persona.kind === 'brand') {
-      const agents = persona.queue_agents || [];
-      return agents.length > 0 && !agents.includes(agent);
-    }
-    return SocialOSQueue.BRAND_AGENTS.includes(agent);
+    if (!draft) return false;
+    // Defined AS the view filter rather than re-deriving it: this answers
+    // "would personaFilter have hidden this card?", and a deep-link route
+    // that disagrees with the filter turns into a lie. It did — this used to
+    // test the agent alone while personaFilter also filters on
+    // queue_products, so a draft hidden by product fell through to
+    // "no longer queued" about a draft sitting in state.queue.drafts.
+    return SocialOSQueue.personaFilter([draft], persona).length === 0;
   }
 
   /**
@@ -1247,6 +1249,7 @@ const SocialOS = (() => {
         configured: true, drafts: visible, hiddenCount: state.queue.drafts.length - visible.length, persona, error: null,
         direct: state.queue.direct, media: state.queue.media, week, reconnect
       });
+      reapplyFocus(); // this render just replaced the card a push tap focused
     }
   }
 
@@ -1402,8 +1405,7 @@ const SocialOS = (() => {
       const persona = await SocialOSDB.getPersona();
       if (queueDraftBelongsToOtherIdentity(existingDraft, persona)) {
         releaseWindow();
-        const other = persona.kind === 'brand' ? 'personal' : 'brand';
-        SocialOSUI.toast(`This draft belongs to the ${other} identity — open it on that install.`, 'error', 6000);
+        toastQueueDraftOtherIdentity();
         return;
       }
     }
@@ -2484,6 +2486,14 @@ const SocialOS = (() => {
   const FOCUS_FLASH_MS = 2400;
 
   /**
+   * The deep-link focus currently being shown, so a re-render can restore it
+   * (see focusCard). Time-boxed to the flash window: once that passes the
+   * user has had their answer and a later re-render must not re-scroll them.
+   * @type {{kind: string, id: string, expiresAt: number}|null}
+   */
+  let pendingFocus = null;
+
+  /**
    * Scroll the card for `id` into view and highlight it briefly.
    * Matches on the dataset value rather than a built attribute selector, so an
    * id carrying a quote can never break (or inject into) the query.
@@ -2493,6 +2503,26 @@ const SocialOS = (() => {
    *   the honest "it's not here any more / it's not yours" message.
    */
   function focusCard(kind, id) {
+    if (!applyCardFocus(kind, id)) return false;
+    // Remember it: a screen can re-render UNDER the highlight. renderQueue
+    // fires loadQueueThumbnails fire-and-forget, and the first thumbnail to
+    // arrive rewrites the whole list's innerHTML — destroying the focused
+    // node mid-flash and, because the cards above the target grow images,
+    // moving the target off-screen. That is not a corner case: a cold open
+    // from a push has an empty media cache, so ANY queued draft with media
+    // triggers it, on exactly the deep link this all exists for.
+    pendingFocus = { kind, id, expiresAt: Date.now() + FOCUS_FLASH_MS };
+    return true;
+  }
+
+  /**
+   * The DOM half of focusCard: find the card, scroll to it, flash it.
+   * @param {number} [flashMs] - how long the highlight stays. A re-apply
+   *   passes the REMAINING window rather than a fresh full flash, so a
+   *   re-render can't extend (or, on a trickle of re-renders, keep restarting)
+   *   the moment the user was meant to get once.
+   */
+  function applyCardFocus(kind, id, flashMs) {
     const attr = FOCUS_ATTR[kind];
     if (!attr || !id) return false;
     /** @type {HTMLElement|null} */
@@ -2509,9 +2539,23 @@ const SocialOS = (() => {
     requestAnimationFrame(() => {
       try { card.scrollIntoView({ behavior: reduce ? 'auto' : 'smooth', block: 'center' }); } catch { card.scrollIntoView(); }
       card.classList.add('card-focused');
-      setTimeout(() => card.classList.remove('card-focused'), FOCUS_FLASH_MS);
+      setTimeout(() => card.classList.remove('card-focused'),
+        Math.max(0, flashMs === undefined ? FOCUS_FLASH_MS : flashMs));
     });
     return true;
+  }
+
+  /**
+   * Re-apply a still-live deep-link focus after a screen re-rendered itself.
+   * Call this at the END of any render that can replace cards the user is
+   * already looking at. Expired or already-consumed focus is a no-op, so it
+   * is safe to call unconditionally.
+   */
+  function reapplyFocus() {
+    if (!pendingFocus) return;
+    const left = pendingFocus.expiresAt - Date.now();
+    if (left <= 0) { pendingFocus = null; return; }
+    applyCardFocus(pendingFocus.kind, pendingFocus.id, left);
   }
 
   /**
@@ -2521,6 +2565,19 @@ const SocialOS = (() => {
    * secret, or the fetch failed) then "no longer queued" is a fabrication, and
    * renderQueue has already put the real reason on screen.
    */
+  /**
+   * The other half of the same honesty rule: the draft IS queued, this
+   * install just doesn't show it. Worded for what the filter actually keys
+   * on (agent AND product, per personaFilter) rather than naming the "other
+   * identity", which is only right for the agent half of that test.
+   */
+  function toastQueueDraftOtherIdentity() {
+    SocialOSUI.toast(
+      "That draft is filtered out of this install's queue by your identity settings — open it on the install that owns it.",
+      'error', 6000
+    );
+  }
+
   function toastQueueDraftMissing() {
     if (!state.queue.loaded) return; // the screen already explains itself
     SocialOSUI.toast('That draft is no longer queued — it may already be handled.', 'info', 6000);
@@ -2546,8 +2603,7 @@ const SocialOS = (() => {
         if (draft) {
           const persona = await SocialOSDB.getPersona();
           if (queueDraftBelongsToOtherIdentity(draft, persona)) {
-            const other = persona.kind === 'brand' ? 'personal' : 'brand';
-            SocialOSUI.toast(`This draft belongs to the ${other} identity — open it on that install.`, 'error', 6000);
+            toastQueueDraftOtherIdentity();
             return true;
           }
         }
@@ -2577,8 +2633,7 @@ const SocialOS = (() => {
         if (draft) {
           const persona = await SocialOSDB.getPersona();
           if (queueDraftBelongsToOtherIdentity(draft, persona)) {
-            const other = persona.kind === 'brand' ? 'personal' : 'brand';
-            SocialOSUI.toast(`This draft belongs to the ${other} identity — open it on that install.`, 'error', 6000);
+            toastQueueDraftOtherIdentity();
             return true;
           }
           SocialOSUI.renderQueueEdit(draft, state.queue.direct, state.queue.media[draft.id]);
