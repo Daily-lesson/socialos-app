@@ -11,7 +11,7 @@ const SocialOS = (() => {
 
   /**
    * In-memory working state.
-   * @type {{currentScreen: string, onboardingStep: number, onboardingData: Object<string, any>, calendarFocusDate: string|null, approvalsTab: string, engagementSubTab: string, queue: {drafts: any[], direct: Object<string, boolean>, media: Object<string, {dataUri: string, alt: string}>}, composer: {mode: string, text: string, link: string, selected: string[]|null, oneTap: boolean, posts: any[], results: any[]|null, schedule: {show: boolean, time: string}, replyPlatform: string, comment: string, postSummary: string, reply: {reply: string, alternative: string}|null, attach: {contentId: string, thumbUrl: string, title: string, flagged: boolean, auto?: boolean}|null, attachPicker: boolean, autoCardId: string|null, autoVisualBlocked: boolean, gen: {show: boolean, template: string, size: string, text: string, autoText: string, note: string, byline: string}, linkFind: {show: boolean, loading: boolean, items: any[], error: string}}}}
+   * @type {{currentScreen: string, onboardingStep: number, onboardingData: Object<string, any>, calendarFocusDate: string|null, approvalsTab: string, engagementSubTab: string, queue: {drafts: any[], direct: Object<string, boolean>, media: Object<string, {dataUri: string, alt: string}>, loaded: boolean}, workorders: {orders: any[], done: any[], projects: string[], filter: string, loaded: boolean, fetchedAt: string, cached: boolean, error: string|null}, composer: {mode: string, text: string, link: string, selected: string[]|null, oneTap: boolean, posts: any[], results: any[]|null, schedule: {show: boolean, time: string}, replyPlatform: string, comment: string, postSummary: string, reply: {reply: string, alternative: string}|null, attach: {contentId: string, thumbUrl: string, title: string, flagged: boolean, auto?: boolean}|null, attachPicker: boolean, autoCardId: string|null, autoVisualBlocked: boolean, gen: {show: boolean, template: string, size: string, text: string, autoText: string, note: string, byline: string}, linkFind: {show: boolean, loading: boolean, items: any[], error: string}}}}
    */
   const state = {
     currentScreen: 'landing',
@@ -33,6 +33,18 @@ const SocialOS = (() => {
       // queue — not when the secret is missing or the fetch failed, where the
       // screen is already saying what's wrong.
       /** @type {boolean} */ loaded: false
+    },
+    // Work Orders (js/workorders.js) — the server list as last read, plus the
+    // one bit of view state (the project filter). Never persisted.
+    workorders: {
+      /** @type {any[]} */ orders: [],
+      /** @type {any[]} */ done: [],
+      /** @type {string[]} */ projects: [],
+      filter: 'all',
+      loaded: false,
+      fetchedAt: '',
+      cached: false,
+      /** @type {string|null} */ error: null
     },
     // Quick Composer (js/composer.js) view state — all ephemeral, never persisted.
     composer: {
@@ -139,6 +151,12 @@ const SocialOS = (() => {
         SocialOSUI.showNav(true);
         SocialOSUI.showScreen('screen-queue');
         await renderQueue();
+        break;
+
+      case 'workorders':
+        SocialOSUI.showNav(true);
+        SocialOSUI.showScreen('screen-workorders');
+        await renderWorkOrders();
         break;
 
       case 'calendar':
@@ -1251,6 +1269,69 @@ const SocialOS = (() => {
       });
       reapplyFocus(); // this render just replaced the card a push tap focused
     }
+  }
+
+
+  /**
+   * Friendly error for Work Orders calls — same origin/offline diagnosis as
+   * queueErrMsg (CLAUDE.md gotcha 5), work-order wording.
+   * @param {unknown} err
+   * @returns {string}
+   */
+  function woErrMsg(err) {
+    // @ts-ignore tag set by js/workorders.js `call`
+    if (err && err.unsupported) {
+      return 'the mkt-queue function on the server predates work orders — deploy it (see the SocialOS section of Scots_Tasks.md) and try again.';
+    }
+    const m = err instanceof Error ? err.message : String(err);
+    if (/failed to fetch|networkerror|load failed|ERR_|fetch/i.test(m)) {
+      return "can't reach the queue service. You're likely on a preview link or offline — open the live app (the installed / Add-to-Home-Screen URL), which is the origin the backend is configured for.";
+    }
+    return m;
+  }
+
+  /**
+   * Store a server list. The server owns the file; the client never edits
+   * a card locally — every visible tick is one the server confirmed.
+   * @param {WorkOrderList} list
+   */
+  function applyWorkOrderList(list) {
+    const w = state.workorders;
+    w.orders = list.orders;
+    w.done = list.done;
+    w.projects = list.projects;
+    w.fetchedAt = list.fetched_at;
+    w.cached = list.cached;
+    w.loaded = true;
+    w.error = null;
+    if (w.filter !== 'all' && !list.projects.includes(w.filter)) w.filter = 'all';
+  }
+
+  /** Re-render from state (filter taps, post-tick) without a fetch. */
+  function renderWorkOrdersView() {
+    SocialOSUI.renderWorkOrders({ configured: true, ...state.workorders });
+  }
+
+  /**
+   * Load + render the Work Orders screen (js/workorders.js). `refresh`
+   * bypasses the server's short read cache.
+   * @param {boolean} [refresh]
+   */
+  async function renderWorkOrders(refresh) {
+    if (!(await SocialOSWorkOrders.isConfigured())) {
+      state.workorders.loaded = false;
+      SocialOSUI.renderWorkOrders({ configured: false, ...state.workorders });
+      return;
+    }
+    SocialOSUI.loading(true, 'Reading Scots_Tasks.md…');
+    try {
+      applyWorkOrderList(await SocialOSWorkOrders.fetchWorkOrders(refresh));
+    } catch (err) {
+      state.workorders.loaded = false;
+      state.workorders.error = woErrMsg(err);
+    }
+    SocialOSUI.loading(false);
+    renderWorkOrdersView();
   }
 
   /**
@@ -2482,7 +2563,7 @@ const SocialOS = (() => {
   // Cards already carry the ids — data-draft-id / data-post-id /
   // data-handoff-id in js/ui.js — so this reads the rendered DOM rather than
   // adding a parallel lookup that could drift from what's on screen.
-  const FOCUS_ATTR = { draft: 'data-draft-id', post: 'data-post-id', handoff: 'data-handoff-id' };
+  const FOCUS_ATTR = { draft: 'data-draft-id', post: 'data-post-id', handoff: 'data-handoff-id', wo: 'data-wo-id' };
   const FOCUS_FLASH_MS = 2400;
 
   /**
@@ -2497,7 +2578,7 @@ const SocialOS = (() => {
    * Scroll the card for `id` into view and highlight it briefly.
    * Matches on the dataset value rather than a built attribute selector, so an
    * id carrying a quote can never break (or inject into) the query.
-   * @param {'draft'|'post'|'handoff'} kind
+   * @param {'draft'|'post'|'handoff'|'wo'} kind
    * @param {string} id
    * @returns {boolean} false when no such card is on screen — the caller owns
    *   the honest "it's not here any more / it's not yours" message.
@@ -2611,6 +2692,15 @@ const SocialOS = (() => {
         return true;
       }
 
+      // 'workorders' alone = the list; 'workorders/WO-NNN' = that card.
+      case 'workorders': {
+        await navigate('workorders');
+        if (!arg) return true;
+        if (focusCard('wo', arg)) return true;
+        if (state.workorders.loaded) SocialOSUI.toast(`${arg} isn't on the open list — done, or never existed.`, 'info', 4000);
+        return true;
+      }
+
       case 'queue-post': {
         // "Approve & Post" straight from the notification: load the queue,
         // then run the same one-tap flow as the in-app button.
@@ -2707,7 +2797,7 @@ const SocialOS = (() => {
     const h = (location.hash || '').replace(/^#\/?/, '');
     if (!h) return null;
     const cmd = h.split('/')[0];
-    if (!['queue', 'queue-post', 'queue-edit', 'due', 'approvals', 'handoff', 'compose', 'settings'].includes(cmd)) return null;
+    if (!['queue', 'queue-post', 'queue-edit', 'due', 'approvals', 'handoff', 'compose', 'settings', 'workorders'].includes(cmd)) return null;
     history.replaceState(null, '', location.pathname + location.search);
     return h;
   }
@@ -2789,6 +2879,7 @@ const SocialOS = (() => {
         case 'go-compose':     navigate('compose'); break;
         case 'go-approvals':   navigate('approvals'); break;
         case 'go-queue':       navigate('queue'); break;
+        case 'go-workorders':  navigate('workorders'); break;
         case 'go-calendar':    navigate('calendar'); break;
         case 'go-library':     navigate('library'); break;
         case 'go-projects':    navigate('projects'); break;
@@ -4193,6 +4284,65 @@ const SocialOS = (() => {
           break;
         }
 
+        // ── Work Orders (js/workorders.js) ──────────────────────────────
+        case 'wo-refresh':
+          await renderWorkOrders(true);
+          break;
+
+        case 'wo-filter': {
+          state.workorders.filter = /** @type {HTMLElement} */ (actionEl).dataset?.project || 'all';
+          renderWorkOrdersView();
+          break;
+        }
+
+        case 'wo-copy': {
+          const text = /** @type {HTMLElement} */ (actionEl).dataset?.copy || '';
+          if (!text) break;
+          try {
+            await navigator.clipboard.writeText(text);
+            SocialOSUI.toast('Copied.', 'success', 1500);
+          } catch {
+            SocialOSUI.toast("Couldn't copy — select it by hand.", 'error');
+          }
+          break;
+        }
+
+        case 'wo-done': {
+          if (!id) break;
+          const woTitle = /** @type {HTMLElement} */ (actionEl).dataset?.title || id;
+          SocialOSUI.confirm(
+            'Mark done',
+            `<b>${SocialOSUI.escapeHtml(id)}</b> — ${SocialOSUI.escapeHtml(woTitle)}<br><br>This commits one edit to <code>Scots_Tasks.md</code> on alys <code>main</code>: tick the box, stamp today's date, move the block to Done. Only do it once the "Done when" line is actually true — nothing here verifies that for you.`,
+            'Mark done',
+            async () => {
+              SocialOSUI.loading(true, `Committing ${id}…`);
+              try {
+                const r = await SocialOSWorkOrders.markDone(id);
+                applyWorkOrderList(r.list);
+                SocialOSUI.toast(
+                  r.already
+                    ? `${id} was already done — list refreshed.`
+                    : `${id} done${r.commit ? ` — commit ${r.commit.slice(0, 7)}` : ''}.`,
+                  'success', 4000
+                );
+              } catch (err) {
+                SocialOSUI.toast(`Couldn't mark ${id} done — ${woErrMsg(err)}`, 'error', 6000);
+                // @ts-ignore tag set by js/workorders.js `call`
+                if (err && err.status === 409) {
+                  // "Not on the open list" / "changed underneath": the card on
+                  // screen is stale — re-read instead of leaving it there.
+                  SocialOSUI.loading(false);
+                  await renderWorkOrders(true);
+                  return;
+                }
+              }
+              SocialOSUI.loading(false);
+              renderWorkOrdersView();
+            }
+          );
+          break;
+        }
+
         // ── Front Office Queue (Phase 2 Cockpit, js/queue.js) ──────────
         case 'queue-refresh':
           await renderQueue();
@@ -4667,6 +4817,7 @@ const SocialOS = (() => {
       'screen-compose': 'compose',
       'screen-approvals': 'approvals',
       'screen-queue': 'queue',
+      'screen-workorders': 'workorders',
       'screen-calendar': 'calendar',
       'screen-library': 'library',
       'screen-projects': 'projects',

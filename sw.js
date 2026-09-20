@@ -7,7 +7,7 @@
  * approval notifications with one-tap actions and routes taps into the app.
  */
 
-const CACHE_NAME = 'socialos-v34'; // v34: deep-link focus survives the queue's thumbnail re-render; "Posted ✓" keeps the body tap in-app (sw.js/app.js)
+const CACHE_NAME = 'socialos-v35'; // v35: Work Orders screen (js/workorders.js + the nav tab); v34: deep-link focus survives the queue's thumbnail re-render
 const SHELL_ASSETS = [
   './',
   './index.html',
@@ -31,6 +31,7 @@ const SHELL_ASSETS = [
   './js/pm.js',
   './js/push.js',
   './js/queue.js',
+  './js/workorders.js',
   './js/self-healing.js',
   './js/ui.js',
   './js/utils.js',

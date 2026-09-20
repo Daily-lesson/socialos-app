@@ -2778,3 +2778,70 @@ body.nav-visible .version-badge {
 
 /* CSP meta tag in index.html restricts inline scripts.
    All interactive styles are class-driven, not inline. */
+
+
+/* ── Work Orders (js/workorders.js, ui.js renderWorkOrders) ─────────── */
+.wo-card { border-left: 3px solid var(--bg-border-strong); }
+.wo-card-P0 { border-left-color: var(--danger); }
+.wo-card-P1 { border-left-color: var(--warning); }
+.wo-card-P2 { border-left-color: var(--accent); }
+.wo-card-P3 { border-left-color: var(--bg-border-strong); }
+.wo-id {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+.wo-id-none { color: var(--text-faint); font-weight: 400; }
+.wo-pri { font-family: var(--font-mono); font-weight: 600; }
+.wo-pri-P0 { color: var(--danger); border-color: var(--danger); }
+.wo-pri-P1 { color: var(--warning); border-color: var(--warning); }
+.wo-pri-P2 { color: var(--accent); border-color: var(--accent); }
+.wo-age { font-size: 0.75rem; white-space: nowrap; }
+.wo-title { margin: 4px 0 10px; line-height: 1.35; }
+.wo-field { margin: 6px 0; font-size: 0.875rem; line-height: 1.5; word-break: break-word; }
+.wo-label {
+  display: inline-block;
+  margin-right: 6px;
+  font-size: 0.6875rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+.wo-steps {
+  margin: 0 0 8px;
+  padding-left: 1.4em;
+  font-size: 0.875rem;
+  line-height: 1.55;
+}
+.wo-steps li { margin: 4px 0; word-break: break-word; }
+.wo-card code, .wo-done code {
+  font-family: var(--font-mono);
+  font-size: 0.78em;
+  padding: 1px 5px;
+  background: var(--bg-surface);
+  border: 1px solid var(--bg-border);
+  border-radius: 6px;
+  word-break: break-all;
+}
+.wo-card a { color: var(--accent); text-decoration: underline; text-underline-offset: 2px; }
+.wo-copy {
+  font: inherit;
+  font-size: 0.6875rem;
+  padding: 1px 8px;
+  margin-left: 2px;
+  border-radius: var(--radius-full);
+  border: 1px solid var(--bg-border-strong);
+  background: var(--bg-elevated);
+  color: var(--text-secondary);
+  cursor: pointer;
+  vertical-align: middle;
+}
+.wo-copy:hover { color: var(--text-primary); border-color: var(--accent); }
+.wo-source { font-size: 0.8rem; }
+.wo-filters { margin-bottom: var(--space-md); }
+.wo-done { margin-top: var(--space-lg); color: var(--text-secondary); font-size: 0.85rem; }
+.wo-done summary { cursor: pointer; font-weight: 500; color: var(--text-primary); }
+.wo-done ul { padding-left: 1.2em; margin: 8px 0 0; }
+.wo-done li { margin: 4px 0; word-break: break-word; }

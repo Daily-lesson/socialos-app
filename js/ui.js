@@ -2468,6 +2468,180 @@ const SocialOSUI = (() => {
     container.innerHTML = html;
   }
 
+  // ── Work Orders (js/workorders.js) ───────────────────────────────────
+
+  /**
+   * The ONE escape used by every Work Orders sink, content and attribute
+   * alike — `escapeHtml` leaves quotes alone, which is exactly what lets a
+   * crafted value open an attribute. Safe in element content too (a browser
+   * renders `&quot;` as `"`).
+   * @param {string} s
+   */
+  function woEsc(s) {
+    return escapeHtml(s).replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+  }
+
+  /**
+   * Inline markup for one line of a work order: escape everything, then
+   * make `[text](https://…)` and bare https:// URLs tappable, and render
+   * `code` spans — a long one (a command or SQL statement) gets a Copy
+   * button. Never trusts the text as HTML; the only tags emitted are
+   * code-owned.
+   * @param {string} text
+   * @returns {string}
+   */
+  function woInline(text) {
+    // The task file is repo content: every agent run with alys attached can
+    // commit to it, so treat it as hostile input. Order matters —
+    //   1. strip the private-use sentinels so file text can never forge one
+    //      (a forged sentinel used to land INSIDE an href and expand there,
+    //      breaking out of the attribute; it could also crash the render),
+    //   2. lift code spans and URLs out of the RAW text (so `data-copy` and
+    //      `href` carry the real characters, escaped exactly once — a double
+    //      escape put `&lt;token&gt;` on the clipboard),
+    //   3. escape EVERYTHING incl. quotes, so nothing that survives can open
+    //      an attribute,
+    //   4. expand the placeholders into code-owned markup.
+    // The URL and link-text character classes exclude the sentinels, so a
+    // code span can never sit inside a URL in the first place.
+    const raw = String(text || '').replace(/[]/g, '');
+    /** @type {string[]} */
+    const codes = [];
+    /** @type {{t: string, u: string}[]} */
+    const links = [];
+    let s = raw.replace(/`([^`]+)`/g, (_, c) => `C${codes.push(c) - 1}`);
+    s = s.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g,
+      (_, t, u) => `L${links.push({ t, u }) - 1}`);
+    s = s.replace(/(^|[\s(])(https?:\/\/[^\s<)]+?)([.,;:)]*)(?=\s|$)/g,
+      (_, pre, u, punct) => `${pre}L${links.push({ t: u, u }) - 1}${punct}`);
+    s = woEsc(s);
+    s = s.replace(/L(\d+)/g, (_, i) => {
+      const l = links[+i];
+      return `<a href="${woEsc(l.u)}" target="_blank" rel="noopener">${woEsc(l.t)}</a>`;
+    });
+    s = s.replace(/C(\d+)/g, (_, i) => {
+      const c = codes[+i];
+      const copy = c.length >= 24
+        ? ` <button type="button" class="wo-copy" data-action="wo-copy" data-copy="${woEsc(c)}" aria-label="Copy">copy</button>`
+        : '';
+      return `<code>${woEsc(c)}</code>${copy}`;
+    });
+    return s;
+  }
+
+  /**
+   * One work-order card.
+   * @param {WorkOrder} o
+   * @returns {string}
+   */
+  function renderWorkOrderCard(o) {
+    const age = SocialOSWorkOrders.ageDays(o.date);
+    const ageText = age === null ? '' : (age === 0 ? 'today' : `${age} day${age === 1 ? '' : 's'} open`);
+    const pri = o.priority
+      ? `<span class="tag wo-pri wo-pri-${o.priority}" title="${woEsc(SocialOSWorkOrders.PRIORITY_LABELS[o.priority] || o.priority)}">${o.priority}</span>`
+      : '';
+    const idText = o.id ? `<span class="wo-id">${escapeHtml(o.id)}</span>` : `<span class="wo-id wo-id-none">hand-written</span>`;
+    const steps = o.steps.length
+      ? `<ol class="wo-steps">${o.steps.map(st => `<li>${woInline(st)}</li>`).join('')}</ol>`
+      : '';
+    const legacy = !o.id
+      ? `<p class="text-secondary" style="font-size:0.75rem;margin-top:8px">A line without a work-order id — written by hand, so it can only be ticked in the file.</p>`
+      : '';
+    return `
+      <div class="card wo-card${o.priority ? ' wo-card-' + o.priority : ''}" data-wo-id="${woEsc(o.id || '')}">
+        <div class="card-header">
+          ${idText}
+          ${pri}
+          <span class="tag">${escapeHtml(o.project)}</span>
+          <span class="text-secondary wo-age" style="margin-left:auto">${escapeHtml(ageText)}${ageText ? ' · ' : ''}${escapeHtml(o.date)}</span>
+        </div>
+        <h4 class="wo-title">${woInline(o.title)}</h4>
+        ${o.why ? `<p class="wo-field"><span class="wo-label">Why</span>${woInline(o.why)}</p>` : ''}
+        ${o.tail ? `<p class="wo-field text-secondary">${woInline(o.tail)}</p>` : ''}
+        ${steps ? `<p class="wo-field"><span class="wo-label">Steps</span></p>${steps}` : ''}
+        ${o.doneWhen ? `<p class="wo-field"><span class="wo-label">Done when</span>${woInline(o.doneWhen)}</p>` : ''}
+        ${o.notes ? `<p class="wo-field">${woInline(o.notes)}</p>` : ''}
+        ${o.source ? `<p class="wo-field wo-source text-secondary"><span class="wo-label">Source</span>${woInline(o.source)}</p>` : ''}
+        ${legacy}
+        ${o.id ? `
+        <div class="card-actions">
+          <button class="btn btn-success btn-lg" data-action="wo-done" data-id="${woEsc(o.id)}" data-title="${woEsc(o.title)}">MARK DONE</button>
+        </div>` : ''}
+      </div>`;
+  }
+
+  /**
+   * The Work Orders screen — Scot's cross-project task list, read from the
+   * alys repo through mkt-queue. Four states like the Queue: not connected
+   * (no secret on this device), error, empty, list.
+   * @param {{configured: boolean, orders: WorkOrder[], done: WorkOrder[], projects: string[], filter: string, loaded: boolean, fetchedAt: string, cached: boolean, error: string|null}} data
+   */
+  function renderWorkOrders(data) {
+    const container = $('workorders-content');
+    if (!container) return;
+
+    const filter = data.filter || 'all';
+    const visible = SocialOSWorkOrders.sortOrders(data.orders || [], filter);
+    /** @type {Object<string, number>} */
+    const counts = {};
+    for (const o of data.orders || []) counts[o.project] = (counts[o.project] || 0) + 1;
+
+    let html = `
+      <div class="screen-title-row" style="display:flex;align-items:center;gap:12px">
+        <h2 class="screen-title" style="margin:0">Work Orders</h2>
+        ${data.configured ? `<button class="btn btn-secondary btn-sm" data-action="wo-refresh" style="margin-left:auto">Refresh</button>` : ''}
+      </div>
+      <p class="text-secondary" style="margin:4px 0 16px">
+        Every dev/ops step only you can do, across every project — read live
+        from <code>Scots_Tasks.md</code> in alys. Mark done commits the tick to the file.
+      </p>`;
+
+    if (!data.configured) {
+      html += `
+        <div class="empty-state">
+          <h2>Not connected</h2>
+          <p class="text-secondary">Add the Front Office shared secret in Settings to load the work orders (the same secret the Queue uses).</p>
+          <button class="btn btn-primary" data-action="go-settings" style="margin-top:12px">Open Settings</button>
+        </div>`;
+    } else if (data.error) {
+      html += `
+        <div class="empty-state">
+          <h2>Couldn't load the work orders</h2>
+          <p class="text-secondary">${escapeHtml(data.error)}</p>
+          <button class="btn btn-primary" data-action="wo-refresh" style="margin-top:12px">Try Again</button>
+        </div>`;
+    } else if (!(data.orders || []).length) {
+      html += `
+        <div class="empty-state">
+          <h2>Nothing open</h2>
+          <p class="text-secondary">The file has no open work orders. Agents append one whenever a run leaves a step only you can do.</p>
+        </div>`;
+    } else {
+      const fetched = data.fetchedAt ? SocialOSUtils.formatTime(data.fetchedAt) : '';
+      html += `
+        <p class="text-secondary" style="margin:0 0 10px;font-weight:500">${data.orders.length} open${fetched ? ` · read ${escapeHtml(fetched)}${data.cached ? ' (cached — Refresh re-reads the file)' : ''}` : ''}</p>
+        <div class="chip-group wo-filters" role="tablist">
+          <button type="button" class="chip chip-sm${filter === 'all' ? ' selected' : ''}" data-action="wo-filter" data-project="all">All (${data.orders.length})</button>
+          ${(data.projects || []).filter(p => counts[p]).map(p => `
+          <button type="button" class="chip chip-sm${filter === p ? ' selected' : ''}" data-action="wo-filter" data-project="${woEsc(p)}">${escapeHtml(p)} (${counts[p]})</button>`).join('')}
+        </div>
+        <div class="approval-list wo-list">
+          ${visible.map(renderWorkOrderCard).join('')}
+        </div>`;
+      if ((data.done || []).length) {
+        html += `
+        <details class="wo-done">
+          <summary>Recently done (${data.done.length})</summary>
+          <ul>
+            ${data.done.map(o => `<li><span class="wo-id">${escapeHtml(o.id || '·')}</span> ${woInline(o.title)} <span class="text-secondary">· done ${escapeHtml(o.doneDate || '')}</span></li>`).join('')}
+          </ul>
+        </details>`;
+      }
+    }
+
+    container.innerHTML = html;
+  }
+
   /**
    * Edit-then-approve view for one queued draft (same shape as
    * renderPostEdit). Saving approves with the edited body; the agent's
@@ -3249,6 +3423,7 @@ const SocialOSUI = (() => {
     renderSettings,
     renderQueue,
     renderQueueEdit,
+    renderWorkOrders,
     renderScanProgress,
     renderPickerProgress,
     renderComposer,
