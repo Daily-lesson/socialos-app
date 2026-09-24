@@ -11,7 +11,7 @@ const SocialOS = (() => {
 
   /**
    * In-memory working state.
-   * @type {{currentScreen: string, onboardingStep: number, onboardingData: Object<string, any>, calendarFocusDate: string|null, approvalsTab: string, engagementSubTab: string, queue: {drafts: any[], direct: Object<string, boolean>, media: Object<string, {dataUri: string, alt: string}>, loaded: boolean}, workorders: {orders: any[], done: any[], projects: string[], filter: string, loaded: boolean, fetchedAt: string, cached: boolean, error: string|null}, composer: {mode: string, text: string, link: string, selected: string[]|null, oneTap: boolean, posts: any[], results: any[]|null, schedule: {show: boolean, time: string}, replyPlatform: string, comment: string, postSummary: string, reply: {reply: string, alternative: string}|null, attach: {contentId: string, thumbUrl: string, title: string, flagged: boolean, auto?: boolean}|null, attachPicker: boolean, autoCardId: string|null, autoVisualBlocked: boolean, gen: {show: boolean, template: string, size: string, text: string, autoText: string, note: string, byline: string}, linkFind: {show: boolean, loading: boolean, items: any[], error: string}}}}
+   * @type {{currentScreen: string, onboardingStep: number, onboardingData: Object<string, any>, calendarFocusDate: string|null, approvalsTab: string, engagementSubTab: string, queue: {drafts: any[], direct: Object<string, boolean>, media: Object<string, {dataUri: string, alt: string}>, loaded: boolean}, workorders: {orders: any[], done: any[], projects: string[], today: string, nextNum: number, view: {lane: string, project: string, phone: boolean, free: boolean, quick: boolean}, expanded: Object<string, boolean>, loaded: boolean, fetchedAt: string, cached: boolean, error: string|null}, composer: {mode: string, text: string, link: string, selected: string[]|null, oneTap: boolean, posts: any[], results: any[]|null, schedule: {show: boolean, time: string}, replyPlatform: string, comment: string, postSummary: string, reply: {reply: string, alternative: string}|null, attach: {contentId: string, thumbUrl: string, title: string, flagged: boolean, auto?: boolean}|null, attachPicker: boolean, autoCardId: string|null, autoVisualBlocked: boolean, gen: {show: boolean, template: string, size: string, text: string, autoText: string, note: string, byline: string}, linkFind: {show: boolean, loading: boolean, items: any[], error: string}}}}
    */
   const state = {
     currentScreen: 'landing',
@@ -35,12 +35,16 @@ const SocialOS = (() => {
       /** @type {boolean} */ loaded: false
     },
     // Work Orders (js/workorders.js) — the server list as last read, plus the
-    // one bit of view state (the project filter). Never persisted.
+    // board's view state (lane/project/phone/free/quick filters, which rows
+    // are expanded). Never persisted.
     workorders: {
       /** @type {any[]} */ orders: [],
       /** @type {any[]} */ done: [],
       /** @type {string[]} */ projects: [],
-      filter: 'all',
+      today: '',
+      nextNum: 0,
+      view: { lane: '', project: '', phone: false, free: false, quick: false },
+      /** @type {Object<string, boolean>} */ expanded: {},
       loaded: false,
       fetchedAt: '',
       cached: false,
@@ -1300,16 +1304,26 @@ const SocialOS = (() => {
     w.orders = list.orders;
     w.done = list.done;
     w.projects = list.projects;
+    w.today = list.today;
+    w.nextNum = list.next_num;
     w.fetchedAt = list.fetched_at;
     w.cached = list.cached;
     w.loaded = true;
     w.error = null;
-    if (w.filter !== 'all' && !list.projects.includes(w.filter)) w.filter = 'all';
+    // A project filter naming a project the file no longer has would hide
+    // everything with no visible control to clear it (the board hit this).
+    if (w.view.project && !list.projects.includes(w.view.project)) w.view.project = '';
   }
 
-  /** Re-render from state (filter taps, post-tick) without a fetch. */
-  function renderWorkOrdersView() {
+  /**
+   * Re-render from state (filter taps, post-tick) without a fetch. The render
+   * replaces the whole screen, so the control that was used is re-focused —
+   * otherwise every keyboard tap dropped focus to <body>.
+   * @param {string} [refocus]  a selector for the control to focus afterwards
+   */
+  function renderWorkOrdersView(refocus) {
     SocialOSUI.renderWorkOrders({ configured: true, ...state.workorders });
+    if (refocus) /** @type {HTMLElement|null} */ (document.querySelector(refocus))?.focus();
   }
 
   /**
@@ -2696,6 +2710,13 @@ const SocialOS = (() => {
       case 'workorders': {
         await navigate('workorders');
         if (!arg) return true;
+        if (state.workorders.orders.some(o => o.id === arg)) {
+          // Open it, and clear any filter that would hide it — a push about
+          // one order must land on that order, not on a filtered list.
+          state.workorders.view = { lane: '', project: '', phone: false, free: false, quick: false };
+          state.workorders.expanded[arg] = true;
+          renderWorkOrdersView();
+        }
         if (focusCard('wo', arg)) return true;
         if (state.workorders.loaded) SocialOSUI.toast(`${arg} isn't on the open list — done, or never existed.`, 'info', 4000);
         return true;
@@ -4289,9 +4310,27 @@ const SocialOS = (() => {
           await renderWorkOrders(true);
           break;
 
-        case 'wo-filter': {
-          state.workorders.filter = /** @type {HTMLElement} */ (actionEl).dataset?.project || 'all';
-          renderWorkOrdersView();
+        case 'wo-lane': {
+          const lane = /** @type {HTMLElement} */ (actionEl).dataset?.lane || '';
+          const v = state.workorders.view;
+          v.lane = v.lane === lane ? '' : lane;
+          renderWorkOrdersView(`.wo-tally[data-lane="${CSS.escape(lane)}"]`);
+          break;
+        }
+
+        case 'wo-toggle-filter': {
+          const key = /** @type {HTMLElement} */ (actionEl).dataset?.filter || '';
+          const v = state.workorders.view;
+          if (key === 'phone' || key === 'free' || key === 'quick') v[key] = !v[key];
+          renderWorkOrdersView(`[data-action="wo-toggle-filter"][data-filter="${CSS.escape(key)}"]`);
+          break;
+        }
+
+        case 'wo-toggle': {
+          if (!id) break;
+          const ex = state.workorders.expanded;
+          ex[id] = !ex[id];
+          renderWorkOrdersView(`[data-action="wo-toggle"][data-id="${CSS.escape(id)}"]`);
           break;
         }
 
@@ -4739,6 +4778,15 @@ const SocialOS = (() => {
           break;
         }
       }
+    });
+
+    // The Work Orders project filter is a <select> (as on the board), and
+    // click delegation never sees a <select>'s choice.
+    document.addEventListener('change', (e) => {
+      const el = /** @type {HTMLSelectElement} */ (e.target);
+      if (!el || el.id !== 'wo-proj') return;
+      state.workorders.view.project = el.value || '';
+      renderWorkOrdersView('#wo-proj');
     });
 
     // ── Local file input ("Upload from device") ─────────────────────────

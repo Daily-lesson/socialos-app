@@ -7,7 +7,7 @@
  * approval notifications with one-tap actions and routes taps into the app.
  */
 
-const CACHE_NAME = 'socialos-v35'; // v35: Work Orders screen (js/workorders.js + the nav tab); v34: deep-link focus survives the queue's thumbnail re-render
+const CACHE_NAME = 'socialos-v36'; // v36: Work Orders in the board's layout + WOS-1 lanes; v35: Work Orders screen (js/workorders.js + the nav tab); v34: deep-link focus survives the queue's thumbnail re-render
 const SHELL_ASSETS = [
   './',
   './index.html',

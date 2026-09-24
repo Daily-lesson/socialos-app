@@ -2515,6 +2515,9 @@ const SocialOSUI = (() => {
     s = s.replace(/(^|[\s(])(https?:\/\/[^\s<)]+?)([.,;:)]*)(?=\s|$)/g,
       (_, pre, u, punct) => `${pre}L${links.push({ t: u, u }) - 1}${punct}`);
     s = woEsc(s);
+    // **bold**, as the board renders it. Runs on escaped text and before the
+    // placeholders expand, so it can only wrap text — never an attribute.
+    s = s.replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>');
     s = s.replace(/L(\d+)/g, (_, i) => {
       const l = links[+i];
       return `<a href="${woEsc(l.u)}" target="_blank" rel="noopener">${woEsc(l.t)}</a>`;
@@ -2530,71 +2533,219 @@ const SocialOSUI = (() => {
   }
 
   /**
-   * One work-order card.
-   * @param {WorkOrder} o
-   * @returns {string}
+   * Link-free inline markup for text inside a row's toggle <button>: a link
+   * or copy button there would be interactive content nested in a button
+   * (invalid, and one tap would both follow the link and toggle the row).
+   * Code spans and **bold** only; everything else escaped.
+   * @param {string} text
    */
-  function renderWorkOrderCard(o) {
-    const age = SocialOSWorkOrders.ageDays(o.date);
-    const ageText = age === null ? '' : (age === 0 ? 'today' : `${age} day${age === 1 ? '' : 's'} open`);
-    const pri = o.priority
-      ? `<span class="tag wo-pri wo-pri-${o.priority}" title="${woEsc(SocialOSWorkOrders.PRIORITY_LABELS[o.priority] || o.priority)}">${o.priority}</span>`
+  function woPlain(text) {
+    const s = woEsc(String(text || '').replace(/[]/g, ''));
+    // `*` inside a code span becomes an entity first, so bold cannot reach in
+    // and mis-nest the tags (the board's mdPlain behaves the same).
+    return s.replace(/`([^`]+)`/g, (_, c) => `<code>${c.replace(/\*/g, '&#42;')}</code>`)
+      .replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>');
+  }
+
+  /** @param {WorkOrder} o */
+  function woDueLabel(o) {
+    if (o.due === 'task-bound') return 'task-bound';
+    const d = o.daysToDue;
+    if (typeof d !== 'number') return o.due ? `due ${o.due}` : 'no due date';
+    if (d < 0) return `${Math.abs(d)}d overdue`;
+    if (d === 0) return 'due today';
+    if (d === 1) return 'due tomorrow';
+    if (d <= 13) return `due in ${d}d`;
+    return `due ${o.due}`;
+  }
+
+  /** @param {WorkOrder} o */
+  function woDueClass(o) {
+    if (o.due === 'task-bound' || typeof o.daysToDue !== 'number') return 'wo-t-plain';
+    return o.daysToDue <= 1 ? 'wo-t-due wo-t-hot' : 'wo-t-due';
+  }
+
+  /** @type {Object<string, string>} */
+  const WO_DEVICE = { phone: 'phone', desktop: 'desk', either: 'anywhere' };
+
+  /**
+   * The row's chips — the board's tagsFor: same order, same words.
+   * @param {WorkOrder} o
+   */
+  function woTags(o) {
+    const needs = o.needs || [];
+    const free = needs.length === 1 && needs[0] === 'none';
+    // Never trust the response's types: a non-string would throw and blank
+    // the tab, and anything but P0–P3 must not reach a class attribute.
+    const pri = typeof o.priority === 'string' && /^P[0-3]$/.test(o.priority) ? o.priority : '';
+    let h = pri
+      ? `<span class="wo-tag wo-t-${pri.toLowerCase()}" title="${woEsc(SocialOSWorkOrders.PRIORITY_LABELS[pri])}">${pri}</span>`
       : '';
-    const idText = o.id ? `<span class="wo-id">${escapeHtml(o.id)}</span>` : `<span class="wo-id wo-id-none">hand-written</span>`;
-    const steps = o.steps.length
-      ? `<ol class="wo-steps">${o.steps.map(st => `<li>${woInline(st)}</li>`).join('')}</ol>`
-      : '';
-    const legacy = !o.id
-      ? `<p class="text-secondary" style="font-size:0.75rem;margin-top:8px">A line without a work-order id — written by hand, so it can only be ticked in the file.</p>`
-      : '';
-    return `
-      <div class="card wo-card${o.priority ? ' wo-card-' + o.priority : ''}" data-wo-id="${woEsc(o.id || '')}">
-        <div class="card-header">
-          ${idText}
-          ${pri}
-          <span class="tag">${escapeHtml(o.project)}</span>
-          <span class="text-secondary wo-age" style="margin-left:auto">${escapeHtml(ageText)}${ageText ? ' · ' : ''}${escapeHtml(o.date)}</span>
-        </div>
-        <h4 class="wo-title">${woInline(o.title)}</h4>
-        ${o.why ? `<p class="wo-field"><span class="wo-label">Why</span>${woInline(o.why)}</p>` : ''}
-        ${o.tail ? `<p class="wo-field text-secondary">${woInline(o.tail)}</p>` : ''}
-        ${steps ? `<p class="wo-field"><span class="wo-label">Steps</span></p>${steps}` : ''}
-        ${o.doneWhen ? `<p class="wo-field"><span class="wo-label">Done when</span>${woInline(o.doneWhen)}</p>` : ''}
-        ${o.notes ? `<p class="wo-field">${woInline(o.notes)}</p>` : ''}
-        ${o.source ? `<p class="wo-field wo-source text-secondary"><span class="wo-label">Source</span>${woInline(o.source)}</p>` : ''}
-        ${legacy}
-        ${o.id ? `
-        <div class="card-actions">
-          <button class="btn btn-success btn-lg" data-action="wo-done" data-id="${woEsc(o.id)}" data-title="${woEsc(o.title)}">MARK DONE</button>
-        </div>` : ''}
-      </div>`;
+    h += `<span class="wo-tag ${woDueClass(o)}">${woEsc(woDueLabel(o))}</span>`;
+    if (o.effort || o.difficulty) h += `<span class="wo-tag wo-t-plain">${woEsc([o.effort, o.difficulty].filter(Boolean).join(' · '))}</span>`;
+    if (o.device) h += `<span class="wo-tag wo-t-dev-${woEsc(o.device)}">${woEsc(WO_DEVICE[o.device] || o.device)}</span>`;
+    if (needs.length) {
+      h += free
+        ? '<span class="wo-tag wo-t-free">needs nothing</span>'
+        : `<span class="wo-tag wo-t-plain">${woEsc(needs.join(' · '))}</span>`;
+    }
+    h += `<span class="wo-tag wo-t-plain">${woEsc(o.project)}</span>`;
+    // Nobody chose to put an auto-filed order on the list — a failed heal run
+    // did — so it reads differently at a glance (the board's t-auto chip).
+    if (o.filedBy) h += '<span class="wo-tag wo-t-auto">auto-filed</span>';
+    return h;
   }
 
   /**
-   * The Work Orders screen — Scot's cross-project task list, read from the
-   * alys repo through mkt-queue. Four states like the Queue: not connected
-   * (no secret on this device), error, empty, list.
-   * @param {{configured: boolean, orders: WorkOrder[], done: WorkOrder[], projects: string[], filter: string, loaded: boolean, fetchedAt: string, cached: boolean, error: string|null}} data
+   * The five-term score meter + legend — the board's meterFor.
+   * @param {WorkOrderScore} sc
+   */
+  function woMeter(sc) {
+    /** @param {string} cls @param {number} v */
+    const seg = (cls, v) => v > 0 ? `<span class="${cls}" style="width:${Number(v)}%"></span>` : '';
+    return `<div class="wo-meter">${seg('wo-m-u', sc.urgency)}${seg('wo-m-i', sc.impact)}${seg('wo-m-e', sc.ease)}${seg('wo-m-a', sc.age)}${seg('wo-m-f', sc.friction)}</div>
+      <div class="wo-legend">
+        <i><s class="wo-m-u"></s>urgency <b>${Number(sc.urgency)}</b></i>
+        <i><s class="wo-m-i"></s>stakes <b>${Number(sc.impact)}</b></i>
+        <i><s class="wo-m-e"></s>ease <b>${Number(sc.ease)}</b></i>
+        <i><s class="wo-m-a"></s>age <b>${Number(sc.age)}</b></i>
+        <i><s class="wo-m-f"></s>friction <b>${sc.friction ? '&minus;' + Number(sc.friction) : '0'}</b></i>
+        <i>= <b>${Number(sc.total)}</b> / 100</i>
+      </div>
+      ${sc.friction ? '<div class="wo-legend"><i>the hatched tail is what friction took off</i></div>' : ''}`;
+  }
+
+  /**
+   * The expanded detail — the board's bodyFor. Steps and choices are SHOWN,
+   * not ticked: the board keeps its ticks in its own store, which this app
+   * cannot read, so a checkbox here would be a second record that disagrees.
+   * The one action is MARK DONE, which commits the real tick to the file.
+   * @param {WorkOrder} o
+   */
+  function woBody(o) {
+    let h = o.why ? `<p class="wo-why">${woInline(o.why)}</p>` : '';
+
+    const blockers = o.blockers || [];
+    if (blockers.length) {
+      h += '<div class="wo-sub">Waiting on</div><div class="wo-opts">';
+      for (const b of blockers) {
+        h += b.kind === 'wo'
+          ? `<div class="wo-opt"><span class="wo-ol">${woEsc(b.ref || '')}</span><span class="wo-ot">${woPlain(b.title || '')}${b.done ? ' — <b>done</b>, so this one is live' : ' — still open'}</span></div>`
+          : `<div class="wo-opt"><span class="wo-ol">gate</span><span class="wo-ot">${woInline(b.text)} — nothing in the file can tell whether this cleared; check it, then set a date.</span></div>`;
+      }
+      h += '</div>';
+    }
+
+    if (o.steps.length) {
+      h += '<div class="wo-sub">Steps</div><ol class="wo-steps">';
+      o.steps.forEach((st, i) => { h += `<li><span class="wo-num">${i + 1}.</span><span>${woInline(st)}</span></li>`; });
+      h += '</ol>';
+    }
+
+    const options = o.options || [];
+    if (options.length) {
+      h += '<div class="wo-sub">Your choices</div><div class="wo-opts">';
+      options.forEach((text, i) => {
+        const m = /^([A-Z])\.\s*([\s\S]*)$/.exec(text);
+        const letter = m ? m[1] : String.fromCharCode(65 + i);
+        const rec = /\(recommended\)/i.test(text);
+        const label = (m ? m[2] : text).replace(/\s*\(recommended\)/i, '');
+        h += `<div class="wo-opt${rec ? ' wo-rec' : ''}"><span class="wo-ol">${woEsc(letter)}.</span><span class="wo-ot">${woInline(label)}${rec ? ' <span class="wo-rec-flag">recommended</span>' : ''}</span></div>`;
+      });
+      h += '</div>';
+    }
+
+    if (o.say) {
+      h += `<div class="wo-sub">Say this in a chat</div><div class="wo-say"><code>${woEsc(o.say)}</code><button type="button" class="btn btn-secondary btn-sm" data-action="wo-copy" data-copy="${woEsc(o.say)}">Copy</button></div>`;
+    }
+
+    if (o.hiddenLines) {
+      h += `<p class="wo-why text-secondary">${Number(o.hiddenLines)} line${o.hiddenLines === 1 ? '' : 's'} in this block ${o.hiddenLines === 1 ? "doesn't" : "don't"} match the file's grammar, so ${o.hiddenLines === 1 ? 'it is' : 'they are'} hidden here. The board either leaves such lines out or refuses to rebuild until they are fixed — fix the block in <code>Scots_Tasks.md</code>.</p>`;
+    }
+
+    if (o.filedBy) {
+      h += `<div class="wo-sub">Filed automatically</div><p class="wo-why">The ${woEsc(o.filedBy.agent)} run put this on the list because it could not finish the job itself. Its <b>Effort</b> and <b>Difficulty</b> are nominal — it has not measured them. It will tick this order and move it to Done on its own once the linked issue closes, so you do not have to.</p>`;
+    }
+
+    const age = typeof o.ageDays === 'number' ? o.ageDays : SocialOSWorkOrders.ageDays(o.date);
+    h += `<div class="wo-sub">Done when</div><dl class="wo-kv">
+      <dt>Check</dt><dd>${woInline(o.doneWhen || '—')}</dd>
+      <dt>Source</dt><dd>${woInline(o.source || '—')}</dd>
+      <dt>Written</dt><dd>${woEsc(o.date || '—')}${age === null ? '' : ` — ${age} day${age === 1 ? '' : 's'} on the list`}</dd>
+    </dl>`;
+
+    if (o.score) {
+      h += `<div class="wo-sub">Why it ranks here — score ${Number(o.score.total)}</div>${woMeter(o.score)}`;
+    } else if (o.id) {
+      h += '<div class="wo-sub">Not scored</div><p class="wo-why text-secondary">This block is missing a v2 field (Due, Effort, Difficulty, Device or Needs) or one is malformed, so it has no score or lane. Fix the block in <code>Scots_Tasks.md</code> — the board build refuses it until then.</p>';
+    }
+
+    if (o.id) {
+      h += `<div class="wo-foot">
+        <button type="button" class="btn btn-success" data-action="wo-done" data-id="${woEsc(o.id)}" data-title="${woEsc(o.title)}">MARK DONE</button>
+        <button type="button" class="btn btn-secondary btn-sm" data-action="wo-copy" data-copy="${woEsc(o.id + ' is done')}">Copy &ldquo;${woEsc(o.id)} is done&rdquo;</button>
+      </div>`;
+    }
+    return h;
+  }
+
+  /**
+   * One row — the board's collapsed bar (rail · id · title · chips · score),
+   * expanding in place to woBody.
+   * @param {WorkOrder} o
+   * @param {boolean} open
+   */
+  function renderWorkOrderRow(o, open) {
+    const id = woEsc(o.id || '');
+    return `
+      <article class="wo${open ? ' is-open' : ''}" data-wo-id="${id}">
+        <button type="button" class="wo-bar" data-action="wo-toggle" data-id="${id}" aria-expanded="${open}" aria-controls="wo-b-${id}">
+          <span class="wo-rail"></span>
+          <span class="wo-mid">
+            <span class="wo-id">${id}</span>
+            <span class="wo-title">${woPlain(o.title)}</span>
+            <span class="wo-meta">${woTags(o)}</span>
+          </span>
+          <span class="wo-right"><span class="wo-sc">${o.score ? Number(o.score.total) : '—'}</span><span class="wo-sc-l">score</span></span>
+        </button>
+        <div class="wo-body" id="wo-b-${id}"${open ? '' : ' hidden'}>${open ? woBody(o) : ''}</div>
+      </article>`;
+  }
+
+  /**
+   * @param {string} key    lane key — drives the colour via [data-lane]
+   * @param {string} label
+   * @param {string} gloss
+   * @param {number} n
+   * @param {string} rows   already-rendered markup
+   */
+  function woLane(key, label, gloss, n, rows) {
+    return `
+      <section class="wo-lane" data-lane="${woEsc(key)}">
+        <div class="wo-lane-head"><h3>${woEsc(label)}</h3><span class="wo-lane-n">${n}</span><span class="wo-lane-gloss">${woEsc(gloss)}</span></div>
+        <div class="wo-rows">${rows}</div>
+      </section>`;
+  }
+
+  /**
+   * The Work Orders screen — the board's layout (alys scripts/tasks/
+   * template.html) in SocialOS's skin: lane tallies, filters, lanes of
+   * collapsible rows ranked by WOS-1. Same data too: the server reads the
+   * same Scots_Tasks.md and scores it with a port of the board's scorer.
+   * Four states like the Queue: not connected, error, empty, list.
+   * @param {{configured: boolean, orders: WorkOrder[], done: WorkOrder[], projects: string[], view: {lane: string, project: string, phone: boolean, free: boolean, quick: boolean}, expanded: Object<string, boolean>, today: string, nextNum: number, loaded: boolean, fetchedAt: string, cached: boolean, error: string|null}} data
    */
   function renderWorkOrders(data) {
     const container = $('workorders-content');
     if (!container) return;
-
-    const filter = data.filter || 'all';
-    const visible = SocialOSWorkOrders.sortOrders(data.orders || [], filter);
-    /** @type {Object<string, number>} */
-    const counts = {};
-    for (const o of data.orders || []) counts[o.project] = (counts[o.project] || 0) + 1;
+    const orders = data.orders || [];
+    const v = data.view;
 
     let html = `
       <div class="screen-title-row" style="display:flex;align-items:center;gap:12px">
         <h2 class="screen-title" style="margin:0">Work Orders</h2>
         ${data.configured ? `<button class="btn btn-secondary btn-sm" data-action="wo-refresh" style="margin-left:auto">Refresh</button>` : ''}
-      </div>
-      <p class="text-secondary" style="margin:4px 0 16px">
-        Every dev/ops step only you can do, across every project — read live
-        from <code>Scots_Tasks.md</code> in alys. Mark done commits the tick to the file.
-      </p>`;
+      </div>`;
 
     if (!data.configured) {
       html += `
@@ -2603,43 +2754,112 @@ const SocialOSUI = (() => {
           <p class="text-secondary">Add the Front Office shared secret in Settings to load the work orders (the same secret the Queue uses).</p>
           <button class="btn btn-primary" data-action="go-settings" style="margin-top:12px">Open Settings</button>
         </div>`;
-    } else if (data.error) {
+      container.innerHTML = html;
+      return;
+    }
+    if (data.error) {
       html += `
         <div class="empty-state">
           <h2>Couldn't load the work orders</h2>
           <p class="text-secondary">${escapeHtml(data.error)}</p>
           <button class="btn btn-primary" data-action="wo-refresh" style="margin-top:12px">Try Again</button>
         </div>`;
-    } else if (!(data.orders || []).length) {
+      container.innerHTML = html;
+      return;
+    }
+    if (!orders.length) {
       html += `
         <div class="empty-state">
           <h2>Nothing open</h2>
           <p class="text-secondary">The file has no open work orders. Agents append one whenever a run leaves a step only you can do.</p>
         </div>`;
-    } else {
-      const fetched = data.fetchedAt ? SocialOSUtils.formatTime(data.fetchedAt) : '';
+      container.innerHTML = html;
+      return;
+    }
+
+    // A function deployed before this screen answers without `today` or any
+    // score — and puts every block's unknown lines, Private included, into
+    // `notes`. Say so and render nothing from it, rather than calling all of
+    // Scot's orders malformed. (The front end deploys on merge; the function
+    // is deployed by hand, so this window is real.)
+    if (!data.today) {
       html += `
-        <p class="text-secondary" style="margin:0 0 10px;font-weight:500">${data.orders.length} open${fetched ? ` · read ${escapeHtml(fetched)}${data.cached ? ' (cached — Refresh re-reads the file)' : ''}` : ''}</p>
-        <div class="chip-group wo-filters" role="tablist">
-          <button type="button" class="chip chip-sm${filter === 'all' ? ' selected' : ''}" data-action="wo-filter" data-project="all">All (${data.orders.length})</button>
-          ${(data.projects || []).filter(p => counts[p]).map(p => `
-          <button type="button" class="chip chip-sm${filter === p ? ' selected' : ''}" data-action="wo-filter" data-project="${woEsc(p)}">${escapeHtml(p)} (${counts[p]})</button>`).join('')}
-        </div>
-        <div class="approval-list wo-list">
-          ${visible.map(renderWorkOrderCard).join('')}
+        <div class="empty-state">
+          <h2>The server needs an update</h2>
+          <p class="text-secondary">The mkt-queue function on the server is older than this screen, so it can't rank the work orders. Redeploy it (the SocialOS section of <code>Scots_Tasks.md</code> has the command), then tap Refresh.</p>
         </div>`;
-      if ((data.done || []).length) {
-        html += `
+      container.innerHTML = html;
+      return;
+    }
+
+    const fetched = data.fetchedAt ? SocialOSUtils.formatTime(data.fetchedAt) : '';
+    const ided = orders.filter(o => o.id);
+    const scored = ided.filter(o => o.band);
+    // Unscored orders have no lane, so a lane filter hides them.
+    const unscored = v.lane ? [] : ided.filter(o => !o.band && SocialOSWorkOrders.passes(o, v));
+    const loose = orders.filter(o => !o.id);
+
+    html += `
+      <p class="wo-asof">as of <b>${escapeHtml(data.today || '')}</b> · <b>${ided.length}</b> open${data.nextNum ? ` · next id <b>WO-${String(data.nextNum).padStart(3, '0')}</b>` : ''}${fetched ? ` · read ${escapeHtml(fetched)}${data.cached ? ' (cached — Refresh re-reads the file)' : ''}` : ''}</p>
+      <div class="wo-strip">
+        ${SocialOSWorkOrders.LANES.map(([key, label]) => `<button type="button" class="wo-tally" data-lane="${key}" data-action="wo-lane" aria-pressed="${v.lane === key}"><b>${scored.filter(o => o.band === key).length}</b>${label}</button>`).join('')}
+      </div>
+      <div class="wo-filters">
+        <button type="button" class="chip chip-sm${v.phone ? ' selected' : ''}" data-action="wo-toggle-filter" data-filter="phone" aria-pressed="${v.phone}">Phone-friendly</button>
+        <button type="button" class="chip chip-sm${v.free ? ' selected' : ''}" data-action="wo-toggle-filter" data-filter="free" aria-pressed="${v.free}">Needs nothing</button>
+        <button type="button" class="chip chip-sm${v.quick ? ' selected' : ''}" data-action="wo-toggle-filter" data-filter="quick" aria-pressed="${v.quick}">Fits in 15 min</button>
+        <select class="wo-proj" id="wo-proj" aria-label="Project">
+          <option value="">All projects</option>
+          ${(data.projects || []).slice().sort().map(p => `<option value="${woEsc(p)}"${v.project === p ? ' selected' : ''}>${escapeHtml(p)}</option>`).join('')}
+        </select>
+        <span class="wo-count" id="wo-shown"></span>
+      </div>`;
+
+    let shown = 0;
+    for (const [key, label, gloss] of SocialOSWorkOrders.LANES) {
+      const list = scored.filter(o => o.band === key && SocialOSWorkOrders.passes(o, v));
+      if (!list.length) continue;
+      shown += list.length;
+      html += woLane(key, label, gloss, list.length, list.map(o => renderWorkOrderRow(o, !!data.expanded[o.id || ''])).join(''));
+    }
+    if (unscored.length) {
+      shown += unscored.length;
+      html += woLane('unscored', 'Unscored', 'A block missing its v2 fields — listed so it is never lost', unscored.length,
+        unscored.map(o => renderWorkOrderRow(o, !!data.expanded[o.id || ''])).join(''));
+    }
+    // Scot's own `- [ ]` lines: carried through, never scored, and shown only
+    // when no lane or project filter is on — the board's rule.
+    if (loose.length && !v.lane && !v.project) {
+      html += woLane('loose', 'Your own lines', 'Written by hand, no work-order id — not scored, not pushed', loose.length,
+        loose.map(o => `
+          <article class="wo"><div class="wo-bar wo-bar-static">
+            <span class="wo-rail"></span>
+            <span class="wo-mid"><span class="wo-title">${o.done ? '<s>' : ''}${woInline(o.title)}${o.tail ? ` · ${woInline(o.tail)}` : ''}${o.done ? '</s>' : ''}</span>
+            <span class="wo-meta"><span class="wo-tag wo-t-plain">${woEsc(o.project)}</span></span></span>
+            <span class="wo-right"></span>
+          </div></article>`).join(''));
+    }
+    if (!shown) html += '<p class="wo-empty">Nothing matches those filters. Clear one to see more.</p>';
+
+    if ((data.done || []).length) {
+      html += `
         <details class="wo-done">
           <summary>Recently done (${data.done.length})</summary>
           <ul>
             ${data.done.map(o => `<li><span class="wo-id">${escapeHtml(o.id || '·')}</span> ${woInline(o.title)} <span class="text-secondary">· done ${escapeHtml(o.doneDate || '')}</span></li>`).join('')}
           </ul>
         </details>`;
-      }
     }
-
+    html += `
+      <p class="wo-colophon">
+        <b>Scots_Tasks.md</b> in <code>Daily-lesson/alys</code> is the only canon. This tab reads it live and ranks it with the
+        Work Order Board's own <b>WOS-1</b> score: urgency + stakes + ease + age − friction, capped at 100, with your P-level
+        flooring the lane so a P0 never sorts below a P1 — unless it is Blocked or Gated, which win over the floor.
+        <b>Mark done</b> commits the tick to the file; the board shows it from its next rebuild.
+      </p>`;
     container.innerHTML = html;
+    const count = $('wo-shown');
+    if (count) count.textContent = shown === ided.length ? `showing all ${shown}` : `showing ${shown} of ${ided.length}`;
   }
 
   /**

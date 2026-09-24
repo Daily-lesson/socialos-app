@@ -22,6 +22,27 @@
  */
 
 /**
+ * @typedef {Object} WorkOrderScore  WOS-1, computed server-side (a port of
+ *   alys scripts/tasks/build.mjs — the board and this tab rank identically)
+ * @property {number} total     0–100
+ * @property {number} urgency   0–40
+ * @property {string} state     overdue | today | soon | week | fortnight | month | later | cleared | gated | blocked
+ * @property {number} impact    0–30 (the Pn)
+ * @property {number} ease      0–20
+ * @property {number} age       0–10
+ * @property {number} friction  0–10, subtracted
+ */
+
+/**
+ * @typedef {Object} WorkOrderBlocker
+ * @property {'wo'|'external'} kind
+ * @property {string|null} ref      "WO-030" for kind wo
+ * @property {string} text
+ * @property {boolean|null} done    kind wo: is the blocker ticked
+ * @property {string|null} title
+ */
+
+/**
  * @typedef {Object} WorkOrder
  * @property {string|null} id         "WO-004"; null for a hand-written legacy line
  * @property {number|null} num
@@ -37,14 +58,31 @@
  * @property {string} source
  * @property {string} notes
  * @property {string} tail            legacy `· …` detail after the title
+ * @property {string} [due]           YYYY-MM-DD | "task-bound"  (open orders only, below)
+ * @property {string} [effort]
+ * @property {number|null} [effortMin]
+ * @property {string} [difficulty]
+ * @property {string} [device]        phone | desktop | either
+ * @property {string[]} [needs]
+ * @property {WorkOrderBlocker[]} [blockers]
+ * @property {string[]} [options]     "A. …" lines
+ * @property {string} [say]
+ * @property {boolean} [hasPrivate]   the Private: note itself never leaves the server
+ * @property {{agent: string, fingerprint: string}|null} [filedBy]  set on an order a heal run filed
+ * @property {boolean} [scoreable]    false: missing v2 fields — listed unscored, never dropped
+ * @property {WorkOrderScore|null} [score]
+ * @property {string|null} [band]     now | next | soon | later | gated | blocked
+ * @property {number|null} [daysToDue]
+ * @property {number|null} [ageDays]
  */
 
 /**
  * @typedef {Object} WorkOrderList
- * @property {WorkOrder[]} orders     open, file order (oldest first per project)
+ * @property {WorkOrder[]} orders     open, ranked exactly as the board ranks them
  * @property {WorkOrder[]} done       newest first, capped server-side
  * @property {string[]} projects
  * @property {number} next_num
+ * @property {string} today           the UTC day the scores were computed for
  * @property {string} sha
  * @property {string} fetched_at
  * @property {boolean} cached
@@ -59,7 +97,16 @@ const SocialOSWorkOrders = (() => {
     P2: 'P2 · normal',
     P3: 'P3 · decision / nice-to-have'
   };
-  const PRIORITY_RANK = { P0: 0, P1: 1, P2: 2, P3: 3 };
+
+  /** The board's lanes, verbatim (alys scripts/tasks/template.html LANES). */
+  const LANES = [
+    ['now', 'Now', 'Overdue, due today, or a P0 you can start'],
+    ['next', 'Next', "This week's commitments"],
+    ['soon', 'Soon', 'Inside the fortnight'],
+    ['later', 'Later', 'On the list, not yet pressing'],
+    ['gated', 'Gated', 'Waiting on something outside this file — check the gate'],
+    ['blocked', 'Blocked', 'Waiting on another work order']
+  ];
 
   /** @returns {Promise<{url: string, secret: string}>} */
   async function config() {
@@ -116,15 +163,24 @@ const SocialOSWorkOrders = (() => {
    * @returns {Promise<WorkOrderList>}
    */
   async function fetchWorkOrders(refresh) {
-    const data = await call({ action: 'workorders-list', refresh: !!refresh });
+    return toList(await call({ action: 'workorders-list', refresh: !!refresh }), undefined);
+  }
+
+  /**
+   * @param {any} data  a workorders-list / workorders-done response
+   * @param {boolean|undefined} cached  override (a tick is never cached)
+   * @returns {WorkOrderList}
+   */
+  function toList(data, cached) {
     return {
       orders: Array.isArray(data?.orders) ? data.orders : [],
       done: Array.isArray(data?.done) ? data.done : [],
       projects: Array.isArray(data?.projects) ? data.projects : [],
       next_num: Number(data?.next_num) || 0,
+      today: String(data?.today || ''),
       sha: String(data?.sha || ''),
       fetched_at: String(data?.fetched_at || ''),
-      cached: !!data?.cached
+      cached: cached === undefined ? !!data?.cached : cached
     };
   }
 
@@ -141,36 +197,24 @@ const SocialOSWorkOrders = (() => {
     return {
       already: !!data?.already,
       commit: typeof data?.commit === 'string' ? data.commit : null,
-      list: {
-        orders: Array.isArray(data?.orders) ? data.orders : [],
-        done: Array.isArray(data?.done) ? data.done : [],
-        projects: Array.isArray(data?.projects) ? data.projects : [],
-        next_num: Number(data?.next_num) || 0,
-        sha: String(data?.sha || ''),
-        fetched_at: String(data?.fetched_at || ''),
-        cached: false
-      }
+      list: toList(data, false)
     };
   }
 
   /**
-   * Priority first (P0 → P3, id-less legacy entries last), then oldest first.
-   * A pure view sort — the server list keeps file order.
-   * @param {WorkOrder[]} orders
-   * @param {string} [project]  '' / 'all' = every project
-   * @returns {WorkOrder[]}
+   * The board's filter, verbatim (template.html `passes`): lane, project,
+   * phone-friendly, needs nothing, fits in 15 minutes. Order is untouched —
+   * the server already ranks exactly as the board does.
+   * @param {WorkOrder} o
+   * @param {{lane: string, project: string, phone: boolean, free: boolean, quick: boolean}} f
    */
-  function sortOrders(orders, project) {
-    const p = project && project !== 'all' ? project : '';
-    return orders
-      .filter(o => !p || o.project === p)
-      .slice()
-      .sort((a, b) => {
-        const ra = a.priority ? PRIORITY_RANK[a.priority] : 9;
-        const rb = b.priority ? PRIORITY_RANK[b.priority] : 9;
-        if (ra !== rb) return ra - rb;
-        return (a.date || '').localeCompare(b.date || '');
-      });
+  function passes(o, f) {
+    if (f.lane && o.band !== f.lane) return false;
+    if (f.project && o.project !== f.project) return false;
+    if (f.phone && o.device === 'desktop') return false;
+    if (f.free && !(o.needs && o.needs.length === 1 && o.needs[0] === 'none')) return false;
+    if (f.quick && !(typeof o.effortMin === 'number' && o.effortMin <= 15)) return false;
+    return true;
   }
 
   /**
@@ -190,10 +234,11 @@ const SocialOSWorkOrders = (() => {
 
   return {
     PRIORITY_LABELS,
+    LANES,
     isConfigured,
     fetchWorkOrders,
     markDone,
-    sortOrders,
+    passes,
     ageDays
   };
 })();
