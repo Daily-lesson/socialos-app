@@ -1,43 +1,67 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
   <!--
-    SOURCE MASTER — maskable app icon. Same gradient field as icon-square.svg,
-    but the mark is scaled to ~80% and centred so it stays inside the maskable
-    "safe zone" (the centre 80% circle) that Android's adaptive-icon shapes
-    crop to. Rasterized by icons/_src/build-icons.py. v2 look: white mark on
-    the brand blue→purple gradient (see icon-square.svg for why).
+    SOURCE MASTER — maskable app icon. Same field as icon-square.svg, but the
+    mark is scaled to ~80% and centred so it stays inside the maskable "safe
+    zone" (the centre 80% circle) that Android's adaptive-icon shapes crop to.
+    Rasterized by icons/_src/build-icons.py. v3 "Night Shift" look — see
+    icon-square.svg for the story; the mark body is identical.
   -->
   <defs>
-    <linearGradient id="bg" x1="0" y1="512" x2="512" y2="0" gradientUnits="userSpaceOnUse">
-      <stop offset="0" stop-color="#3D7BF0"/>
-      <stop offset="0.5" stop-color="#7A66F4"/>
-      <stop offset="1" stop-color="#B04FF7"/>
+    <linearGradient id="sky" x1="0" y1="0" x2="0" y2="512" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#070A1F"/>
+      <stop offset="0.55" stop-color="#141743"/>
+      <stop offset="1" stop-color="#2A1E5C"/>
     </linearGradient>
-    <radialGradient id="sheen" cx="0.30" cy="0.16" r="0.95">
-      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.20"/>
+    <radialGradient id="dawn" cx="256" cy="600" r="430" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FFB56B" stop-opacity="0.95"/>
+      <stop offset="0.35" stop-color="#FF7A8A" stop-opacity="0.55"/>
+      <stop offset="0.7" stop-color="#8A5CF6" stop-opacity="0.18"/>
+      <stop offset="1" stop-color="#8A5CF6" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="ribbon" x1="184" y1="328" x2="328" y2="184" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#E4DBFF"/>
+      <stop offset="0.5" stop-color="#FFFFFF"/>
+      <stop offset="1" stop-color="#FFF6E3"/>
+    </linearGradient>
+    <radialGradient id="star" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.9"/>
       <stop offset="1" stop-color="#FFFFFF" stop-opacity="0"/>
     </radialGradient>
   </defs>
-
-  <rect width="512" height="512" fill="url(#bg)"/>
-  <rect width="512" height="512" fill="url(#sheen)"/>
-
-  <!-- Recentre the mark's visual centre (~272,240) to canvas centre, then
-       scale to 0.80 about the centre for comfortable maskable margins. -->
+  <rect width="512" height="512" fill="url(#sky)"/>
+  <rect width="512" height="512" fill="url(#dawn)"/>
+  <!-- night sky: a handful of stars, upper half only -->
+  <g fill="#FFFFFF">
+    <circle cx="70" cy="62" r="2.2" opacity="0.7"/>
+    <circle cx="118" cy="120" r="1.6" opacity="0.45"/>
+    <circle cx="430" cy="80" r="2.6" opacity="0.8"/>
+    <circle cx="470" cy="150" r="1.6" opacity="0.5"/>
+    <circle cx="380" cy="42" r="1.4" opacity="0.5"/>
+    <circle cx="40" cy="200" r="1.4" opacity="0.4"/>
+    <circle cx="250" cy="40" r="1.3" opacity="0.4"/>
+  </g>
+  <!-- recentre the mark (~272,240 → 256,256), then scale to 0.80 about the
+       centre for comfortable maskable margins -->
   <g transform="translate(256 256) scale(0.80) translate(-256 -256) translate(-16 16)">
-    <g transform="translate(0 9)" opacity="0.18">
-      <path d="M 328 184 A 72 72 0 1 0 256 256 A 72 72 0 1 1 184 328"
-            fill="none" stroke="#141033" stroke-width="50" stroke-linecap="round"/>
-      <circle cx="184" cy="328" r="35" fill="#141033"/>
-      <circle cx="328" cy="184" r="41" fill="#141033"/>
+    <!-- glow: stacked wide strokes, no SVG filters (cairosvg-safe) -->
+    <g fill="none" stroke="#B79CFF" stroke-linecap="round">
+      <path d="M 328 184 A 72 72 0 1 0 256 256 A 72 72 0 1 1 184 328" stroke-width="96" opacity="0.08"/>
+      <path d="M 328 184 A 72 72 0 1 0 256 256 A 72 72 0 1 1 184 328" stroke-width="70" opacity="0.14"/>
     </g>
-
-    <path d="M 328 184 A 72 72 0 1 0 256 256 A 72 72 0 1 1 184 328"
-          fill="none" stroke="#FFFFFF" stroke-width="50" stroke-linecap="round"/>
-    <circle cx="184" cy="328" r="35" fill="#FFFFFF"/>
-    <circle cx="184" cy="328" r="13" fill="url(#bg)"/>
-    <circle cx="328" cy="184" r="41" fill="#FFFFFF"/>
-    <circle cx="328" cy="184" r="15" fill="url(#bg)"/>
-    <circle cx="328" cy="184" r="67" fill="none" stroke="#FFFFFF" stroke-width="8" opacity="0.5"/>
-    <circle cx="376" cy="139" r="12" fill="#FFFFFF"/>
+    <!-- the route: you (bottom-left) to done (top-right) -->
+    <path d="M 328 184 A 72 72 0 1 0 256 256 A 72 72 0 1 1 184 328" fill="none" stroke="url(#ribbon)" stroke-width="50" stroke-linecap="round"/>
+    <!-- origin node: you, asleep — a crescent -->
+    <circle cx="184" cy="328" r="50" fill="#B79CFF" opacity="0.16"/>
+    <circle cx="184" cy="328" r="36" fill="#E4DBFF"/>
+    <circle cx="184" cy="328" r="16" fill="#1A1A4A"/>
+    <circle cx="190" cy="323" r="14" fill="#E4DBFF"/>
+    <!-- destination node: done by morning — a check, with a warm halo -->
+    <circle cx="328" cy="184" r="70" fill="#FFD9A0" opacity="0.12"/>
+    <circle cx="328" cy="184" r="67" fill="none" stroke="#FFE7BF" stroke-width="7" opacity="0.55"/>
+    <circle cx="328" cy="184" r="42" fill="#FFFFFF"/>
+    <path d="M 309 186 L 322 199 L 348 170" fill="none" stroke="#2A1E5C" stroke-width="11" stroke-linecap="round" stroke-linejoin="round"/>
+    <!-- satellite on the halo -->
+    <circle cx="378" cy="139" r="13" fill="#FFE7BF"/>
+    <circle cx="378" cy="139" r="26" fill="url(#star)" opacity="0.5"/>
   </g>
 </svg>

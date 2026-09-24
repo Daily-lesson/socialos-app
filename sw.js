@@ -7,7 +7,7 @@
  * approval notifications with one-tap actions and routes taps into the app.
  */
 
-const CACHE_NAME = 'socialos-v36'; // v36: Work Orders in the board's layout + WOS-1 lanes; v35: Work Orders screen (js/workorders.js + the nav tab); v34: deep-link focus survives the queue's thumbnail re-render
+const CACHE_NAME = 'socialos-v37'; // v37: Night Shift icon set (v3 art, ?v=3 hrefs); v36: Work Orders in the board's layout + WOS-1 lanes; v35: Work Orders screen (js/workorders.js + the nav tab); v34: deep-link focus survives the queue's thumbnail re-render
 const SHELL_ASSETS = [
   './',
   './index.html',
@@ -36,18 +36,18 @@ const SHELL_ASSETS = [
   './js/ui.js',
   './js/utils.js',
   './manifest.json',
-  // Plain paths = manifest.json icon srcs + SW notification icons; the ?v=2
+  // Plain paths = manifest.json icon srcs + SW notification icons; the ?v=3
   // variants = the <link> hrefs in index/privacy/terms (icon-cache bust —
   // keep the query in step with the HTML whenever the art changes).
   './icons/icon-192.png',
-  './icons/icon-192.png?v=2',
+  './icons/icon-192.png?v=3',
   './icons/icon-512.png',
   './icons/icon-192-maskable.png',
   './icons/icon-512-maskable.png',
-  './icons/apple-touch-icon.png?v=2',
+  './icons/apple-touch-icon.png?v=3',
   './icons/favicon-32.png',
-  './icons/favicon-32.png?v=2',
-  './icons/favicon-48.png?v=2',
+  './icons/favicon-32.png?v=3',
+  './icons/favicon-48.png?v=3',
   './icons/logo.svg' // the in-app brand mark (index.html nav + landing) — a
                      // cache bump wipes the runtime cache, so it must be
                      // precached or the logo 404s offline right after updates
