@@ -2620,9 +2620,15 @@ const SocialOSUI = (() => {
    * not ticked: the board keeps its ticks in its own store, which this app
    * cannot read, so a checkbox here would be a second record that disagrees.
    * The one action is MARK DONE, which commits the real tick to the file.
+   * Picking a different option here (unlike a step tick) is not the board's
+   * choice store — it's this screen's own ephemeral view state (never
+   * persisted, resets on reload) — because all it drives is which option's
+   * own "Say this in a chat" sentence is on screen, not a record anyone
+   * reconciles into the file.
    * @param {WorkOrder} o
+   * @param {string} [choice]  the letter picked for this order, if any
    */
-  function woBody(o) {
+  function woBody(o, choice) {
     let h = o.why ? `<p class="wo-why">${woInline(o.why)}</p>` : '';
 
     const blockers = o.blockers || [];
@@ -2643,19 +2649,37 @@ const SocialOSUI = (() => {
     }
 
     const options = o.options || [];
+    let recIdx = 0;
     if (options.length) {
       h += '<div class="wo-sub">Your choices</div><div class="wo-opts">';
       options.forEach((text, i) => {
         const m = /^([A-Z])\.\s*([\s\S]*)$/.exec(text);
         const letter = m ? m[1] : String.fromCharCode(65 + i);
         const rec = /\(recommended\)/i.test(text);
+        if (rec) recIdx = i;
         const label = (m ? m[2] : text).replace(/\s*\(recommended\)/i, '');
-        h += `<div class="wo-opt${rec ? ' wo-rec' : ''}"><span class="wo-ol">${woEsc(letter)}.</span><span class="wo-ot">${woInline(label)}${rec ? ' <span class="wo-rec-flag">recommended</span>' : ''}</span></div>`;
+        const picked = choice ? choice === letter : rec;
+        h += `<label class="wo-opt${rec ? ' wo-rec' : ''}${picked ? ' wo-picked' : ''}">` +
+          `<input type="radio" name="wo-opt-${woEsc(o.id || '')}" data-wo="${woEsc(o.id || '')}" data-letter="${woEsc(letter)}"${picked ? ' checked' : ''}>` +
+          `<span class="wo-ol">${woEsc(letter)}.</span><span class="wo-ot">${woInline(label)}${rec ? ' <span class="wo-rec-flag">recommended</span>' : ''}</span></label>`;
       });
       h += '</div>';
     }
 
-    if (o.say) {
+    const optionSays = o.optionSays || [];
+    if (optionSays.length) {
+      // One Say per option (run 064) — the box shows whichever option is
+      // picked (defaulting to the recommended one) and, per the `change`
+      // listener in js/app.js, swaps live when a different radio is tapped.
+      const letters = options.map((text, i) => {
+        const m = /^([A-Z])\.\s*/.exec(text);
+        return m ? m[1] : String.fromCharCode(65 + i);
+      });
+      const curLetter = choice || letters[recIdx] || 'A';
+      const curIdx = letters.indexOf(curLetter);
+      const sayNow = optionSays[curIdx >= 0 ? curIdx : recIdx] || optionSays[recIdx] || '';
+      h += `<div class="wo-sub">Say this in a chat</div><div class="wo-say" id="wo-say-${woEsc(o.id || '')}"><code>${woEsc(sayNow)}</code><button type="button" class="btn btn-secondary btn-sm" data-action="wo-copy" data-copy="${woEsc(sayNow)}">Copy</button></div>`;
+    } else if (o.say) {
       h += `<div class="wo-sub">Say this in a chat</div><div class="wo-say"><code>${woEsc(o.say)}</code><button type="button" class="btn btn-secondary btn-sm" data-action="wo-copy" data-copy="${woEsc(o.say)}">Copy</button></div>`;
     }
 
@@ -2694,8 +2718,9 @@ const SocialOSUI = (() => {
    * expanding in place to woBody.
    * @param {WorkOrder} o
    * @param {boolean} open
+   * @param {string} [choice]  the letter picked for this order, if any
    */
-  function renderWorkOrderRow(o, open) {
+  function renderWorkOrderRow(o, open, choice) {
     const id = woEsc(o.id || '');
     return `
       <article class="wo${open ? ' is-open' : ''}" data-wo-id="${id}">
@@ -2708,7 +2733,7 @@ const SocialOSUI = (() => {
           </span>
           <span class="wo-right"><span class="wo-sc">${o.score ? Number(o.score.total) : '—'}</span><span class="wo-sc-l">score</span></span>
         </button>
-        <div class="wo-body" id="wo-b-${id}"${open ? '' : ' hidden'}>${open ? woBody(o) : ''}</div>
+        <div class="wo-body" id="wo-b-${id}"${open ? '' : ' hidden'}>${open ? woBody(o, choice) : ''}</div>
       </article>`;
   }
 
@@ -2733,7 +2758,7 @@ const SocialOSUI = (() => {
    * collapsible rows ranked by WOS-1. Same data too: the server reads the
    * same Scots_Tasks.md and scores it with a port of the board's scorer.
    * Four states like the Queue: not connected, error, empty, list.
-   * @param {{configured: boolean, orders: WorkOrder[], done: WorkOrder[], projects: string[], view: {lane: string, project: string, phone: boolean, free: boolean, quick: boolean}, expanded: Object<string, boolean>, today: string, nextNum: number, loaded: boolean, fetchedAt: string, cached: boolean, error: string|null}} data
+   * @param {{configured: boolean, orders: WorkOrder[], done: WorkOrder[], projects: string[], view: {lane: string, project: string, phone: boolean, free: boolean, quick: boolean}, expanded: Object<string, boolean>, choices: Object<string, string>, today: string, nextNum: number, loaded: boolean, fetchedAt: string, cached: boolean, error: string|null}} data
    */
   function renderWorkOrders(data) {
     const container = $('workorders-content');
@@ -2820,12 +2845,12 @@ const SocialOSUI = (() => {
       const list = scored.filter(o => o.band === key && SocialOSWorkOrders.passes(o, v));
       if (!list.length) continue;
       shown += list.length;
-      html += woLane(key, label, gloss, list.length, list.map(o => renderWorkOrderRow(o, !!data.expanded[o.id || ''])).join(''));
+      html += woLane(key, label, gloss, list.length, list.map(o => renderWorkOrderRow(o, !!data.expanded[o.id || ''], (data.choices || {})[o.id || ''])).join(''));
     }
     if (unscored.length) {
       shown += unscored.length;
       html += woLane('unscored', 'Unscored', 'A block missing its v2 fields — listed so it is never lost', unscored.length,
-        unscored.map(o => renderWorkOrderRow(o, !!data.expanded[o.id || ''])).join(''));
+        unscored.map(o => renderWorkOrderRow(o, !!data.expanded[o.id || ''], (data.choices || {})[o.id || ''])).join(''));
     }
     // Scot's own `- [ ]` lines: carried through, never scored, and shown only
     // when no lane or project filter is on — the board's rule.

@@ -2892,6 +2892,12 @@ body.nav-visible .version-badge {
 .wo-opts { display: flex; flex-direction: column; gap: 6px; }
 .wo-opt { display: flex; gap: 9px; align-items: flex-start; padding: 9px 10px; border: 1px solid var(--bg-border); border-radius: var(--radius-sm); background: var(--bg-surface); }
 .wo-opt.wo-rec { border-color: var(--success); background: rgba(52, 211, 153, 0.10); }
+/* Only the option picker is a <label> wrapping a radio — a blocker in
+   "Waiting on" reuses .wo-opt as a plain, non-interactive <div> and must not
+   pick up a clickable affordance it doesn't have (run 064 review finding). */
+label.wo-opt { cursor: pointer; }
+label.wo-opt.wo-picked { border-color: var(--accent); }
+label.wo-opt input[type="radio"] { margin: 3px 0 0; accent-color: var(--accent); flex: none; }
 .wo-ol { flex: none; font: 600 0.75rem/1.5 var(--font-mono); color: var(--text-primary); }
 .wo-ot { font: 400 0.84rem/1.5 var(--font-body); color: var(--text-secondary); overflow-wrap: anywhere; }
 .wo-rec .wo-ot { color: var(--text-primary); }

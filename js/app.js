@@ -11,7 +11,7 @@ const SocialOS = (() => {
 
   /**
    * In-memory working state.
-   * @type {{currentScreen: string, onboardingStep: number, onboardingData: Object<string, any>, calendarFocusDate: string|null, approvalsTab: string, engagementSubTab: string, queue: {drafts: any[], direct: Object<string, boolean>, media: Object<string, {dataUri: string, alt: string}>, loaded: boolean}, workorders: {orders: any[], done: any[], projects: string[], today: string, nextNum: number, view: {lane: string, project: string, phone: boolean, free: boolean, quick: boolean}, expanded: Object<string, boolean>, loaded: boolean, fetchedAt: string, cached: boolean, error: string|null}, composer: {mode: string, text: string, link: string, selected: string[]|null, oneTap: boolean, posts: any[], results: any[]|null, schedule: {show: boolean, time: string}, replyPlatform: string, comment: string, postSummary: string, reply: {reply: string, alternative: string}|null, attach: {contentId: string, thumbUrl: string, title: string, flagged: boolean, auto?: boolean}|null, attachPicker: boolean, autoCardId: string|null, autoVisualBlocked: boolean, gen: {show: boolean, template: string, size: string, text: string, autoText: string, note: string, byline: string}, linkFind: {show: boolean, loading: boolean, items: any[], error: string}}}}
+   * @type {{currentScreen: string, onboardingStep: number, onboardingData: Object<string, any>, calendarFocusDate: string|null, approvalsTab: string, engagementSubTab: string, queue: {drafts: any[], direct: Object<string, boolean>, media: Object<string, {dataUri: string, alt: string}>, loaded: boolean}, workorders: {orders: any[], done: any[], projects: string[], today: string, nextNum: number, view: {lane: string, project: string, phone: boolean, free: boolean, quick: boolean}, expanded: Object<string, boolean>, choices: Object<string, string>, loaded: boolean, fetchedAt: string, cached: boolean, error: string|null}, composer: {mode: string, text: string, link: string, selected: string[]|null, oneTap: boolean, posts: any[], results: any[]|null, schedule: {show: boolean, time: string}, replyPlatform: string, comment: string, postSummary: string, reply: {reply: string, alternative: string}|null, attach: {contentId: string, thumbUrl: string, title: string, flagged: boolean, auto?: boolean}|null, attachPicker: boolean, autoCardId: string|null, autoVisualBlocked: boolean, gen: {show: boolean, template: string, size: string, text: string, autoText: string, note: string, byline: string}, linkFind: {show: boolean, loading: boolean, items: any[], error: string}}}}
    */
   const state = {
     currentScreen: 'landing',
@@ -45,6 +45,10 @@ const SocialOS = (() => {
       nextNum: 0,
       view: { lane: '', project: '', phone: false, free: false, quick: false },
       /** @type {Object<string, boolean>} */ expanded: {},
+      // Which lettered option is picked per order, id -> letter. Drives only
+      // which option's own "Say this in a chat" sentence is on screen — never
+      // reconciled into the file, so it stays ephemeral like `expanded`.
+      /** @type {Object<string, string>} */ choices: {},
       loaded: false,
       fetchedAt: '',
       cached: false,
@@ -4783,10 +4787,23 @@ const SocialOS = (() => {
     // The Work Orders project filter is a <select> (as on the board), and
     // click delegation never sees a <select>'s choice.
     document.addEventListener('change', (e) => {
-      const el = /** @type {HTMLSelectElement} */ (e.target);
-      if (!el || el.id !== 'wo-proj') return;
-      state.workorders.view.project = el.value || '';
-      renderWorkOrdersView('#wo-proj');
+      const el = /** @type {HTMLInputElement} */ (e.target);
+      if (!el) return;
+      if (el.id === 'wo-proj') {
+        state.workorders.view.project = /** @type {any} */ (el).value || '';
+        renderWorkOrdersView('#wo-proj');
+        return;
+      }
+      // A work order's option radio (board parity): picking a different
+      // option live-swaps which one's "Say this in a chat" sentence shows,
+      // same as the board — the choice itself is never sent anywhere.
+      if (el.type === 'radio' && el.hasAttribute('data-letter')) {
+        const wo = el.getAttribute('data-wo') || '';
+        const letter = el.getAttribute('data-letter') || '';
+        if (!wo || !letter) return;
+        state.workorders.choices[wo] = letter;
+        renderWorkOrdersView(`[data-wo="${CSS.escape(wo)}"][data-letter="${CSS.escape(letter)}"]`);
+      }
     });
 
     // ── Local file input ("Upload from device") ─────────────────────────
