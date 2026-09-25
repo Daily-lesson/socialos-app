@@ -109,36 +109,53 @@
 
     <!-- ═══ Approvals Screen ═══ -->
     <div id="screen-approvals" class="screen">
+      <!-- Inbox = Approvals + the agent Queue behind one tab. Static per
+           screen (each copy marks its own half current), navigates via go-*. -->
+      <div class="inbox-switch" role="group" aria-label="Inbox">
+        <button class="inbox-switch-btn is-active" aria-current="true" data-action="go-approvals">Your posts <span class="inbox-switch-count" data-inbox-count="posts" hidden></span></button>
+        <button class="inbox-switch-btn" data-action="go-queue">Agent drafts <span class="inbox-switch-count" data-inbox-count="agents" hidden></span></button>
+      </div>
       <div id="approvals-content"></div>
     </div>
 
     <!-- ═══ Front Office Queue Screen (agent drafts awaiting review) ═══ -->
     <div id="screen-queue" class="screen">
+      <!-- Inbox = Approvals + the agent Queue behind one tab. Static per
+           screen (each copy marks its own half current), navigates via go-*. -->
+      <div class="inbox-switch" role="group" aria-label="Inbox">
+        <button class="inbox-switch-btn" data-action="go-approvals">Your posts <span class="inbox-switch-count" data-inbox-count="posts" hidden></span></button>
+        <button class="inbox-switch-btn is-active" aria-current="true" data-action="go-queue">Agent drafts <span class="inbox-switch-count" data-inbox-count="agents" hidden></span></button>
+      </div>
       <div id="queue-content"></div>
     </div>
 
     <!-- ═══ Work Orders Screen (Scot's cross-project task list, read from alys) ═══ -->
     <div id="screen-workorders" class="screen">
+      <div class="screen-back-row"><button class="screen-back" data-action="go-dashboard" aria-label="Back to Home"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m15 18-6-6 6-6"/></svg>Home</button></div>
       <div id="workorders-content"></div>
     </div>
 
     <!-- ═══ Calendar Screen ═══ -->
     <div id="screen-calendar" class="screen">
+      <div class="screen-back-row"><button class="screen-back" data-action="go-dashboard" aria-label="Back to Home"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m15 18-6-6 6-6"/></svg>Home</button></div>
       <div id="calendar-content"></div>
     </div>
 
     <!-- ═══ Content Library Screen ═══ -->
     <div id="screen-library" class="screen">
+      <div class="screen-back-row"><button class="screen-back" data-action="go-dashboard" aria-label="Back to Home"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m15 18-6-6 6-6"/></svg>Home</button></div>
       <div id="library-content"></div>
     </div>
 
     <!-- ═══ Projects Screen (Program Manager) ═══ -->
     <div id="screen-projects" class="screen">
+      <div class="screen-back-row"><button class="screen-back" data-action="go-dashboard" aria-label="Back to Home"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m15 18-6-6 6-6"/></svg>Home</button></div>
       <div id="projects-content"></div>
     </div>
 
     <!-- ═══ Settings Screen ═══ -->
     <div id="screen-settings" class="screen">
+      <div class="screen-back-row"><button class="screen-back" data-action="go-dashboard" aria-label="Back to Home"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m15 18-6-6 6-6"/></svg>Home</button></div>
       <div id="settings-content"></div>
     </div>
 
@@ -149,76 +166,31 @@
         <span class="nav-brand-name">Social<em>OS</em></span>
       </div>
 
+      <!-- Three tabs, never more. Every other screen hangs off one of them:
+           data-also lists the screens that light the tab up (ui.js showScreen),
+           and they are reached from Home's tiles / the Inbox switch. A new
+           screen gets a Home tile, not a fourth tab. -->
       <div class="nav-tabs">
-        <button class="nav-tab" data-screen="screen-dashboard">
+        <button class="nav-tab" data-screen="screen-dashboard" data-also="screen-calendar screen-library screen-projects screen-workorders screen-settings">
           <span class="nav-tab-icon">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 10.5 12 3l9 7.5"/><path d="M5 9.5V21h14V9.5"/><path d="M9.5 21v-6h5v6"/></svg>
           </span>
           <span class="nav-tab-label">Home</span>
         </button>
-        <button class="nav-tab" data-screen="screen-compose">
+        <button class="nav-tab nav-tab-create" data-screen="screen-compose">
           <span class="nav-tab-icon">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg>
           </span>
-          <span class="nav-tab-label">Compose</span>
+          <span class="nav-tab-label">Create</span>
         </button>
-        <button class="nav-tab" data-screen="screen-approvals">
-          <span class="nav-tab-icon">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>
-          </span>
-          <span class="nav-tab-label">Approvals</span>
-          <span class="nav-badge" id="approval-badge">0</span>
-        </button>
-        <button class="nav-tab" data-screen="screen-queue">
+        <button class="nav-tab" data-screen="screen-approvals" data-also="screen-queue">
           <span class="nav-tab-icon">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-6l-2 3h-4l-2-3H2"/><path d="M5.5 5.1 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.5-6.9A2 2 0 0 0 16.7 4H7.3a2 2 0 0 0-1.8 1.1z"/></svg>
           </span>
-          <span class="nav-tab-label">Queue</span>
-        </button>
-        <button class="nav-tab" data-screen="screen-workorders">
-          <span class="nav-tab-icon">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="4" width="14" height="17" rx="2"/><path d="M9 4.5V3h6v1.5"/><path d="m8.5 12 2 2 4-4"/><path d="M9 17h6"/></svg>
-          </span>
-          <span class="nav-tab-label">Work Orders</span>
-        </button>
-        <button class="nav-tab" data-screen="screen-calendar">
-          <span class="nav-tab-icon">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M16 3v4M8 3v4M3 11h18"/></svg>
-          </span>
-          <span class="nav-tab-label">Calendar</span>
-        </button>
-        <button class="nav-tab" data-screen="screen-library">
-          <span class="nav-tab-icon">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="9" cy="10" r="1.6"/><path d="m21 16-4.5-4.5L9 19"/></svg>
-          </span>
-          <span class="nav-tab-label">Library</span>
-        </button>
-        <button class="nav-tab" data-screen="screen-projects">
-          <span class="nav-tab-icon">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l2.6 5.3 5.9.8-4.3 4.1 1 5.8L12 16.3 6.8 19l1-5.8L3.5 9.1l5.9-.8L12 3z"/></svg>
-          </span>
-          <span class="nav-tab-label">Projects</span>
-        </button>
-        <button class="nav-tab" data-screen="screen-settings">
-          <span class="nav-tab-icon">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3.2"/><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.7 1.7 0 0 0-1.87-.34 1.7 1.7 0 0 0-1.03 1.56V21a2 2 0 1 1-4 0v-.09A1.7 1.7 0 0 0 8.98 19.4a1.7 1.7 0 0 0-1.87.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.7 1.7 0 0 0 .34-1.87 1.7 1.7 0 0 0-1.56-1.03H3a2 2 0 1 1 0-4h.09A1.7 1.7 0 0 0 4.6 8.98a1.7 1.7 0 0 0-.34-1.87l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.7 1.7 0 0 0 1.87.34H9a1.7 1.7 0 0 0 1.03-1.56V3a2 2 0 1 1 4 0v.09c0 .68.4 1.3 1.03 1.56a1.7 1.7 0 0 0 1.87-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.7 1.7 0 0 0-.34 1.87V9c.26.63.88 1.03 1.56 1.03H21a2 2 0 1 1 0 4h-.09a1.7 1.7 0 0 0-1.56 1.03z"/></svg>
-          </span>
-          <span class="nav-tab-label">Settings</span>
-        </button>
-        <!-- Responsive overflow: shown by ui.js only when the bottom bar is too
-             narrow for every tab; tabs that don't fit collapse into this menu.
-             No data-screen on purpose — it toggles #nav-more-menu, not a screen. -->
-        <button class="nav-tab" id="nav-more-tab" style="display:none" aria-haspopup="menu" aria-expanded="false">
-          <span class="nav-tab-icon">
-            <svg viewBox="0 0 24 24" fill="currentColor" stroke="none"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg>
-          </span>
-          <span class="nav-tab-label">More</span>
-          <span class="nav-badge" id="nav-more-badge">0</span>
+          <span class="nav-tab-label">Inbox</span>
+          <span class="nav-badge" id="approval-badge">0</span>
         </button>
       </div>
-      <!-- Popover listing the tabs the bar couldn't fit; items navigate via the
-           global data-action delegation (go-*), so they need no per-item wiring. -->
-      <div id="nav-more-menu" role="menu" aria-label="More screens" hidden></div>
     </nav>
 
   </div>
@@ -247,26 +219,16 @@
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a8 8 0 0 1-8 8H4l2-3a8 8 0 1 1 15-5z"/><path d="M9 11h6M9 14h3"/></svg>
   </button>
 
-  <!-- App version — small, muted, bottom-right (SemVer https://semver.org).
-       window.SOCIALOS_VERSION is the single source of truth for the app
-       version; keep it in step with sw.js CACHE_NAME on shell releases. -->
+  <!-- App version — small, muted. js/version.js fills it (window.SOCIALOS_VERSION
+       lives there: an inline script here was blocked by the CSP above). -->
   <a id="version-badge" class="version-badge" href="https://semver.org" target="_blank" rel="noopener noreferrer" aria-label="App version"></a>
-  <script>
-    window.SOCIALOS_VERSION = '1.0.0';
-    (function () {
-      var b = document.getElementById('version-badge');
-      if (b) {
-        b.textContent = 'v' + window.SOCIALOS_VERSION;
-        b.title = 'SocialOS v' + window.SOCIALOS_VERSION;
-      }
-    })();
-  </script>
 
   <!-- ═══ Scripts (order matters — no modules, no bundler) ═══ -->
   <!-- self-healing.js has no dependencies and installs window.onerror /
        unhandledrejection from SocialOS.init(); it must load first so early
        errors during boot are still catchable. -->
   <script src="js/self-healing.js"></script>
+  <script src="js/version.js"></script>
   <script src="js/utils.js"></script>
   <script src="js/db.js"></script>
   <script src="js/media.js"></script>

@@ -22,6 +22,9 @@
   --accent-2:      #A855F7;
   --accent-3:      #22D3EE;
   --grad-accent:   linear-gradient(135deg, #6E7BFF 0%, #A855F7 100%);
+  /* Darker stops for small white labels on a gradient: --grad-accent is
+     3.5–4:1 behind 13px text; this clears WCAG AA 4.5:1 end to end. */
+  --grad-accent-aa: linear-gradient(135deg, #4F5BE8 0%, #8A3CD9 100%);
   --grad-aurora:   linear-gradient(120deg, #6E7BFF 0%, #A855F7 45%, #22D3EE 100%);
   --success:       #34D399;
   --warning:       #FBBF24;
@@ -63,7 +66,15 @@
   --glow-accent: 0 0 24px rgba(110, 123, 255, 0.35);
 
   /* Layout */
-  --nav-height: 64px;
+  --nav-height: 64px;     /* the floating bar itself */
+  --nav-gap: 10px;        /* air between the bar and the screen edge */
+  --nav-clearance: calc(var(--nav-height) + var(--nav-gap));
+  /* The feedback button docks beside the bar on phones instead of floating
+     over content: the bar and the button are centred as one group. */
+  --dock-fab: 48px;
+  --dock-gap: 8px;
+  --bar-w: min(420px, calc(100vw - 2 * var(--space-md) - var(--dock-fab) - var(--dock-gap)));
+  --dock-left: calc(50% - (var(--bar-w) + var(--dock-gap) + var(--dock-fab)) / 2);
   --sidebar-width: 236px;
   --content-max: 1080px;
 
@@ -138,7 +149,7 @@ img { max-width: 100%; height: auto; }
   flex: 1;
   padding: var(--space-lg) var(--space-md);
   padding-top: calc(var(--space-lg) + var(--safe-top));
-  padding-bottom: calc(var(--nav-height) + var(--space-lg) + var(--safe-bottom));
+  padding-bottom: calc(var(--nav-clearance) + var(--space-lg) + var(--safe-bottom));
   overflow-y: auto;
   -webkit-overflow-scrolling: touch;
 }
@@ -164,50 +175,60 @@ img { max-width: 100%; height: auto; }
 .screen-full > div { max-width: none; }
 
 /* ═══════════════════════════════════════════════════════════════════
-   NAVIGATION — bottom glass bar (mobile) / fixed sidebar (desktop)
+   NAVIGATION — floating glass bar (mobile) / fixed sidebar (desktop)
+   Three tabs, never more: Home · Create · Inbox. Every other screen hangs
+   off Home's tiles or the Inbox switch (index.html data-also), so there is
+   no overflow to manage — the old "More" menu is gone with the other six.
    ═══════════════════════════════════════════════════════════════════ */
 
 #main-nav {
   position: fixed;
-  bottom: 0;
-  left: 0;
-  right: 0;
+  left: var(--dock-left);
+  bottom: calc(var(--nav-gap) + var(--safe-bottom));
+  width: var(--bar-w);
   z-index: 100;
   display: flex;
   flex-direction: column;
-  background: rgba(10, 10, 18, 0.82);
-  -webkit-backdrop-filter: blur(18px);
-  backdrop-filter: blur(18px);
-  border-top: 1px solid var(--bg-border);
-  padding-bottom: var(--safe-bottom);
+  padding: 6px;
+  background: rgba(14, 14, 24, 0.92);
+  -webkit-backdrop-filter: blur(20px) saturate(140%);
+  backdrop-filter: blur(20px) saturate(140%);
+  border: 1px solid var(--bg-border-strong);
+  border-radius: 24px;
+  box-shadow: 0 14px 36px rgba(0, 0, 0, 0.55), inset 0 1px 0 rgba(255, 255, 255, 0.04);
 }
 
 .nav-brand { display: none; }
 
 .nav-tabs {
   display: flex;
+  align-items: center;
+  gap: 4px;
   width: 100%;
 }
 
 .nav-tab {
   flex: 1;
+  min-width: 0;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 3px;
-  padding: 10px 0 8px;
+  gap: 2px;
+  min-height: calc(var(--nav-height) - 12px);
+  padding: 6px 0;
   color: var(--text-secondary);
-  font-size: 0.625rem;
-  font-weight: 500;
   font-family: var(--font-body);
+  font-size: 0.6875rem;
+  font-weight: 600;
   letter-spacing: 0.02em;
-  cursor: pointer;
-  transition: color 0.2s;
   border: none;
+  border-radius: 18px;
   background: transparent;
+  cursor: pointer;
   position: relative;
-  min-height: var(--nav-height);
+  transition: color 0.2s, background 0.2s;
+  -webkit-tap-highlight-color: transparent;
 }
 
 .nav-tab-icon {
@@ -218,46 +239,50 @@ img { max-width: 100%; height: auto; }
 
 .nav-tab-icon svg { width: 100%; height: 100%; }
 
-/* 8 tabs share the bar: without min-width:0 a long label ("Approvals") makes
-   its flex item refuse to shrink on narrow phones — tabs go unequal and the
-   bar overflows/clips (the iOS render bug). Labels ellipsize instead. */
-.nav-tab { min-width: 0; }
+.nav-tab-label { white-space: nowrap; }
 
-.nav-tab-label {
-  max-width: 100%;
-  padding: 0 2px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+.nav-tab:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.nav-tab.active {
+  color: var(--text-primary);
+  background: rgba(110, 123, 255, 0.14);
 }
-
-.nav-tab.active { color: var(--text-primary); }
 
 .nav-tab.active .nav-tab-icon {
   color: var(--accent);
   filter: drop-shadow(0 0 8px rgba(110, 123, 255, 0.6));
 }
 
-/* Active indicator: bar above the icon on mobile */
-.nav-tab::after {
-  content: '';
-  position: absolute;
-  top: 0;
-  left: 50%;
-  transform: translateX(-50%) scaleX(0);
-  width: 28px;
-  height: 2px;
-  border-radius: 2px;
-  background: var(--grad-accent);
-  transition: transform 0.25s ease;
+/* Create — the one action the app exists for — is a lit pill, not a tab */
+.nav-tab-create {
+  flex: 1.15;
+  flex-direction: row;
+  gap: 6px;
+  min-height: 44px;
+  margin: 0 4px;
+  color: #fff;
+  font-size: 0.8125rem;
+  background: var(--grad-accent-aa);
+  border-radius: var(--radius-full);
+  box-shadow: 0 6px 18px rgba(110, 123, 255, 0.35);
 }
 
-.nav-tab.active::after { transform: translateX(-50%) scaleX(1); }
+.nav-tab-create .nav-tab-icon { width: 18px; height: 18px; }
+
+.nav-tab-create:hover { box-shadow: 0 8px 24px rgba(110, 123, 255, 0.5); }
+
+.nav-tab-create.active {
+  color: #fff;
+  background: var(--grad-accent-aa);
+  box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.18), 0 8px 24px rgba(110, 123, 255, 0.5);
+}
+
+.nav-tab-create.active .nav-tab-icon { color: #fff; filter: none; }
 
 .nav-badge {
   position: absolute;
-  top: 6px;
-  right: calc(50% - 20px);
+  top: 4px;
+  right: calc(50% - 22px);
   background: var(--danger);
   color: #fff;
   font-size: 0.625rem;
@@ -269,73 +294,7 @@ img { max-width: 100%; height: auto; }
   align-items: center;
   justify-content: center;
   padding: 0 4px;
-  box-shadow: 0 0 0 2px var(--bg-primary);
-}
-
-/* ── "More" overflow tab + popover (bottom-bar mode only, JS-driven) ──
-   ui.js updateNavOverflow() hides tabs that don't fit the bar's width and
-   lists them here instead — menu choices are never squeezed off-screen. */
-
-#nav-more-menu {
-  position: absolute;
-  bottom: calc(100% + 10px);
-  right: 10px;
-  min-width: 200px;
-  max-width: calc(100vw - 20px);
-  background: rgba(16, 16, 28, 0.96);
-  -webkit-backdrop-filter: blur(18px);
-  backdrop-filter: blur(18px);
-  border: 1px solid var(--bg-border);
-  border-radius: var(--radius-md);
-  padding: 6px;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.5);
-  z-index: 110;
-}
-
-#nav-more-menu[hidden] { display: none; }
-
-.nav-more-item {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 11px 12px;
-  min-height: 44px;
-  border: none;
-  background: transparent;
-  color: var(--text-secondary);
-  font-size: 0.875rem;
-  font-weight: 500;
-  font-family: var(--font-body);
-  border-radius: var(--radius-sm);
-  cursor: pointer;
-  text-align: left;
-}
-
-.nav-more-item:hover { color: var(--text-primary); background: rgba(148, 156, 255, 0.06); }
-
-.nav-more-item.active {
-  color: var(--text-primary);
-  background: rgba(110, 123, 255, 0.12);
-}
-
-.nav-more-item .nav-tab-icon { width: 20px; height: 20px; flex: none; }
-
-.nav-more-badge-inline {
-  margin-left: auto;
-  background: var(--danger);
-  color: #fff;
-  font-size: 0.625rem;
-  font-weight: 700;
-  min-width: 17px;
-  height: 17px;
-  border-radius: var(--radius-full);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 0 4px;
+  box-shadow: 0 0 0 2px var(--bg-surface);
 }
 
 /* ── Desktop: sidebar ──────────────────────────────────────────────── */
@@ -343,21 +302,18 @@ img { max-width: 100%; height: auto; }
 @media (min-width: 1024px) {
   #main-nav {
     top: 0;
-    right: auto;
+    bottom: 0;
+    left: 0;
     width: var(--sidebar-width);
-    border-top: none;
-    border-right: 1px solid var(--bg-border);
     padding: var(--space-lg) var(--space-md);
     gap: var(--space-xl);
-    /* A short window (landscape phone/tablet) must scroll the stacked
-       tabs, not clip them off the bottom with no recovery. */
+    border: none;
+    border-right: 1px solid var(--bg-border);
+    border-radius: 0;
+    box-shadow: none;
+    background: rgba(10, 10, 18, 0.82);
     overflow-y: auto;
   }
-
-  /* The sidebar is vertical — nothing can overflow horizontally, so the
-     More tab/menu never appear here (static guard; JS also hides them). */
-  #nav-more-tab,
-  #nav-more-menu { display: none !important; }
 
   .nav-brand {
     display: flex;
@@ -393,10 +349,12 @@ img { max-width: 100%; height: auto; }
 
   .nav-tabs {
     flex-direction: column;
+    align-items: stretch;
     gap: 4px;
   }
 
   .nav-tab {
+    flex: none;
     flex-direction: row;
     justify-content: flex-start;
     gap: 12px;
@@ -404,25 +362,40 @@ img { max-width: 100%; height: auto; }
     min-height: 0;
     border-radius: var(--radius-sm);
     font-size: 0.875rem;
-    transition: color 0.2s, background 0.2s;
+    font-weight: 500;
   }
 
   .nav-tab:hover { color: var(--text-primary); background: rgba(148, 156, 255, 0.06); }
 
-  .nav-tab.active {
-    background: rgba(110, 123, 255, 0.12);
-    color: var(--text-primary);
-  }
+  .nav-tab.active { background: rgba(110, 123, 255, 0.12); }
 
+  /* Active indicator: a bar on the sidebar's inner edge */
   .nav-tab::after {
+    content: '';
+    position: absolute;
     top: 50%;
     left: 0;
-    transform: translateY(-50%) scaleY(0);
     width: 3px;
     height: 22px;
+    border-radius: 2px;
+    background: var(--grad-accent);
+    transform: translateY(-50%) scaleY(0);
+    transition: transform 0.25s ease;
   }
 
   .nav-tab.active::after { transform: translateY(-50%) scaleY(1); }
+
+  .nav-tab-create {
+    justify-content: center;
+    margin: 0 0 var(--space-sm);
+    padding: 12px;
+    color: #fff;
+    font-weight: 600;
+    border-radius: var(--radius-full);
+  }
+
+  .nav-tab-create::after { display: none; }
+  .nav-tab-create:hover { color: #fff; background: var(--grad-accent-aa); }
 
   .nav-badge {
     position: static;
@@ -437,6 +410,88 @@ img { max-width: 100%; height: auto; }
   }
 
   body.nav-visible .screen > div { max-width: var(--content-max); }
+}
+
+/* ── In-screen wayfinding for screens without a tab of their own ───── */
+
+/* "‹ Home" above Calendar / Library / Projects / Work orders / Settings */
+.screen > .screen-back-row { margin: 0 auto var(--space-sm); }
+
+.screen-back {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  min-height: 44px;
+  padding: 6px 12px 6px 6px;
+  border: none;
+  border-radius: var(--radius-full);
+  background: transparent;
+  color: var(--text-secondary);
+  font-family: var(--font-body);
+  font-size: 0.875rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: color 0.2s, background 0.2s;
+}
+
+.screen-back svg { width: 18px; height: 18px; }
+.screen-back:hover { color: var(--text-primary); background: rgba(148, 156, 255, 0.08); }
+
+/* Inbox: Your posts ⇄ Agent drafts, one segmented switch on both screens */
+.inbox-switch {
+  display: flex;
+  gap: 4px;
+  padding: 4px;
+  background: var(--bg-surface);
+  border: 1px solid var(--bg-border);
+  border-radius: var(--radius-full);
+}
+
+/* body.nav-visible prefix: the desktop sidebar rule widens every
+   `.screen > div` to --content-max at higher specificity (0,2,2). */
+.screen > .inbox-switch,
+body.nav-visible .screen > .inbox-switch { max-width: 420px; margin: 0 auto var(--space-lg); }
+
+.inbox-switch-btn {
+  flex: 1;
+  min-height: 44px;
+  border: none;
+  border-radius: var(--radius-full);
+  background: transparent;
+  color: var(--text-secondary);
+  font-family: var(--font-display);
+  font-size: 0.9rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: color 0.2s, background 0.2s;
+}
+
+.inbox-switch-btn:hover { color: var(--text-primary); }
+
+.inbox-switch-count {
+  display: inline-grid;
+  place-items: center;
+  min-width: 20px;
+  height: 20px;
+  margin-left: 6px;
+  padding: 0 6px;
+  border-radius: var(--radius-full);
+  background: rgba(146, 151, 184, 0.18);
+  color: var(--text-primary);
+  font-family: var(--font-body);
+  font-size: 0.6875rem;
+  font-weight: 700;
+  vertical-align: 1px;
+}
+
+.inbox-switch-count[hidden] { display: none; }
+/* A dark pill, not a white wash: white on 22% white over the gradient was 3.5:1 */
+.inbox-switch-btn.is-active .inbox-switch-count { background: rgba(0, 0, 0, 0.32); color: #fff; }
+
+.inbox-switch-btn.is-active {
+  color: #fff;
+  background: var(--grad-accent-aa);
+  box-shadow: 0 4px 14px rgba(110, 123, 255, 0.3);
 }
 
 /* ═══════════════════════════════════════════════════════════════════
@@ -1327,17 +1382,32 @@ select.input {
    DASHBOARD
    ═══════════════════════════════════════════════════════════════════ */
 
-.dash-header {
+/* Header: date + greeting + sync status, Settings gear on the right */
+.dash-top {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-md);
   margin-bottom: var(--space-lg);
 }
 
-.dash-header h1 {
-  margin-bottom: var(--space-xs);
+.dash-top-text { flex: 1; min-width: 0; }
+
+.dash-date {
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+  margin-bottom: 6px;
+}
+
+.dash-top h1 {
+  margin-bottom: 10px;
   font-size: clamp(1.6rem, 4vw, 2.1rem);
   letter-spacing: -0.02em;
 }
 
-.dash-header .grad {
+.dash-top .grad {
   background: var(--grad-aurora);
   -webkit-background-clip: text;
   background-clip: text;
@@ -1345,68 +1415,218 @@ select.input {
   color: transparent;
 }
 
-.dash-cards {
+.dash-sync {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 100%;
+  min-height: 32px;
+  padding: 6px 12px 6px 10px;
+  border: 1px solid var(--bg-border);
+  border-radius: var(--radius-full);
+  background: var(--bg-surface);
+  color: var(--text-secondary);
+  font-family: var(--font-body);
+  font-size: 0.75rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+}
+
+.dash-sync-dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--text-faint);
+}
+
+.dash-sync.is-synced .dash-sync-dot {
+  background: var(--success);
+  box-shadow: 0 0 8px rgba(52, 211, 153, 0.6);
+}
+
+.dash-gear {
+  flex: none;
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  border: 1px solid var(--bg-border);
+  border-radius: var(--radius-md);
+  background: var(--bg-card);
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: color 0.2s, border-color 0.2s, transform 0.3s ease;
+}
+
+.dash-gear svg { width: 22px; height: 22px; }
+.dash-gear:hover { color: var(--text-primary); border-color: var(--bg-border-strong); transform: rotate(30deg); }
+
+/* "N things need you" — the one number Home leads with */
+.dash-attn {
+  display: flex;
+  align-items: center;
   gap: var(--space-md);
+  width: 100%;
+  margin-bottom: var(--space-md);
+  padding: var(--space-md);
+  text-align: left;
+  color: var(--text-primary);
+  font-family: var(--font-body);
+  background: linear-gradient(120deg, rgba(251, 191, 36, 0.12), rgba(251, 191, 36, 0.03));
+  border: 1px solid rgba(251, 191, 36, 0.3);
+  border-radius: var(--radius-lg);
+  cursor: pointer;
+  transition: border-color 0.2s, transform 0.15s;
+}
+
+button.dash-attn:hover { border-color: var(--warning); transform: translateY(-1px); }
+
+.dash-attn-count {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  border-radius: var(--radius-md);
+  background: var(--warning);
+  color: #1A1206;
+  font-family: var(--font-display);
+  font-size: 1.25rem;
+  font-weight: 700;
+}
+
+.dash-attn-count svg { width: 22px; height: 22px; }
+
+.dash-attn-text { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.dash-attn-title { font-family: var(--font-display); font-weight: 600; font-size: 1rem; }
+.dash-attn-sub { color: var(--text-secondary); font-size: 0.8125rem; }
+
+.dash-attn-go { flex: none; display: inline-flex; width: 20px; height: 20px; color: var(--warning); }
+.dash-attn-go svg { width: 100%; height: 100%; }
+
+.dash-attn.is-clear {
+  cursor: default;
+  background: linear-gradient(120deg, rgba(52, 211, 153, 0.1), rgba(52, 211, 153, 0.02));
+  border-color: rgba(52, 211, 153, 0.25);
+}
+
+.dash-attn.is-clear .dash-attn-count { background: rgba(52, 211, 153, 0.18); color: var(--success); }
+
+/* No next post: one quiet line into the Library, not a hero-sized card */
+.dash-empty {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 100%;
+  text-align: left;
+  font-family: var(--font-body);
+  font-size: 0.875rem;
+  color: var(--text-primary);
+  border-style: dashed;
+  cursor: pointer;
+}
+
+.dash-empty:hover { border-color: var(--bg-border-strong); }
+.dash-empty-title { font-family: var(--font-display); font-weight: 600; font-size: 1rem; }
+
+/* Workspace tiles — the way into every screen without a tab */
+.dash-section-title {
+  margin: var(--space-lg) 0 var(--space-sm);
+  font-size: 0.75rem;
+  font-family: var(--font-body);
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+}
+
+.dash-tiles {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: var(--space-sm);
   margin-bottom: var(--space-md);
 }
 
-.dash-card {
-  position: relative;
+@media (min-width: 640px) {
+  .dash-tiles { grid-template-columns: repeat(3, 1fr); }
+}
+
+.dash-tile {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  min-width: 0;
+  padding: var(--space-md);
+  text-align: left;
+  color: var(--text-primary);
+  font-family: var(--font-body);
   background: var(--bg-card);
   border: 1px solid var(--bg-border);
   border-radius: var(--radius-md);
-  padding: var(--space-lg) var(--space-md);
   cursor: pointer;
-  transition: border-color 0.2s, transform 0.2s, box-shadow 0.2s;
-  overflow: hidden;
+  transition: border-color 0.2s, transform 0.15s, background 0.2s;
 }
 
-.dash-card:hover {
+.dash-tile:hover {
   border-color: var(--bg-border-strong);
-  transform: translateY(-2px);
-  box-shadow: var(--shadow-elevated);
+  background: var(--bg-elevated);
+  transform: translateY(-1px);
 }
 
-.dash-card::after {
-  content: '';
-  position: absolute;
-  top: 0; left: 0; right: 0;
-  height: 2px;
-  background: var(--card-glow, var(--grad-accent));
-  opacity: 0.7;
+.dash-tile-icon {
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  margin-bottom: var(--space-sm);
+  border-radius: var(--radius-sm);
+  background: rgba(110, 123, 255, 0.12);
+  color: var(--accent);
 }
 
-.card-pending  { --card-glow: linear-gradient(90deg, #FBBF24, #F59E0B); }
-.card-content  { --card-glow: linear-gradient(90deg, #6E7BFF, #22D3EE); }
-.card-projects { --card-glow: linear-gradient(90deg, #A855F7, #6E7BFF); }
-.card-tasks    { --card-glow: linear-gradient(90deg, #34D399, #22D3EE); }
+.dash-tile-icon svg { width: 20px; height: 20px; }
+.dash-tile-title { font-family: var(--font-display); font-weight: 600; font-size: 0.9375rem; }
 
-.dash-card-number {
-  font-family: var(--font-display);
-  font-size: 2.4rem;
-  font-weight: 700;
-  line-height: 1;
-  margin-bottom: var(--space-xs);
-}
-
-.card-pending .dash-card-number  { color: var(--warning); }
-.card-content .dash-card-number  { color: var(--accent); }
-.card-projects .dash-card-number { color: var(--accent-2); }
-.card-tasks .dash-card-number    { color: var(--success); }
-
-.dash-card-label {
-  font-size: 0.8125rem;
+.dash-tile-meta {
+  max-width: 100%;
   color: var(--text-secondary);
+  font-size: 0.75rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
+
+/* ── Shared tile-screen header (ui.js screenHead) ──────────────────── */
+.screen-head {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-md);
+  margin-bottom: var(--space-lg);
+}
+
+.screen-head-text { flex: 1; min-width: 0; }
+
+.screen-head-title {
+  font-size: clamp(1.5rem, 4vw, 1.9rem);
+  letter-spacing: -0.02em;
+}
+
+.screen-head-sub {
+  margin-top: 4px;
+  color: var(--text-secondary);
+  font-size: 0.875rem;
+}
+
+.screen-head-actions { flex: none; display: flex; gap: var(--space-sm); padding-top: 4px; }
 
 /* Two-column dashboard body on desktop */
 .dash-columns { display: block; }
 
 @media (min-width: 1024px) {
-  .dash-cards { grid-template-columns: repeat(4, 1fr); }
-
   .dash-columns {
     display: grid;
     grid-template-columns: 1.2fr 1fr;
@@ -1434,7 +1654,7 @@ select.input {
 }
 
 @media (min-width: 640px) {
-  .action-grid { grid-template-columns: repeat(3, 1fr); }
+  .action-grid { grid-template-columns: repeat(4, 1fr); }
 }
 
 .action-btn {
@@ -1604,6 +1824,28 @@ select.input {
   .tab-btn, .subtab-btn { flex: 0 0 auto; padding-inline: 24px; }
 }
 
+/* Under the Inbox switch, Posts / Engagement is the second level: an
+   underline row, so two gradient pills never stack on one screen. */
+#screen-approvals .tab-bar {
+  gap: 0;
+  border-bottom: 1px solid var(--bg-border);
+}
+
+#screen-approvals .tab-btn {
+  flex: 0 0 auto;
+  padding: 10px 16px;
+  border: none;
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
+  background: transparent;
+}
+
+#screen-approvals .tab-btn.active {
+  color: var(--text-primary);
+  background: transparent;
+  border-bottom-color: var(--accent);
+}
+
 .tab-count {
   display: inline-block;
   margin-left: 4px;
@@ -1727,6 +1969,107 @@ select.input {
 }
 
 .source-btn svg { width: 16px; height: 16px; color: var(--accent); }
+
+/* ── Library (ui.js renderLibrary) ─────────────────────────────────── */
+.lib-sources {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: var(--space-sm);
+  margin-bottom: var(--space-lg);
+}
+
+.lib-source {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  min-height: 64px;
+  padding: 10px 4px;
+  background: var(--bg-card);
+  border: 1px solid var(--bg-border);
+  border-radius: var(--radius-md);
+  color: var(--text-primary);
+  font-family: var(--font-body);
+  font-size: 0.75rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: border-color 0.2s, background 0.2s;
+}
+
+.lib-source svg { width: 20px; height: 20px; color: var(--accent); }
+.lib-source:hover { border-color: var(--accent); background: rgba(110, 123, 255, 0.06); }
+
+/* minmax(0, …), not 1fr: a 1fr track's floor is its content's min width,
+   and the nowrap meta line pushed rows past the screen edge on phones. */
+.lib-list {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--space-sm);
+}
+
+@media (min-width: 1024px) {
+  .lib-list { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+.lib-item {
+  min-width: 0;
+  display: flex;
+  gap: var(--space-md);
+  padding: var(--space-sm);
+  background: var(--bg-card);
+  border: 1px solid var(--bg-border);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  transition: border-color 0.2s, background 0.2s;
+}
+
+.lib-item:hover { border-color: var(--bg-border-strong); background: var(--bg-elevated); }
+.lib-item:focus-visible, .project-card:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.lib-thumb {
+  position: relative;
+  flex: none;
+  width: 72px;
+  height: 72px;
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  background: var(--bg-surface);
+}
+
+.lib-thumb img { width: 100%; height: 100%; object-fit: cover; }
+.lib-thumb.is-icon { display: grid; place-items: center; color: var(--accent); background: rgba(110, 123, 255, 0.1); }
+.lib-thumb.is-icon svg { width: 26px; height: 26px; }
+.lib-thumb .face-flag { position: absolute; right: 3px; bottom: 3px; font-size: 0.75rem; }
+
+.lib-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; padding-top: 2px; }
+.lib-top { display: flex; align-items: flex-start; gap: var(--space-sm); }
+.lib-title { flex: 1; min-width: 0; font-size: 0.9375rem; line-height: 1.3; }
+.lib-top .rating-badge { flex: none; }
+
+.lib-desc {
+  color: var(--text-secondary);
+  font-size: 0.8125rem;
+  line-height: 1.4;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.lib-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: auto;
+  color: var(--text-secondary);
+  font-size: 0.75rem;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.lib-tag { color: var(--accent); }
+.lib-dots { display: inline-flex; gap: 4px; margin-left: auto; }
 
 .content-grid {
   display: grid;
@@ -1908,6 +2251,66 @@ select.input {
    CALENDAR
    ═══════════════════════════════════════════════════════════════════ */
 
+/* ── Calendar toolbar + agenda (ui.js renderCalendar) ──────────────── */
+.cal-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-sm);
+  margin-bottom: var(--space-md);
+}
+
+.cal-arrow {
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  border: 1px solid var(--bg-border);
+  border-radius: var(--radius-full);
+  background: var(--bg-card);
+  color: var(--text-primary);
+  cursor: pointer;
+  transition: border-color 0.2s;
+}
+
+.cal-arrow svg { width: 18px; height: 18px; }
+.cal-arrow.is-prev svg { transform: rotate(180deg); }
+.cal-arrow:hover { border-color: var(--accent); }
+
+.cal-agenda { display: flex; flex-direction: column; gap: 6px; }
+
+.cal-agenda-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-md);
+  padding: 12px var(--space-md);
+  background: var(--bg-card);
+  border: 1px solid var(--bg-border);
+  border-radius: var(--radius-md);
+}
+
+.cal-agenda-dot { flex: none; width: 10px; height: 10px; border-radius: 50%; }
+.cal-agenda-text { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.cal-agenda-when { font-weight: 600; font-size: 0.875rem; }
+.cal-agenda-what { color: var(--text-secondary); font-size: 0.8125rem; }
+
+.cal-agenda-status {
+  flex: none;
+  padding: 3px 10px;
+  border-radius: var(--radius-full);
+  background: rgba(146, 151, 184, 0.14);
+  color: var(--text-secondary);
+  font-size: 0.6875rem;
+  font-weight: 600;
+  text-transform: capitalize;
+}
+
+.cal-agenda-status.status-draft_ready,
+.cal-agenda-status.status-approved { background: rgba(110, 123, 255, 0.16); color: #AEB5FF; }
+.cal-agenda-status.status-published { background: rgba(52, 211, 153, 0.15); color: var(--success); }
+
+.cal-agenda-empty { font-size: 0.875rem; }
+
 .calendar-nav {
   display: flex;
   align-items: center;
@@ -1994,16 +2397,8 @@ select.input {
   margin-bottom: var(--space-md);
 }
 
-@media (min-width: 1024px) {
-  #settings-content {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: var(--space-md);
-    align-items: start;
-  }
-  #settings-content > .screen-title { grid-column: 1 / -1; margin-bottom: 0; }
-  .settings-section { margin-bottom: 0; }
-}
+/* Settings reads as one calm column of groups, even on desktop */
+body.nav-visible #screen-settings > #settings-content { max-width: 760px; }
 
 .settings-section h3 {
   margin-bottom: var(--space-md);
@@ -2029,6 +2424,96 @@ select.input {
   background: rgba(146, 151, 184, 0.15);
   color: var(--text-secondary);
 }
+
+/* Groups: a closed group is one row — icon, title, live status — so the
+   whole screen fits on a phone before anything is opened. */
+.set-group {
+  margin-bottom: var(--space-sm);
+  background: var(--bg-card);
+  border: 1px solid var(--bg-border);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+}
+
+.set-group[open] { border-color: var(--bg-border-strong); }
+
+.set-group-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-md);
+  min-height: 64px;
+  padding: var(--space-sm) var(--space-md);
+  cursor: pointer;
+  list-style: none;
+}
+
+.set-group-head::-webkit-details-marker { display: none; }
+.set-group-head:hover { background: rgba(148, 156, 255, 0.04); }
+.set-group-head:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+
+.set-group-icon {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 38px;
+  height: 38px;
+  border-radius: var(--radius-sm);
+  background: rgba(110, 123, 255, 0.12);
+  color: var(--accent);
+}
+
+.set-group-icon svg { width: 20px; height: 20px; }
+.set-group-text { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.set-group-title { font-family: var(--font-display); font-weight: 600; font-size: 1rem; }
+
+.set-group-status {
+  color: var(--text-secondary);
+  font-size: 0.8125rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.set-group-chev { flex: none; display: inline-flex; width: 18px; height: 18px; color: var(--text-secondary); transition: transform 0.2s; }
+.set-group-chev svg { width: 100%; height: 100%; }
+.set-group[open] .set-group-chev { transform: rotate(90deg); }
+
+.set-group-body { padding: 0 var(--space-md) var(--space-sm); }
+
+/* Sections inside a group are divided rows, not cards within a card */
+.set-group .settings-section {
+  background: none;
+  border: none;
+  border-top: 1px solid var(--bg-border);
+  border-radius: 0;
+  padding: var(--space-md) 0;
+  margin: 0;
+}
+
+.set-group .settings-section h3 {
+  margin-bottom: var(--space-sm);
+  padding-bottom: 0;
+  border-bottom: none;
+  font-size: 1rem;
+}
+
+.set-note {
+  margin: var(--space-sm) 0;
+  color: var(--text-secondary);
+  font-size: 0.8125rem;
+  line-height: 1.5;
+}
+
+.set-actions { display: flex; gap: var(--space-sm); flex-wrap: wrap; }
+
+.set-conn-head { display: flex; align-items: center; gap: var(--space-sm); flex-wrap: wrap; }
+.set-conn-name { font-family: var(--font-display); font-weight: 600; flex: 1; }
+.set-conn .connection-status { margin-bottom: 0; }
+.set-ai-badge { background: var(--grad-accent-aa); }
+.set-google-badge { background: #fff; }
+.set-google-badge svg { width: 14px; height: 14px; }
+
+.set-danger h3 { color: var(--danger); }
 
 /* ═══════════════════════════════════════════════════════════════════
    OVERLAYS
@@ -2195,23 +2680,29 @@ select.input {
 
 .feedback-fab svg { width: 22px; height: 22px; }
 
-/* Sit above the mobile bottom nav when it's visible */
+/* With the nav showing, the button never floats over content:
+   phones — docked in the bar's row, to its right (the bar is 66px tall:
+   6px padding ×2 + 52px tabs + 2px border, so 9px centres a 48px button);
+   desktop — in the sidebar's footer. */
 body.nav-visible .feedback-fab {
-  bottom: calc(var(--nav-height) + var(--space-md) + var(--safe-bottom));
+  left: calc(var(--dock-left) + var(--bar-w) + var(--dock-gap));
+  right: auto;
+  bottom: calc(var(--nav-gap) + var(--safe-bottom) + 9px);
 }
 
-/* Desktop: nav is a left sidebar, not a bottom bar — no offset needed */
 @media (min-width: 1024px) {
   body.nav-visible .feedback-fab {
-    bottom: var(--space-md);
+    left: var(--space-lg);
+    bottom: var(--space-lg);
   }
 }
 
 /* ── App version badge ─────────────────────────────────────────────────
-   Small, muted SemVer indicator (https://semver.org) pinned bottom-right,
-   sitting just left of the feedback FAB so the two never overlap. Mirrors
-   the FAB's vertical offset rules (lifts above the mobile bottom nav; sits
-   in the corner on desktop where the nav is a left sidebar). */
+   Small, muted SemVer indicator (https://semver.org), text set by
+   js/version.js. Bottom-right beside the button on the landing/onboarding
+   screens; in the sidebar footer beside the button on desktop. Phones with
+   the bar showing have no free corner, so there it lives in Settings →
+   Data & about instead. */
 .version-badge {
   position: fixed;
   right: calc(var(--space-md) + 56px);
@@ -2229,13 +2720,14 @@ body.nav-visible .feedback-fab {
 
 .version-badge:hover { opacity: 1; color: var(--text-primary); }
 
-body.nav-visible .version-badge {
-  bottom: calc(var(--nav-height) + var(--space-md) + var(--safe-bottom));
-}
+body.nav-visible .version-badge { display: none; }
 
 @media (min-width: 1024px) {
   body.nav-visible .version-badge {
-    bottom: var(--space-md);
+    display: block;
+    left: calc(var(--space-lg) + var(--dock-fab) + 12px);
+    right: auto;
+    bottom: calc(var(--space-lg) + 19px);
   }
 }
 
@@ -2322,6 +2814,11 @@ body.nav-visible .version-badge {
 .status-on_hold { background: rgba(251, 191, 36, 0.18); color: var(--warning); }
 .status-completed { background: rgba(110, 123, 255, 0.18); color: var(--accent); }
 .status-archived { background: var(--bg-elevated); color: var(--text-secondary); }
+
+.project-progress { display: flex; align-items: center; gap: var(--space-sm); }
+.project-progress .progress-track { flex: 1; margin: 0; }
+.project-pct { flex: none; min-width: 3ch; text-align: right; color: var(--text-secondary); font-size: 0.75rem; font-weight: 600; }
+.project-due { color: var(--text-primary); }
 
 .progress-track {
   height: 6px;
@@ -2423,7 +2920,7 @@ body.nav-visible .version-badge {
     /* Re-assert the safe insets + bottom-nav clearance the shorthand above
        would otherwise wipe (the bottom nav is present up to 1024px). */
     padding-top: calc(var(--space-lg) + var(--safe-top));
-    padding-bottom: calc(var(--nav-height) + var(--space-lg) + var(--safe-bottom));
+    padding-bottom: calc(var(--nav-clearance) + var(--space-lg) + var(--safe-bottom));
   }
   .screen-full { padding: 0; }
   .screen > div { max-width: 768px; }
@@ -2443,6 +2940,7 @@ body.nav-visible .version-badge {
     transition-duration: 0.01ms !important;
   }
   html { scroll-behavior: auto; }
+  .dash-gear:hover, .dash-tile:hover, button.dash-attn:hover { transform: none; }
 }
 
 /* ═══════════════════════════════════════════════════════════════════
@@ -2499,6 +2997,12 @@ body.nav-visible .version-badge {
   background: var(--accent);
   padding: 8px 14px;
   border-radius: var(--radius-full);
+}
+
+/* Phones: the whole card is the button — drop the pill so the copy breathes */
+@media (max-width: 479px) {
+  .quickpost-hero-cta { display: none; }
+  .quickpost-hero-body { padding: var(--space-md); }
 }
 
 /* ── Composer screen ───────────────────────────────────────────────── */

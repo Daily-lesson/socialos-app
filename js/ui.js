@@ -64,15 +64,19 @@ const SocialOSUI = (() => {
     const screen = $(screenId);
     if (screen) screen.classList.add('active');
 
-    // Update nav
-    document.querySelectorAll('.nav-tab').forEach(t => t.classList.remove('active'));
-    const tab = document.querySelector(`.nav-tab[data-screen="${screenId}"]`);
-    if (tab) tab.classList.add('active');
-
-    // The active tab may live in the More overflow menu — refresh it (also
-    // closes the popover, so a menu navigation dismisses it).
-    closeNavMoreMenu();
-    updateNavOverflow();
+    // Update nav. Three tabs cover every screen: a tab lights up for its own
+    // screen and for each one listed in its data-also (Home owns the screens
+    // reached from its tiles, Inbox owns the agent Queue).
+    document.querySelectorAll('.nav-tab').forEach(t => {
+      const el = /** @type {HTMLElement} */ (t);
+      const also = (el.dataset.also || '').split(/\s+/);
+      const on = el.dataset.screen === screenId || also.includes(screenId);
+      el.classList.toggle('active', on);
+      // "page" only on the tab's own screen; a data-also screen (Settings
+      // under Home) is inside that section, not the Home page itself.
+      if (on) el.setAttribute('aria-current', el.dataset.screen === screenId ? 'page' : 'true');
+      else el.removeAttribute('aria-current');
+    });
   }
 
   /**
@@ -84,152 +88,20 @@ const SocialOSUI = (() => {
     const nav = $('main-nav');
     if (nav) nav.style.display = visible ? 'flex' : 'none';
     document.body.classList.toggle('nav-visible', visible);
-    // Width is only measurable while the nav is displayed.
-    if (visible) updateNavOverflow();
-    else closeNavMoreMenu();
   }
 
-  // ── Responsive nav overflow — the "More" tab ─────────────────────────
-  // The bottom bar used to give all 8 tabs `flex: 1` with no overflow
-  // handling: on narrow windows the labels ellipsized to "Appr…"/"Cale…"
-  // and badges collided — choices were technically on screen but
-  // unreadable. Tabs that don't fit at the measured width now collapse
-  // into a trailing More tab that opens #nav-more-menu. Bottom-bar mode
-  // only: the ≥1024px sidebar is vertical (and scrolls), so there the JS
-  // shows everything and CSS force-hides the More tab as a static guard.
-
-  /** Floor below which one icon-over-label tab becomes unreadable
-   *  ("Approvals" at 0.625rem needs ~54px; 58 leaves breathing room). */
-  const NAV_MIN_TAB_PX = 58;
-  const navDesktopMq = window.matchMedia('(min-width: 1024px)');
-
-  /** The real (data-screen) tabs, in declared order. */
-  function navScreenTabs() {
-    return Array.from(document.querySelectorAll('#main-nav .nav-tab[data-screen]'));
-  }
-
-  function closeNavMoreMenu() {
-    const menu = $('nav-more-menu');
-    const moreTab = $('nav-more-tab');
-    if (menu) menu.hidden = true;
-    if (moreTab) moreTab.setAttribute('aria-expanded', 'false');
-  }
-
-  function toggleNavMoreMenu() {
-    const menu = $('nav-more-menu');
-    const moreTab = $('nav-more-tab');
-    if (!menu || !moreTab) return;
-    menu.hidden = !menu.hidden;
-    moreTab.setAttribute('aria-expanded', String(!menu.hidden));
-  }
-
-  /**
-   * Recompute which tabs fit the bar and rebuild the More menu. Safe to
-   * call any time — no-ops while the nav is hidden (width unmeasurable).
-   * Menu items navigate via the global data-action delegation (`go-*`),
-   * which survives re-renders — unlike the one-time `.nav-tab` click
-   * binding in app.js, which never sees injected elements.
-   */
-  function updateNavOverflow() {
-    const nav = $('main-nav');
-    const moreTab = $('nav-more-tab');
-    const menu = $('nav-more-menu');
-    const tabsRow = document.querySelector('#main-nav .nav-tabs');
-    if (!nav || !moreTab || !menu || !tabsRow) return;
-    if (nav.style.display === 'none') return;
-
-    const tabs = navScreenTabs();
-
-    // Sidebar mode: vertical list — nothing overflows horizontally.
-    if (navDesktopMq.matches) {
-      tabs.forEach(t => { t.style.display = ''; });
-      moreTab.style.display = 'none';
-      closeNavMoreMenu();
-      return;
-    }
-
-    const width = tabsRow.clientWidth || window.innerWidth;
-    const capacity = Math.floor(width / NAV_MIN_TAB_PX);
-    const overflowing = capacity < tabs.length;
-    // One slot goes to the More tab itself; always keep ≥1 real tab.
-    const visibleCount = overflowing ? Math.max(1, capacity - 1) : tabs.length;
-
-    const overflowTabs = [];
-    tabs.forEach((t, i) => {
-      const hide = i >= visibleCount;
-      t.style.display = hide ? 'none' : '';
-      if (hide) overflowTabs.push(t);
-    });
-
-    moreTab.style.display = overflowing ? '' : 'none';
-    const moreBadge = $('nav-more-badge');
-    if (!overflowing) {
-      closeNavMoreMenu();
-      menu.innerHTML = '';
-      if (moreBadge) moreBadge.style.display = 'none';
-      moreTab.classList.remove('active');
-      return;
-    }
-
-    // A hidden active tab lights up the More tab instead.
-    moreTab.classList.toggle('active', overflowTabs.some(t => t.classList.contains('active')));
-
-    // Roll the Approvals badge up onto More while Approvals is hidden —
-    // otherwise the count silently disappears with the tab.
-    const approvalBadge = $('approval-badge');
-    const badgeCount = approvalBadge && approvalBadge.style.display !== 'none'
-      ? (approvalBadge.textContent || '') : '';
-    const badgeLive = badgeCount !== '' && badgeCount !== '0';
-    const approvalsHidden = overflowTabs.some(t => t.dataset.screen === 'screen-approvals');
-    if (moreBadge) {
-      if (approvalsHidden && badgeLive) {
-        moreBadge.textContent = badgeCount;
-        moreBadge.style.display = 'flex';
-      } else {
-        moreBadge.style.display = 'none';
-      }
-    }
-
-    menu.innerHTML = overflowTabs.map(t => {
-      const screen = t.dataset.screen || '';
-      const route = screen.replace(/^screen-/, '');
-      const icon = t.querySelector('.nav-tab-icon');
-      const label = t.querySelector('.nav-tab-label');
-      const active = t.classList.contains('active') ? ' active' : '';
-      const badge = (screen === 'screen-approvals' && badgeLive)
-        ? `<span class="nav-more-badge-inline">${escapeHtml(badgeCount)}</span>`
-        : '';
-      return `<button class="nav-more-item${active}" role="menuitem" data-action="go-${route}">` +
-        `<span class="nav-tab-icon">${icon ? icon.innerHTML : ''}</span>` +
-        `<span>${label ? escapeHtml(label.textContent || route) : route}</span>${badge}</button>`;
-    }).join('');
-  }
-
-  // One-time wiring. Scripts load at the end of <body>, so the static nav
-  // markup already exists.
-  (function initNavOverflow() {
-    const moreTab = $('nav-more-tab');
-    if (moreTab) moreTab.addEventListener('click', toggleNavMoreMenu);
-    document.addEventListener('click', (e) => {
-      const menu = $('nav-more-menu');
-      if (!menu || menu.hidden) return;
-      const t = e.target;
-      if (t instanceof Element && !t.closest('#nav-more-tab') && !t.closest('#nav-more-menu')) {
-        closeNavMoreMenu();
-      }
-    });
-    document.addEventListener('keydown', (e) => {
-      if (e.key === 'Escape') closeNavMoreMenu();
-    });
-    let navOvfRaf = 0;
-    const requestUpdate = () => {
-      if (navOvfRaf) return;
-      navOvfRaf = requestAnimationFrame(() => { navOvfRaf = 0; updateNavOverflow(); });
-    };
-    window.addEventListener('resize', requestUpdate);
-    if (navDesktopMq.addEventListener) navDesktopMq.addEventListener('change', requestUpdate);
-    updateNavOverflow();
-  })();
+  // Cards that are whole-card links (a Library item, a project) are divs
+  // with role="button" — they hold headings, which a real <button> can't.
+  // Give them the keyboard half of a button: Enter/Space activates, through
+  // the same click delegation a tap uses.
+  document.addEventListener('keydown', (e) => {
+    if ((e.key !== 'Enter' && e.key !== ' ') || e.repeat) return;
+    const t = e.target;
+    if (!(t instanceof HTMLElement) || t.getAttribute('role') !== 'button' || !t.dataset.action) return;
+    if (t.tagName === 'BUTTON') return;
+    e.preventDefault();
+    t.click();
+  });
 
   /**
    * Show a toast notification.
@@ -489,8 +361,36 @@ const SocialOSUI = (() => {
     engage:   '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a8 8 0 0 1-8 8H4l2-3a8 8 0 1 1 15-5z"/><path d="M9 11h6M9 14h3"/></svg>',
     compose:  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/><path d="m5 3 1.5 3L9.5 7 6.5 8.5 5 11.5 3.5 8.5.5 7l3-1L5 3z" opacity=".7"/></svg>',
     send:     '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M22 2 11 13"/><path d="M22 2 15 22l-4-9-9-4 20-7z"/></svg>',
-    search:   '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>'
+    search:   '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>',
+    inbox:    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-6l-2 3h-4l-2-3H2"/><path d="M5.5 5.1 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.5-6.9A2 2 0 0 0 16.7 4H7.3a2 2 0 0 0-1.8 1.1z"/></svg>',
+    clipboard:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="4" width="14" height="17" rx="2"/><path d="M9 4.5V3h6v1.5"/><path d="m8.5 12 2 2 4-4"/><path d="M9 17h6"/></svg>',
+    gear:     '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3.2"/><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.7 1.7 0 0 0-1.87-.34 1.7 1.7 0 0 0-1.03 1.56V21a2 2 0 1 1-4 0v-.09A1.7 1.7 0 0 0 8.98 19.4a1.7 1.7 0 0 0-1.87.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.7 1.7 0 0 0 .34-1.87 1.7 1.7 0 0 0-1.56-1.03H3a2 2 0 1 1 0-4h.09A1.7 1.7 0 0 0 4.6 8.98a1.7 1.7 0 0 0-.34-1.87l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.7 1.7 0 0 0 1.87.34H9a1.7 1.7 0 0 0 1.03-1.56V3a2 2 0 1 1 4 0v.09c0 .68.4 1.3 1.03 1.56a1.7 1.7 0 0 0 1.87-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.7 1.7 0 0 0-.34 1.87V9c.26.63.88 1.03 1.56 1.03H21a2 2 0 1 1 0 4h-.09a1.7 1.7 0 0 0-1.56 1.03z"/></svg>',
+    check:    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>',
+    user:     '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></svg>',
+    doc:      '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M14 3v6h6M8 13h8M8 17h5"/></svg>',
+    box:      '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 8v13H3V8"/><path d="M1 3h22v5H1z"/><path d="M10 12h4"/></svg>',
+    chevron:  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg>'
   };
+
+  /**
+   * The one header every tile screen shares: title, a one-line summary,
+   * and an optional action on the right. Markup only — actions are
+   * data-action buttons handled by app.js's delegation like any other.
+   * @param {string} title - plain text (escaped here)
+   * @param {string} [sub] - plain text (escaped here)
+   * @param {string} [actionsHtml] - trusted markup built by the caller
+   * @returns {string}
+   */
+  function screenHead(title, sub, actionsHtml) {
+    return `
+      <header class="screen-head">
+        <div class="screen-head-text">
+          <h1 class="screen-head-title">${escapeHtml(title)}</h1>
+          ${sub ? `<p class="screen-head-sub">${escapeHtml(sub)}</p>` : ''}
+        </div>
+        ${actionsHtml ? `<div class="screen-head-actions">${actionsHtml}</div>` : ''}
+      </header>`;
+  }
 
   // ── Landing page (signed-out / pre-onboarding) ────────────────────────
 
@@ -939,8 +839,10 @@ const SocialOSUI = (() => {
   // ── Dashboard ─────────────────────────────────────────────────────────
 
   /**
-   * Render the dashboard screen.
-   * @param {{profile?: any, pendingCount?: number, nextPost?: any, contentCount?: number, pm?: any}} data
+   * Render the dashboard screen — Home is also the hub for every screen
+   * that has no tab of its own (the bar holds three: Home · Create · Inbox),
+   * so the workspace tiles below are navigation, not decoration.
+   * @param {{profile?: any, pendingCount?: number, inbox?: {posts: number, engagement: number, handoffs: number, local: number, agents: number|null, configured: boolean, failed?: boolean, total: number}, nextPost?: any, contentCount?: number, pm?: any, account?: any, growth?: any}} data
    */
   function renderDashboard(data) {
     const container = $('dashboard-content');
@@ -950,18 +852,55 @@ const SocialOSUI = (() => {
     const np = /** @type {ScheduledPost|null} */ (data.nextPost || null);
     /** @type {{title: string, project: string, due_date: string}[]} */
     const dueSoon = data.pm?.dueSoon || [];
+    const ib = data.inbox || { posts: data.pendingCount || 0, engagement: 0, handoffs: 0, local: data.pendingCount || 0, agents: null, configured: false, total: data.pendingCount || 0 };
+    const inbox = ib.total;
+    const plural = (/** @type {number} */ n, /** @type {string} */ one, /** @type {string} */ many) => `${n} ${n === 1 ? one : many}`;
+    // Name each non-empty part — "2 posts · 1 reply · 3 agent drafts" —
+    // rather than one opaque number.
+    const parts = [
+      ib.posts ? plural(ib.posts, 'post', 'posts') : '',
+      ib.engagement ? plural(ib.engagement, 'reply or like', 'replies & likes') : '',
+      ib.handoffs ? plural(ib.handoffs, 'handoff to confirm', 'handoffs to confirm') : '',
+      ib.agents ? plural(ib.agents, 'agent draft', 'agent drafts') : ''
+    ].filter(Boolean);
+    // Only agent drafts waiting → land on them, not an empty Your posts.
+    const inboxAction = ib.local === 0 && (ib.agents || 0) > 0 ? 'go-queue' : 'go-approvals';
+    // "All caught up" is a claim about everything the Inbox holds; with the
+    // Front Office connected but its queue not yet readable, say so instead.
+    const clearSub = !(ib.configured && ib.agents === null)
+      ? 'Nothing is waiting for your approval.'
+      : ib.failed
+        ? 'Nothing of yours is waiting. Agent drafts couldn\'t be checked just now.'
+        : 'Nothing of yours is waiting. Checking agent drafts…';
+    const today = new Date().toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' });
+    const signedIn = !!data.account?.signedIn;
+    const activeProjects = data.pm?.activeProjects || 0;
+    const openTasks = data.pm?.openTasks || 0;
+    const contentCount = data.contentCount || 0;
+
+    /** @type {{action: string, icon: string, title: string, meta: string}[]} */
+    const tiles = [
+      { action: 'go-calendar',   icon: ICONS.calendar,  title: 'Calendar',     meta: 'Plan the week' },
+      { action: 'go-library',    icon: ICONS.photos,    title: 'Library',      meta: `${contentCount} item${contentCount === 1 ? '' : 's'}` },
+      { action: 'go-projects',   icon: ICONS.star,      title: 'Projects',     meta: `${activeProjects} active · ${openTasks} task${openTasks === 1 ? '' : 's'}` },
+      { action: 'go-queue',      icon: ICONS.inbox,     title: 'Agent drafts', meta: 'From the Front Office' },
+      { action: 'go-workorders', icon: ICONS.clipboard, title: 'Work orders',  meta: 'Dev & ops tasks' },
+      { action: 'go-settings',   icon: ICONS.gear,      title: 'Settings',     meta: 'Accounts & sync' }
+    ];
 
     container.innerHTML = `
-      <div class="dash-header">
-        <h1>${greeting}, <span class="grad">${escapeHtml(data.profile?.name?.split(' ')[0] || 'there')}</span></h1>
-        <p class="text-secondary">Your social media command center</p>
-        <button class="tag" data-action="go-settings"
-          title="${data.account?.signedIn ? 'Synced to your SocialOS account' : 'Sign in to sync across devices'}"
-          style="margin-top:6px;cursor:pointer;border:none;display:inline-flex;align-items:center;gap:6px">
-          <span style="width:8px;height:8px;border-radius:50%;background:${data.account?.signedIn ? 'var(--success, #22c55e)' : 'var(--text-secondary, #888)'}"></span>
-          ${data.account?.signedIn ? escapeHtml(data.account.email || 'Signed in') + ' · synced' : 'Local only — sign in to sync'}
-        </button>
-      </div>
+      <header class="dash-top">
+        <div class="dash-top-text">
+          <p class="dash-date">${escapeHtml(today)}</p>
+          <h1>${greeting}, <span class="grad">${escapeHtml(data.profile?.name?.split(' ')[0] || 'there')}</span></h1>
+          <button class="dash-sync${signedIn ? ' is-synced' : ''}" data-action="go-settings"
+            title="${signedIn ? 'Synced to your SocialOS account' : 'Sign in to sync across devices'}">
+            <span class="dash-sync-dot" aria-hidden="true"></span>
+            ${signedIn ? escapeHtml(data.account.email || 'Signed in') + ' · synced' : 'Local only — sign in to sync'}
+          </button>
+        </div>
+        <button class="dash-gear" data-action="go-settings" aria-label="Settings">${ICONS.gear}</button>
+      </header>
 
       <button class="quickpost-hero" data-action="go-compose" aria-label="Open Quick Post">
         <div class="quickpost-hero-glow" aria-hidden="true"></div>
@@ -975,46 +914,42 @@ const SocialOSUI = (() => {
         </div>
       </button>
 
-      <div class="dash-cards">
-        <div class="dash-card card-pending" data-action="go-approvals">
-          <div class="dash-card-number">${data.pendingCount || 0}</div>
-          <div class="dash-card-label">Pending Approvals</div>
-        </div>
-
-        <div class="dash-card card-content" data-action="go-library">
-          <div class="dash-card-number">${data.contentCount || 0}</div>
-          <div class="dash-card-label">Content Items</div>
-        </div>
-
-        <div class="dash-card card-projects" data-action="go-projects">
-          <div class="dash-card-number">${data.pm?.activeProjects || 0}</div>
-          <div class="dash-card-label">Active Projects</div>
-        </div>
-
-        <div class="dash-card card-tasks" data-action="go-projects">
-          <div class="dash-card-number">${data.pm?.openTasks || 0}</div>
-          <div class="dash-card-label">Open Tasks</div>
-        </div>
-      </div>
-
       <div class="dash-columns">
         <div class="dash-col-main">
+          ${inbox > 0 ? `
+            <button class="dash-attn" data-action="${inboxAction}">
+              <span class="dash-attn-count">${inbox}</span>
+              <span class="dash-attn-text">
+                <span class="dash-attn-title">${inbox === 1 ? 'One thing needs you' : `${inbox} things need you`}</span>
+                <span class="dash-attn-sub">${escapeHtml(parts.join(' · '))}</span>
+              </span>
+              <span class="dash-attn-go" aria-hidden="true">${ICONS.chevron}</span>
+            </button>
+          ` : `
+            <div class="dash-attn is-clear" role="status">
+              <span class="dash-attn-count" aria-hidden="true">${ICONS.check}</span>
+              <span class="dash-attn-text">
+                <span class="dash-attn-title">You're all caught up</span>
+                <span class="dash-attn-sub">${clearSub}</span>
+              </span>
+            </div>
+          `}
+
           ${np ? `
             <div class="card next-post-card">
               <div class="card-header">
                 <span class="platform-badge" style="background:${PLATFORM_COLORS[np.platform]}">${PLATFORM_ICONS[np.platform]}</span>
-                <span>Next Post</span>
+                <span>Next post</span>
                 <span class="text-secondary">${np.scheduled_time ? SocialOSUtils.formatDate(np.scheduled_time) : 'Unscheduled'}</span>
               </div>
-              <p class="post-preview">${SocialOSUtils.truncate(np.draft?.text || '', 150)}</p>
+              <p class="post-preview">${escapeHtml(SocialOSUtils.truncate(np.draft?.text || '', 150))}</p>
               <button class="btn btn-primary btn-sm" data-action="review-post" data-id="${np.id}">Review</button>
             </div>
           ` : `
-            <div class="card empty-state">
-              <h3>No posts queued yet</h3>
-              <p class="text-secondary">Add some content and SocialOS will draft posts for you.</p>
-              <button class="btn btn-primary" data-action="go-library" style="margin-top:12px">Add Content</button>
-            </div>
+            <button class="card dash-empty" data-action="go-library">
+              <span class="dash-empty-title">No posts queued yet</span>
+              <span class="text-secondary">Add some content and SocialOS will draft posts for you.</span>
+            </button>
           `}
 
           ${dueSoon.length ? `
@@ -1023,43 +958,46 @@ const SocialOSUI = (() => {
               ${dueSoon.slice(0, 4).map(d => `
                 <div class="duesoon-row">
                   <span class="duesoon-title">${escapeHtml(SocialOSUtils.truncate(d.title, 40))}</span>
-                  <span class="text-secondary">${escapeHtml(d.project)} · ${d.due_date}</span>
+                  <span class="text-secondary">${escapeHtml(d.project)} · ${escapeHtml(d.due_date)}</span>
                 </div>
               `).join('')}
               <button class="btn btn-secondary btn-sm" data-action="go-projects" style="margin-top:8px">Open Projects</button>
             </div>
           ` : ''}
+
+          <h2 class="dash-section-title">Workspace</h2>
+          <div class="dash-tiles">
+            ${tiles.map(t => `
+              <button class="dash-tile" data-action="${t.action}">
+                <span class="dash-tile-icon" aria-hidden="true">${t.icon}</span>
+                <span class="dash-tile-title">${t.title}</span>
+                <span class="dash-tile-meta">${escapeHtml(t.meta)}</span>
+              </button>
+            `).join('')}
+          </div>
         </div>
 
         <div class="dash-col-side">
           ${renderGrowthCard(data.growth || {})}
 
           <div class="card quick-actions">
-            <h3>Quick Actions</h3>
+            <h3>Add content</h3>
             <div class="action-grid">
               <button class="action-btn" data-action="upload-local">
                 <span class="action-icon">${ICONS.upload}</span>
-                <span>Upload Media</span>
+                <span>Upload</span>
               </button>
               <button class="action-btn" data-action="add-content-manual">
                 <span class="action-icon">${ICONS.note}</span>
-                <span>Add a Note</span>
+                <span>Note</span>
               </button>
               <button class="action-btn" data-action="scan-drive">
                 <span class="action-icon">${ICONS.drive}</span>
-                <span>Scan Drive</span>
+                <span>Drive</span>
               </button>
               <button class="action-btn" data-action="pick-photos">
                 <span class="action-icon">${ICONS.photos}</span>
-                <span>Google Photos</span>
-              </button>
-              <button class="action-btn" data-action="add-project">
-                <span class="action-icon">${ICONS.star}</span>
-                <span>New Project</span>
-              </button>
-              <button class="action-btn" data-action="generate-calendar">
-                <span class="action-icon">${ICONS.calendar}</span>
-                <span>Generate Calendar</span>
+                <span>Photos</span>
               </button>
             </div>
           </div>
@@ -1705,51 +1643,56 @@ const SocialOSUI = (() => {
     const container = $('library-content');
     if (!container) return;
 
-    container.innerHTML = `
-      <div class="library-header">
-        <h2 class="screen-title">Content Library</h2>
-      </div>
+    const typeIcon = (/** @type {string} */ t) => ({ photo: ICONS.photos, video: ICONS.photos, document: ICONS.doc, link: ICONS.link }[t] || ICONS.note);
+    const sourceLabel = (/** @type {string} */ src) => ({
+      google_drive: 'Google Drive', google_photos: 'Google Photos', manual: 'Note',
+      web_clip: 'Web', project: 'Project', local_upload: 'Upload'
+    }[src] || String(src || '').replace(/_/g, ' '));
+    const high = items.filter(i => i.ai_rating === 'high').length;
 
-      <div class="source-bar">
-        <button class="source-btn" data-action="upload-local">${ICONS.upload} Upload from device</button>
-        <button class="source-btn" data-action="scan-drive">${ICONS.drive} Google Drive</button>
-        <button class="source-btn" data-action="pick-photos">${ICONS.photos} Google Photos</button>
-        <button class="source-btn" data-action="show-add-media-url">${ICONS.link} From URL</button>
-        <button class="source-btn" data-action="add-content-manual">${ICONS.note} Write a note</button>
+    container.innerHTML = `
+      ${screenHead('Library',
+        items.length ? `${items.length} item${items.length === 1 ? '' : 's'} · ${high} rated high for posting` : 'Everything SocialOS can post from')}
+
+      <div class="lib-sources" role="group" aria-label="Add content">
+        <button class="lib-source" data-action="upload-local">${ICONS.upload}<span>Upload</span></button>
+        <button class="lib-source" data-action="scan-drive">${ICONS.drive}<span>Drive</span></button>
+        <button class="lib-source" data-action="pick-photos">${ICONS.photos}<span>Photos</span></button>
+        <button class="lib-source" data-action="show-add-media-url">${ICONS.link}<span>URL</span></button>
+        <button class="lib-source" data-action="add-content-manual">${ICONS.note}<span>Note</span></button>
       </div>
 
       ${!items.length ? `
         <div class="empty-state">
           <h3>Your library is empty</h3>
           <p class="text-secondary">Bring in media from your device, Google Drive, Google Photos, a URL — or just write a note. AI rates and tags everything for posting.</p>
-          <div class="btn-row" style="margin-top:16px;justify-content:center">
-            <button class="btn btn-primary" data-action="upload-local">Upload from Device</button>
-            <button class="btn btn-secondary" data-action="add-content-manual">Write a Note</button>
-          </div>
         </div>
       ` : `
-        <div class="content-grid">
+        <div class="lib-list">
           ${items.map(item => `
-            <div class="card content-card" data-action="view-content" data-id="${item.id}">
-              ${item.thumbnail_url ? `
-                <div class="content-thumb">
-                  <img src="${item.thumbnail_url}" alt="" loading="lazy">
-                  ${item.sensitivity_flags?.includes('faces_visible') ? '<span class="face-flag" title="Faces visible">&#128100;</span>' : ''}
+            <div class="lib-item" data-action="view-content" data-id="${escapeHtml(item.id)}" role="button" tabindex="0"
+              aria-labelledby="lib-t-${escapeHtml(item.id)}" aria-describedby="lib-r-${escapeHtml(item.id)}">
+              <div class="lib-thumb${item.thumbnail_url ? '' : ' is-icon'}">
+                ${item.thumbnail_url
+                  ? `<img src="${escapeHtml(item.thumbnail_url)}" alt="" loading="lazy">`
+                  : typeIcon(item.type)}
+                ${item.sensitivity_flags?.includes('faces_visible') ? '<span class="face-flag" title="Faces visible">&#128100;</span>' : ''}
+              </div>
+              <div class="lib-body">
+                <div class="lib-top">
+                  <h4 class="lib-title" id="lib-t-${escapeHtml(item.id)}">${escapeHtml(SocialOSUtils.truncate(item.title, 60))}</h4>
+                  <span class="rating-badge rating-${escapeHtml(item.ai_rating)}" id="lib-r-${escapeHtml(item.id)}">${escapeHtml(item.ai_rating)}</span>
                 </div>
-              ` : ''}
-              <div class="content-card-header">
-                <span class="rating-badge rating-${item.ai_rating}">${item.ai_rating}</span>
-                <span class="source-badge">${item.source.replace('google_', 'G ').replace(/_/g, ' ')}</span>
-              </div>
-              <h4 class="content-title">${escapeHtml(SocialOSUtils.truncate(item.title, 60))}</h4>
-              <p class="text-secondary content-desc">${escapeHtml(SocialOSUtils.truncate(item.description, 80))}</p>
-              <div class="content-tags">
-                ${item.tags.slice(0, 3).map(t => `<span class="tag">${t}</span>`).join('')}
-              </div>
-              <div class="content-platforms">
-                ${(item.suggested_platforms || []).map(p => `
-                  <span class="platform-dot" style="background:${PLATFORM_COLORS[p]}" title="${p}"></span>
-                `).join('')}
+                ${item.description ? `<p class="lib-desc">${escapeHtml(SocialOSUtils.truncate(item.description, 90))}</p>` : ''}
+                <div class="lib-meta">
+                  <span>${escapeHtml(sourceLabel(item.source))}</span>
+                  ${(item.tags || []).slice(0, 2).map(t => `<span class="lib-tag">#${escapeHtml(t)}</span>`).join('')}
+                  <span class="lib-dots">
+                    ${(item.suggested_platforms || []).map(p => `
+                      <span class="platform-dot" style="background:${PLATFORM_COLORS[p] || '#888'}" title="${escapeHtml(p)}"></span>
+                    `).join('')}
+                  </span>
+                </div>
               </div>
             </div>
           `).join('')}
@@ -1940,12 +1883,17 @@ const SocialOSUI = (() => {
       return time ? `${day} · ${time}` : day;
     };
 
+    const statusLabel = (/** @type {string} */ st) => (st || 'planned').replace(/_/g, ' ');
+
     container.innerHTML = `
-      <h2 class="screen-title">Calendar</h2>
-      <div class="calendar-nav">
-        <button class="btn btn-secondary btn-sm" data-action="cal-prev">&#8592;</button>
+      ${screenHead('Calendar',
+        agenda.length ? `${agenda.length} post${agenda.length === 1 ? '' : 's'} planned in these four weeks` : 'Plan four weeks of posts in one tap',
+        `<button class="btn btn-primary btn-sm" data-action="generate-calendar">Generate</button>`)}
+
+      <div class="cal-toolbar">
+        <button class="cal-arrow is-prev" data-action="cal-prev" aria-label="Previous four weeks">${ICONS.chevron}</button>
         <span class="cal-month">${new Intl.DateTimeFormat('en-US', { month: 'long', year: 'numeric' }).format(new Date(focus))}</span>
-        <button class="btn btn-secondary btn-sm" data-action="cal-next">&#8594;</button>
+        <button class="cal-arrow" data-action="cal-next" aria-label="Next four weeks">${ICONS.chevron}</button>
       </div>
       <div class="calendar-grid">
         <div class="cal-header">
@@ -1957,35 +1905,65 @@ const SocialOSUI = (() => {
               <div class="cal-day ${day.dateStr === today ? 'today' : ''} ${day.slots.length ? 'has-posts' : ''}">
                 <span class="cal-date">${day.date.getDate()}</span>
                 ${day.slots.map(s => `
-                  <div class="cal-slot" style="background:${PLATFORM_COLORS[s.platform]}" title="${s.platform} - ${s.theme}"></div>
+                  <div class="cal-slot" style="background:${PLATFORM_COLORS[s.platform] || '#888'}" title="${escapeHtml(platformLabel(s.platform))} · ${escapeHtml(themeLabel(s.theme))}"></div>
                 `).join('')}
               </div>
             `).join('')}
           </div>
         `).join('')}
       </div>
-      <div class="cal-agenda" style="margin-top:20px">
-        <h3 class="screen-subtitle" style="display:flex;align-items:center;gap:8px;margin:0 0 10px">
-          Scheduled these 4 weeks
-          <span style="font-size:12px;opacity:.6;font-weight:400">${agenda.length}</span>
-        </h3>
-        ${agenda.length ? agenda.map(({ slot, date }) => `
-          <div class="cal-agenda-item" style="display:flex;align-items:center;gap:10px;padding:9px 11px;margin-bottom:6px;border:1px solid rgba(128,128,128,.28);border-radius:8px;font-size:13px">
-            <span style="width:9px;height:9px;border-radius:50%;flex:0 0 auto;background:${PLATFORM_COLORS[slot.platform] || '#888'}"></span>
-            <span style="font-weight:600;flex:0 0 auto;min-width:104px">${escapeHtml(agendaWhen(date, slot.time))}</span>
-            <span style="opacity:.85">${escapeHtml(platformLabel(slot.platform))}</span>
-            <span style="opacity:.7">${escapeHtml(themeLabel(slot.theme))}</span>
-            <span style="margin-left:auto;opacity:.6;text-transform:capitalize;flex:0 0 auto">${escapeHtml((slot.status || '').replace(/_/g, ' '))}</span>
-          </div>
-        `).join('') : `<p style="opacity:.6;font-size:13px;margin:0">Nothing scheduled in these four weeks yet. Generate a calendar to plan posts, or add them from the composer.</p>`}
-      </div>
-      <button class="btn btn-primary" data-action="generate-calendar" style="width:100%;margin-top:16px">
-        Generate 4-Week Calendar
-      </button>
+
+      <h2 class="dash-section-title">Up next</h2>
+      ${agenda.length ? `
+        <div class="cal-agenda">
+          ${agenda.map(({ slot, date }) => `
+            <div class="cal-agenda-item">
+              <span class="cal-agenda-dot" style="background:${PLATFORM_COLORS[slot.platform] || '#888'}"></span>
+              <span class="cal-agenda-text">
+                <span class="cal-agenda-when">${escapeHtml(agendaWhen(date, slot.time))}</span>
+                <span class="cal-agenda-what">${escapeHtml(platformLabel(slot.platform))} · ${escapeHtml(themeLabel(slot.theme))}</span>
+              </span>
+              <span class="cal-agenda-status status-${escapeHtml(slot.status || 'planned')}">${escapeHtml(statusLabel(slot.status))}</span>
+            </div>
+          `).join('')}
+        </div>
+      ` : `<p class="text-secondary cal-agenda-empty">Nothing scheduled in these four weeks yet. Generate a calendar to plan posts, or add them from Create.</p>`}
     `;
   }
 
   // ── Settings ──────────────────────────────────────────────────────────
+
+  /** Settings groups the user has open — survives re-renders (a save). */
+  const settingsOpenGroups = new Set();
+
+  /**
+   * Status lines for Settings groups whose saves don't redraw the screen.
+   * Shared by renderSettings and patchSettingsStatus so the two can't drift.
+   * Plain text — escaped where they're written.
+   */
+  const settingsStatus = {
+    /** @param {any} profile @param {{kind?: string}} persona */
+    profile: (profile, persona) => `${profile?.name || 'No name set'} · ${persona?.kind === 'brand' ? 'Brand install' : 'Personal install'}`,
+    /** @param {AppSettings} settings */
+    rules: (settings) => {
+      const scrub = settings.content_scrubbing || /** @type {any} */ ({});
+      const on = ['remove_client_names', 'remove_facility_locations', 'remove_proprietary_specs', 'remove_financial_data']
+        .filter(k => /** @type {any} */ (scrub)[k]).length + ((scrub.custom_blocked_terms || []).length ? 1 : 0);
+      return `${on} scrub rule${on === 1 ? '' : 's'} on · auto-visuals ${settings.auto_visuals !== false ? 'on' : 'off'}`;
+    }
+  };
+
+  /**
+   * Update one Settings group's status line in place. A save calls this
+   * instead of re-rendering Settings, which would throw away unsaved edits
+   * in every other open group (e.g. scrub rules ticked but not yet saved).
+   * @param {string} key - the group's data-group
+   * @param {string} text - plain text
+   */
+  function patchSettingsStatus(key, text) {
+    const el = document.querySelector(`details.set-group[data-group="${key}"] .set-group-status`);
+    if (el) el.textContent = text;
+  }
 
   /**
    * Render the settings screen.
@@ -2011,290 +1989,281 @@ const SocialOSUI = (() => {
     // assume settings.persona exists.
     const persona = settings.persona?.kind ? settings.persona : SocialOSDB.DEFAULT_PERSONA;
 
+    const ps = pushStatus || { supported: false, permission: 'default', subscribed: false, hasSecret: false };
+    const pushOn = !!settings.push_enabled && ps.subscribed;
+    const scrub = settings.content_scrubbing || /** @type {any} */ ({});
+    const connectedCount = [googleConnected, liStatus.connected, rdStatus.connected, tkStatus.connected].filter(Boolean).length;
+    const appVersion = /** @type {any} */ (window).SOCIALOS_VERSION;
+
+    // Remember which groups are open across re-renders (a save re-renders
+    // Settings; it shouldn't fold the section you were just editing).
+    container.querySelectorAll('details.set-group').forEach(d => {
+      const key = /** @type {HTMLElement} */ (d).dataset.group || '';
+      if (/** @type {HTMLDetailsElement} */ (d).open) settingsOpenGroups.add(key);
+      else settingsOpenGroups.delete(key);
+    });
+
+    /**
+     * One collapsible group: icon, title, a status line you can read with
+     * the group closed, and the untouched sections inside.
+     * @param {string} key @param {string} icon @param {string} title @param {string} status @param {string} body
+     */
+    const group = (key, icon, title, status, body) => `
+      <details class="set-group" data-group="${key}"${settingsOpenGroups.has(key) ? ' open' : ''}>
+        <summary class="set-group-head">
+          <span class="set-group-icon" aria-hidden="true">${icon}</span>
+          <span class="set-group-text">
+            <span class="set-group-title">${title}</span>
+            <span class="set-group-status">${escapeHtml(status)}</span>
+          </span>
+          <span class="set-group-chev" aria-hidden="true">${ICONS.chevron}</span>
+        </summary>
+        <div class="set-group-body">${body}</div>
+      </details>`;
+
+    /**
+     * A platform connection row: badge, name, status chip, the honest
+     * explainer, and the connect/disconnect button (unchanged actions).
+     */
+    const conn = (/** @type {string} */ badge, /** @type {string} */ name, /** @type {string} */ statusHtml, /** @type {boolean} */ on, /** @type {string} */ note, /** @type {string} */ button) => `
+      <div class="settings-section set-conn">
+        <div class="set-conn-head">
+          ${badge}
+          <span class="set-conn-name">${name}</span>
+          <span class="connection-status ${on ? 'connected' : 'disconnected'}">${statusHtml}</span>
+        </div>
+        <p class="set-note">${note}</p>
+        ${button}
+      </div>`;
+
+    const platBadge = (/** @type {string} */ p) => `<span class="platform-badge" style="background:${PLATFORM_COLORS[p]}">${PLATFORM_ICONS[p]}</span>`;
+    const connState = (/** @type {{connected: boolean, needsReconnect: boolean, handle: string|null}} */ st, prefix = '') =>
+      st.connected ? `Connected${st.handle ? ' as ' + prefix + escapeHtml(st.handle) : ''}` : st.needsReconnect ? 'Expired — reconnect' : 'Not connected';
+
     container.innerHTML = `
-      <h2 class="screen-title">Settings</h2>
+      ${screenHead('Settings', acct.signedIn ? `Signed in${acct.email ? ' as ' + acct.email : ''} · synced` : 'Local only — everything stays on this device')}
 
-      <div class="settings-section">
-        <h3>SocialOS Account <span class="text-secondary" style="font-weight:400">(sync across devices)</span></h3>
-        <div class="connection-status ${acct.signedIn ? 'connected' : 'disconnected'}">
-          ${acct.signedIn ? `Signed in${acct.email ? ' as ' + escapeHtml(acct.email) : ''}` : 'Not signed in'}
-        </div>
-        <p class="text-secondary" style="margin:8px 0">
-          Optional — everything works without an account, stored on this
-          device. Signing in adds cross-device sync of your preferences,
-          profile, and Front Office access to your own private cloud row.
-          Platform connections (Google Drive, LinkedIn, Reddit, TikTok)
-          always stay on-device.
-        </p>
-        ${acct.signedIn ? `
-          <p class="text-secondary" style="margin:8px 0">
-            Last synced: ${acct.lastSyncAt ? SocialOSUtils.formatDate(acct.lastSyncAt) + ' ' + SocialOSUtils.formatTime(acct.lastSyncAt) : 'not yet'}
+      ${group('account', ICONS.user, 'Account &amp; sync', acct.signedIn ? `Signed in${acct.email ? ' as ' + acct.email : ''}` : 'Not signed in — optional', `
+        <div class="settings-section">
+          <div class="connection-status ${acct.signedIn ? 'connected' : 'disconnected'}">
+            ${acct.signedIn ? `Signed in${acct.email ? ' as ' + escapeHtml(acct.email) : ''}` : 'Not signed in'}
+          </div>
+          <p class="set-note">
+            Optional — everything works without an account, stored on this
+            device. Signing in adds cross-device sync of your preferences,
+            profile, and Front Office access to your own private cloud row.
+            Platform connections (Google Drive, LinkedIn, Reddit, TikTok)
+            always stay on-device.
           </p>
-          <div style="display:flex;gap:8px;flex-wrap:wrap">
-            <button class="btn btn-secondary btn-sm" data-action="account-sync-now">Sync now</button>
-            <button class="btn btn-danger btn-sm" data-action="account-signout">Sign out</button>
-          </div>
-        ` : `
-          <a href="#" class="btn btn-google" data-action="account-google" style="display:inline-flex;align-items:center;justify-content:center;gap:8px;text-decoration:none">
-            ${GOOGLE_G_ICON}
-            <span>Sign in with Google</span>
-          </a>
-          <div class="form-group" style="margin-top:12px">
-            <label for="set-account-email">Or sign in with just your email — no password, no Google needed</label>
-            <input type="email" id="set-account-email" class="input" placeholder="you@example.com" autocomplete="email">
-          </div>
-          <button class="btn btn-secondary btn-sm" data-action="account-magiclink">Email me a sign-in link</button>
-        `}
-      </div>
+          ${acct.signedIn ? `
+            <p class="set-note">
+              Last synced: ${acct.lastSyncAt ? SocialOSUtils.formatDate(acct.lastSyncAt) + ' ' + SocialOSUtils.formatTime(acct.lastSyncAt) : 'not yet'}
+            </p>
+            <div class="set-actions">
+              <button class="btn btn-secondary btn-sm" data-action="account-sync-now">Sync now</button>
+              <button class="btn btn-danger btn-sm" data-action="account-signout">Sign out</button>
+            </div>
+          ` : `
+            <a href="#" class="btn btn-google" data-action="account-google" style="display:inline-flex;align-items:center;justify-content:center;gap:8px;text-decoration:none">
+              ${GOOGLE_G_ICON}
+              <span>Sign in with Google</span>
+            </a>
+            <div class="form-group" style="margin-top:12px">
+              <label for="set-account-email">Or sign in with just your email — no password, no Google needed</label>
+              <input type="email" id="set-account-email" class="input" placeholder="you@example.com" autocomplete="email">
+            </div>
+            <button class="btn btn-secondary btn-sm" data-action="account-magiclink">Email me a sign-in link</button>
+          `}
+        </div>`)}
 
-      <div class="settings-section">
-        <h3>AI Engine</h3>
-        <div class="connection-status connected">Connected — managed (free tier)</div>
-        <p class="text-secondary" style="margin-top:8px">The AI is built in and needs no setup. Advanced tiers will appear here later.</p>
-      </div>
-
-      <div class="settings-section">
-        <h3>Google Account</h3>
-        <div class="connection-status ${googleConnected ? 'connected' : 'disconnected'}">
-          ${googleConnected ? 'Connected' : 'Not connected'}
-        </div>
-        <p class="text-secondary" style="margin:8px 0">
-          Read-only access to Google Drive, plus Google Photos items you
+      ${group('connections', ICONS.link, 'Connections', `${connectedCount} of 4 connected · AI built in`, `
+        ${conn(`<span class="platform-badge set-ai-badge">AI</span>`, 'AI engine', 'Managed', true,
+          'Built in and needs no setup (free tier). Advanced tiers will appear here later.', '')}
+        ${conn(`<span class="platform-badge set-google-badge">${GOOGLE_G_ICON}</span>`, 'Google', googleConnected ? 'Connected' : 'Not connected', googleConnected,
+          `Read-only access to Google Drive, plus Google Photos items you
           explicitly pick. Signing in happens on Google's own page — SocialOS
           never sees your password, and disconnecting revokes its access at
-          Google. Details: <a href="privacy.html" target="_blank" rel="noopener">Privacy Policy</a>.
-        </p>
-        ${googleConnected ? `
-          <button class="btn btn-danger btn-sm" data-action="disconnect-google">Disconnect</button>
-        ` : `
-          <a href="#" class="btn btn-google" data-action="connect-google-settings" style="display:inline-flex;align-items:center;justify-content:center;gap:8px;text-decoration:none">
-            ${GOOGLE_G_ICON}
-            <span>Sign in with Google</span>
-          </a>
-        `}
-      </div>
+          Google. Details: <a href="privacy.html" target="_blank" rel="noopener">Privacy Policy</a>.`,
+          googleConnected
+            ? `<button class="btn btn-danger btn-sm" data-action="disconnect-google">Disconnect</button>`
+            : `<a href="#" class="btn btn-google" data-action="connect-google-settings" style="display:inline-flex;align-items:center;justify-content:center;gap:8px;text-decoration:none">${GOOGLE_G_ICON}<span>Sign in with Google</span></a>`)}
+        ${conn(platBadge('linkedin'), 'LinkedIn', connState(liStatus), liStatus.connected,
+          `Direct posting. Sign in on LinkedIn's own page to let SocialOS post
+          approved drafts to your profile. Access lasts 60 days (a LinkedIn
+          platform limit) — you'll tap Reconnect when it expires.`,
+          liStatus.connected
+            ? `<button class="btn btn-danger btn-sm" data-action="disconnect-linkedin">Disconnect</button>`
+            : `<button class="btn btn-accent btn-sm" data-action="connect-linkedin" style="background:${PLATFORM_COLORS.linkedin};color:#fff">${liStatus.needsReconnect ? 'Reconnect LinkedIn' : 'Sign in with LinkedIn'}</button>`)}
+        ${conn(platBadge('reddit'), 'Reddit', connState(rdStatus, 'u/'), rdStatus.connected,
+          `Direct posting. Sign in on Reddit's own page to let SocialOS submit
+          approved posts for you. The connection refreshes silently in the
+          background for as long as you stay connected.`,
+          rdStatus.connected
+            ? `<button class="btn btn-danger btn-sm" data-action="disconnect-reddit">Disconnect</button>`
+            : `<button class="btn btn-accent btn-sm" data-action="connect-reddit" style="background:${PLATFORM_COLORS.reddit};color:#fff">${rdStatus.needsReconnect ? 'Reconnect Reddit' : 'Sign in with Reddit'}</button>`)}
+        ${conn(platBadge('tiktok'), 'TikTok', connState(tkStatus), tkStatus.connected,
+          `Profile connect. Sign in on TikTok's own page to connect your TikTok
+          identity for planning and engagement. Direct video posting needs
+          TikTok's Content Posting API audit — until then, approved TikTok
+          posts use the clipboard flow plus the tiktok.com/upload link.`,
+          tkStatus.connected
+            ? `<button class="btn btn-danger btn-sm" data-action="disconnect-tiktok">Disconnect</button>`
+            : `<button class="btn btn-accent btn-sm" data-action="connect-tiktok" style="background:${PLATFORM_COLORS.tiktok};color:#fff">${tkStatus.needsReconnect ? 'Reconnect TikTok' : 'Sign in with TikTok'}</button>`)}
+      `)}
 
-      <div class="settings-section">
-        <h3>LinkedIn <span class="text-secondary" style="font-weight:400">(direct posting)</span></h3>
-        <div class="connection-status ${liStatus.connected ? 'connected' : 'disconnected'}">
-          ${liStatus.connected
-            ? `Connected${liStatus.handle ? ' as ' + escapeHtml(liStatus.handle) : ''}`
-            : liStatus.needsReconnect ? 'Token expired — reconnect' : 'Not connected'}
+      ${group('profile', ICONS.star, 'Profile &amp; identity', settingsStatus.profile(profile, persona), `
+        <div class="settings-section">
+          <h3>Profile</h3>
+          <div class="form-group">
+            <label for="set-name">Name</label>
+            <input type="text" id="set-name" class="input" value="${escapeHtml(profile?.name || '')}">
+          </div>
+          <div class="form-group">
+            <label for="set-title">Title</label>
+            <input type="text" id="set-title" class="input" value="${escapeHtml(profile?.title || '')}">
+          </div>
+          <div class="form-group">
+            <label for="set-employer">Employer</label>
+            <input type="text" id="set-employer" class="input" value="${escapeHtml(profile?.employer || '')}">
+          </div>
+          <button class="btn btn-primary btn-sm" data-action="save-profile-settings">Save Profile</button>
         </div>
-        <p class="text-secondary" style="margin:8px 0">
-          Sign in on LinkedIn's own page to let SocialOS post approved
-          drafts directly to your profile. Access lasts 60 days (a LinkedIn
-          platform limit) — you'll tap Reconnect when it expires.
-        </p>
-        ${liStatus.connected ? `
-          <button class="btn btn-danger btn-sm" data-action="disconnect-linkedin">Disconnect</button>
-        ` : `
-          <button class="btn btn-accent btn-sm" data-action="connect-linkedin"
-            style="background:${PLATFORM_COLORS.linkedin};color:#fff">
-            ${liStatus.needsReconnect ? 'Reconnect LinkedIn' : 'Sign in with LinkedIn'}
-          </button>
-        `}
-      </div>
 
-      <div class="settings-section">
-        <h3>Reddit <span class="text-secondary" style="font-weight:400">(direct posting)</span></h3>
-        <div class="connection-status ${rdStatus.connected ? 'connected' : 'disconnected'}">
-          ${rdStatus.connected
-            ? `Connected${rdStatus.handle ? ' as u/' + escapeHtml(rdStatus.handle) : ''}`
-            : rdStatus.needsReconnect ? 'Token expired — reconnect' : 'Not connected'}
-        </div>
-        <p class="text-secondary" style="margin:8px 0">
-          Sign in on Reddit's own page to let SocialOS submit approved posts
-          for you. The connection refreshes silently in the background for
-          as long as you stay connected.
-        </p>
-        ${rdStatus.connected ? `
-          <button class="btn btn-danger btn-sm" data-action="disconnect-reddit">Disconnect</button>
-        ` : `
-          <button class="btn btn-accent btn-sm" data-action="connect-reddit"
-            style="background:${PLATFORM_COLORS.reddit};color:#fff">
-            ${rdStatus.needsReconnect ? 'Reconnect Reddit' : 'Sign in with Reddit'}
-          </button>
-        `}
-      </div>
+        <div class="settings-section">
+          <h3>Identity <span class="text-secondary" style="font-weight:400">(who this install publishes as)</span></h3>
+          <div class="form-group">
+            <label for="set-persona-kind">This install is</label>
+            <select id="set-persona-kind" class="input">
+              <option value="personal" ${persona.kind !== 'brand' ? 'selected' : ''}>Personal (default)</option>
+              <option value="brand" ${persona.kind === 'brand' ? 'selected' : ''}>Brand</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label for="set-persona-disclosure">Disclosure line <span class="text-secondary">(brand only — the one exact line the account may say about who runs it)</span></label>
+            <input type="text" id="set-persona-disclosure" class="input" value="${escapeHtml(persona.disclosure || '')}" placeholder="e.g. This account is run by ___ on behalf of ___.">
+          </div>
+          <div class="form-group">
+            <label for="set-persona-queue-agents">Queue agents to review <span class="text-secondary">(brand only — comma-separated mkt_drafts.agent values, e.g. brand-engine)</span></label>
+            <input type="text" id="set-persona-queue-agents" class="input" value="${escapeHtml((persona.queue_agents || []).join(', '))}">
+          </div>
+          <p class="set-note">
+            This install publishes as one identity. Platform sign-ins are
+            shared by everything on this device — to run a second account, use
+            a separate browser profile or device. A second install of this PWA
+            on the same browser is the same identity.
+          </p>
+          <button class="btn btn-primary btn-sm" data-action="persona-save">Save Identity</button>
+        </div>`)}
 
-      <div class="settings-section">
-        <h3>TikTok <span class="text-secondary" style="font-weight:400">(profile connect)</span></h3>
-        <div class="connection-status ${tkStatus.connected ? 'connected' : 'disconnected'}">
-          ${tkStatus.connected
-            ? `Connected${tkStatus.handle ? ' as ' + escapeHtml(tkStatus.handle) : ''}`
-            : tkStatus.needsReconnect ? 'Token expired — reconnect' : 'Not connected'}
+      ${group('rules', ICONS.shield, 'Posting rules', settingsStatus.rules(settings), `
+        <div class="settings-section">
+          <h3>Content scrubbing</h3>
+          <label class="toggle-row">
+            <input type="checkbox" id="set-scrub-clients" ${scrub.remove_client_names ? 'checked' : ''}>
+            <span>Remove client names</span>
+          </label>
+          <label class="toggle-row">
+            <input type="checkbox" id="set-scrub-locations" ${scrub.remove_facility_locations ? 'checked' : ''}>
+            <span>Remove facility locations</span>
+          </label>
+          <label class="toggle-row">
+            <input type="checkbox" id="set-scrub-specs" ${scrub.remove_proprietary_specs ? 'checked' : ''}>
+            <span>Remove proprietary specs</span>
+          </label>
+          <label class="toggle-row">
+            <input type="checkbox" id="set-scrub-financial" ${scrub.remove_financial_data ? 'checked' : ''}>
+            <span>Remove financial data</span>
+          </label>
+          <div class="form-group" style="margin-top:12px">
+            <label for="set-blocked-terms">Custom blocked terms (one per line)</label>
+            <textarea id="set-blocked-terms" class="input textarea" rows="3">${escapeHtml((scrub.custom_blocked_terms || []).join('\n'))}</textarea>
+          </div>
+          <button class="btn btn-primary btn-sm" data-action="save-scrubbing-settings">Save Scrubbing Rules</button>
         </div>
-        <p class="text-secondary" style="margin:8px 0">
-          Sign in on TikTok's own page to connect your TikTok identity for
-          planning and engagement. Direct video posting needs TikTok's
-          Content Posting API audit — until then, approved TikTok posts use
-          the clipboard flow plus the tiktok.com/upload link. The connection
-          refreshes silently in the background.
-        </p>
-        ${tkStatus.connected ? `
-          <button class="btn btn-danger btn-sm" data-action="disconnect-tiktok">Disconnect</button>
-        ` : `
-          <button class="btn btn-accent btn-sm" data-action="connect-tiktok"
-            style="background:${PLATFORM_COLORS.tiktok};color:#fff">
-            ${tkStatus.needsReconnect ? 'Reconnect TikTok' : 'Sign in with TikTok'}
-          </button>
-        `}
-      </div>
 
-      <div class="settings-section">
-        <h3>Profile</h3>
-        <div class="form-group">
-          <label for="set-name">Name</label>
-          <input type="text" id="set-name" class="input" value="${profile?.name || ''}">
-        </div>
-        <div class="form-group">
-          <label for="set-title">Title</label>
-          <input type="text" id="set-title" class="input" value="${profile?.title || ''}">
-        </div>
-        <div class="form-group">
-          <label for="set-employer">Employer</label>
-          <input type="text" id="set-employer" class="input" value="${profile?.employer || ''}">
-        </div>
-        <button class="btn btn-primary btn-sm" data-action="save-profile-settings">Save Profile</button>
-      </div>
+        <div class="settings-section">
+          <h3>Visuals</h3>
+          <label class="toggle-row">
+            <input type="checkbox" data-action="toggle-auto-visuals" ${settings.auto_visuals !== false ? 'checked' : ''}>
+            <span>Auto-suggest visuals — when you draft a post with nothing attached, pick a matching Library photo or make a quote card, shown so you can remove it in one tap. Never uses face-flagged photos.</span>
+          </label>
+        </div>`)}
 
-      <div class="settings-section">
-        <h3>Content Scrubbing</h3>
-        <label class="toggle-row">
-          <input type="checkbox" id="set-scrub-clients" ${settings.content_scrubbing?.remove_client_names ? 'checked' : ''}>
-          <span>Remove client names</span>
-        </label>
-        <label class="toggle-row">
-          <input type="checkbox" id="set-scrub-locations" ${settings.content_scrubbing?.remove_facility_locations ? 'checked' : ''}>
-          <span>Remove facility locations</span>
-        </label>
-        <label class="toggle-row">
-          <input type="checkbox" id="set-scrub-specs" ${settings.content_scrubbing?.remove_proprietary_specs ? 'checked' : ''}>
-          <span>Remove proprietary specs</span>
-        </label>
-        <label class="toggle-row">
-          <input type="checkbox" id="set-scrub-financial" ${settings.content_scrubbing?.remove_financial_data ? 'checked' : ''}>
-          <span>Remove financial data</span>
-        </label>
-        <div class="form-group" style="margin-top:12px">
-          <label for="set-blocked-terms">Custom blocked terms (one per line)</label>
-          <textarea id="set-blocked-terms" class="input textarea" rows="3">${(settings.content_scrubbing?.custom_blocked_terms || []).join('\n')}</textarea>
+      ${group('frontoffice', ICONS.inbox, 'Front Office &amp; notifications', `Queue ${settings.front_office_secret ? 'connected' : 'not connected'} · push ${pushOn ? 'on' : 'off'}`, `
+        <div class="settings-section">
+          <h3>Front Office Queue <span class="text-secondary" style="font-weight:400">(agent drafts)</span></h3>
+          <div class="connection-status ${settings.front_office_secret ? 'connected' : 'disconnected'}">
+            ${settings.front_office_secret ? 'Connected' : 'Not connected'}
+          </div>
+          <p class="set-note">
+            Agent drafts in the Inbox are written by your Front Office agents.
+            Paste the shared secret from the mkt-queue Edge Function (Supabase
+            project settings) — it's stored only on this device.
+          </p>
+          <div class="form-group">
+            <label for="set-fo-secret">Shared secret</label>
+            <input type="password" id="set-fo-secret" class="input" value="${escapeHtml(settings.front_office_secret || '')}" autocomplete="off">
+          </div>
+          <div class="form-group">
+            <label for="set-fo-url">Queue function URL <span class="text-secondary">(leave as-is unless developing locally)</span></label>
+            <input type="text" id="set-fo-url" class="input" value="${escapeHtml(settings.mkt_queue_url || SocialOSDB.DEFAULT_MKT_QUEUE_URL)}">
+          </div>
+          <button class="btn btn-primary btn-sm" data-action="save-frontoffice-settings">Save Front Office Settings</button>
         </div>
-        <button class="btn btn-primary btn-sm" data-action="save-scrubbing-settings">Save Scrubbing Rules</button>
-      </div>
 
-      <div class="settings-section">
-        <h3>Visuals</h3>
-        <label class="toggle-row">
-          <input type="checkbox" data-action="toggle-auto-visuals" ${settings.auto_visuals !== false ? 'checked' : ''}>
-          <span>Auto-suggest visuals — when you draft a post with nothing attached, pick a matching Library photo or make a quote card, shown so you can remove it in one tap. Never uses face-flagged photos.</span>
-        </label>
-      </div>
+        <div class="settings-section">
+          <h3>Push notifications <span class="text-secondary" style="font-weight:400">(one-tap approvals on your phone)</span></h3>
+          <div class="connection-status ${pushOn ? 'connected' : 'disconnected'}">
+            ${pushOn ? 'Enabled on this device' : 'Off'}
+          </div>
+          <p class="set-note">
+            Get a notification when your agents queue a draft and when a
+            scheduled post is due — approve &amp; post, edit, or deny right
+            from the notification. On iPhone: install SocialOS to the Home
+            Screen first (Share &#8594; Add to Home Screen); action buttons
+            are Android-only, tapping the notification opens the right
+            screen everywhere.
+          </p>
+          ${!ps.supported ? `
+            <p class="set-note"><b>This browser can't receive push.</b> Use the installed app (Add to Home Screen) instead of a plain tab.</p>` : ''}
+          ${ps.supported && !ps.hasSecret ? `
+            <p class="set-note"><b>Add the Front Office shared secret above first</b> — push rides the same connection.</p>` : ''}
+          ${ps.supported && ps.permission === 'denied' ? `
+            <p class="set-note"><b>Notifications are blocked</b> for SocialOS in your browser/OS settings — allow them, then enable here.</p>` : ''}
+          <p class="set-note" id="set-push-liveness">Background service: checking…</p>
+          <div class="set-actions">
+            ${pushOn
+              ? `<button class="btn btn-secondary btn-sm" data-action="push-test">Send a test</button>
+                 <button class="btn btn-danger btn-sm" data-action="push-disable">Turn off</button>`
+              : `<button class="btn btn-primary btn-sm" data-action="push-enable" ${ps.supported && ps.hasSecret ? '' : 'disabled'}>Enable push on this device</button>`}
+          </div>
+          <label class="toggle-row" style="margin-top:12px">
+            <input type="checkbox" data-action="toggle-autopost" ${settings.auto_post_scheduled ? 'checked' : ''}>
+            <span>Auto-post scheduled posts — once you approve one, it publishes
+            <b>itself</b> at the scheduled time and you get a "Posted ✓"
+            notification instead of a "Post now" button. LinkedIn/Reddit only
+            (others still need the copy step), and only from the device that
+            scheduled it. Posting happens when the reminder push arrives or
+            the next time the app opens.</span>
+          </label>
+        </div>`)}
 
-      <div class="settings-section">
-        <h3>Identity <span class="text-secondary" style="font-weight:400">(who this install publishes as)</span></h3>
-        <div class="form-group">
-          <label for="set-persona-kind">This install is</label>
-          <select id="set-persona-kind" class="input">
-            <option value="personal" ${persona.kind !== 'brand' ? 'selected' : ''}>Personal (default)</option>
-            <option value="brand" ${persona.kind === 'brand' ? 'selected' : ''}>Brand</option>
-          </select>
+      ${group('data', ICONS.box, 'Data &amp; about', appVersion ? `SocialOS v${appVersion}` : 'Version unavailable', `
+        <div class="settings-section">
+          <h3>About</h3>
+          <p class="set-note">
+            ${appVersion ? `SocialOS v${escapeHtml(appVersion)}<br>` : ''}
+            ${versionLabel() || 'Build unavailable'}<br>
+            "build" matches the service worker cache tag; "self-healing" is the
+            ALYS error-monitoring kit's version.
+          </p>
         </div>
-        <div class="form-group">
-          <label for="set-persona-disclosure">Disclosure line <span class="text-secondary">(brand only — the one exact line the account may say about who runs it)</span></label>
-          <input type="text" id="set-persona-disclosure" class="input" value="${escapeHtml(persona.disclosure || '')}" placeholder="e.g. This account is run by ___ on behalf of ___.">
-        </div>
-        <div class="form-group">
-          <label for="set-persona-queue-agents">Queue agents to review <span class="text-secondary">(brand only — comma-separated mkt_drafts.agent values, e.g. brand-engine)</span></label>
-          <input type="text" id="set-persona-queue-agents" class="input" value="${escapeHtml((persona.queue_agents || []).join(', '))}">
-        </div>
-        <p class="text-secondary" style="margin:8px 0">
-          This install publishes as one identity. Platform sign-ins are
-          shared by everything on this device — to run a second account, use
-          a separate browser profile or device. A second install of this PWA
-          on the same browser is the same identity.
-        </p>
-        <button class="btn btn-primary btn-sm" data-action="persona-save">Save Identity</button>
-      </div>
 
-      <div class="settings-section">
-        <h3>Front Office Queue <span class="text-secondary" style="font-weight:400">(agent drafts)</span></h3>
-        <div class="connection-status ${settings.front_office_secret ? 'connected' : 'disconnected'}">
-          ${settings.front_office_secret ? 'Connected' : 'Not connected'}
-        </div>
-        <p class="text-secondary" style="margin:8px 0">
-          The Queue screen reviews post drafts written by your Front Office
-          agents. Paste the shared secret from the mkt-queue Edge Function
-          (Supabase project settings) — it's stored only on this device.
-        </p>
-        <div class="form-group">
-          <label for="set-fo-secret">Shared secret</label>
-          <input type="password" id="set-fo-secret" class="input" value="${escapeHtml(settings.front_office_secret || '')}" autocomplete="off">
-        </div>
-        <div class="form-group">
-          <label for="set-fo-url">Queue function URL <span class="text-secondary">(leave as-is unless developing locally)</span></label>
-          <input type="text" id="set-fo-url" class="input" value="${escapeHtml(settings.mkt_queue_url || SocialOSDB.DEFAULT_MKT_QUEUE_URL)}">
-        </div>
-        <button class="btn btn-primary btn-sm" data-action="save-frontoffice-settings">Save Front Office Settings</button>
-      </div>
-
-      <div class="settings-section">
-        <h3>Push Notifications <span class="text-secondary" style="font-weight:400">(one-tap approvals on your phone)</span></h3>
-        ${(() => {
-          const ps = pushStatus || { supported: false, permission: 'default', subscribed: false, hasSecret: false };
-          const on = !!settings.push_enabled && ps.subscribed;
-          return `
-            <div class="connection-status ${on ? 'connected' : 'disconnected'}">
-              ${on ? 'Enabled on this device' : 'Off'}
-            </div>
-            <p class="text-secondary" style="margin:8px 0">
-              Get a notification when your agents queue a draft and when a
-              scheduled post is due — approve &amp; post, edit, or deny right
-              from the notification. On iPhone: install SocialOS to the Home
-              Screen first (Share &#8594; Add to Home Screen); action buttons
-              are Android-only, tapping the notification opens the right
-              screen everywhere.
-            </p>
-            ${!ps.supported ? `
-              <p class="text-secondary"><b>This browser can't receive push.</b> Use the installed app (Add to Home Screen) instead of a plain tab.</p>` : ''}
-            ${ps.supported && !ps.hasSecret ? `
-              <p class="text-secondary"><b>Add the Front Office shared secret above first</b> — push rides the same connection.</p>` : ''}
-            ${ps.supported && ps.permission === 'denied' ? `
-              <p class="text-secondary"><b>Notifications are blocked</b> for SocialOS in your browser/OS settings — allow them, then enable here.</p>` : ''}
-            <p class="text-secondary" id="set-push-liveness">Background service: checking…</p>
-            <div style="display:flex;gap:8px;flex-wrap:wrap">
-              ${on
-                ? `<button class="btn btn-secondary btn-sm" data-action="push-test">Send a test</button>
-                   <button class="btn btn-danger btn-sm" data-action="push-disable">Turn off</button>`
-                : `<button class="btn btn-primary btn-sm" data-action="push-enable" ${ps.supported && ps.hasSecret ? '' : 'disabled'}>Enable push on this device</button>`}
-            </div>
-            <label class="toggle-row" style="margin-top:12px">
-              <input type="checkbox" data-action="toggle-autopost" ${settings.auto_post_scheduled ? 'checked' : ''}>
-              <span>Auto-post scheduled posts — once you approve one, it publishes
-              <b>itself</b> at the scheduled time and you get a "Posted ✓"
-              notification instead of a "Post now" button. LinkedIn/Reddit only
-              (others still need the copy step), and only from the device that
-              scheduled it. Posting happens when the reminder push arrives or
-              the next time the app opens.</span>
-            </label>`;
-        })()}
-      </div>
-
-      <div class="settings-section">
-        <h3>Data</h3>
-        <button class="btn btn-danger" data-action="reset-all">Reset All Data</button>
-        <p class="text-secondary" style="margin-top:8px">This will delete all content, posts, settings, and start fresh.</p>
-      </div>
-
-      <div class="settings-section">
-        <h3>About</h3>
-        <p class="text-secondary">
-          ${versionLabel() || 'Version unavailable'}<br>
-          "build" matches the service worker cache tag; "self-healing" is the
-          ALYS error-monitoring kit's version.
-        </p>
-      </div>
+        <div class="settings-section set-danger">
+          <h3>Data</h3>
+          <p class="set-note">Deletes all content, posts, settings, and starts fresh. This can't be undone.</p>
+          <button class="btn btn-danger" data-action="reset-all">Reset All Data</button>
+        </div>`)}
     `;
   }
 
@@ -2425,14 +2394,9 @@ const SocialOSUI = (() => {
       : '';
 
     let html = `
-      <div class="screen-title-row" style="display:flex;align-items:center;gap:12px">
-        <h2 class="screen-title" style="margin:0">Front Office Queue</h2>
-        ${data.configured ? `<button class="btn btn-secondary btn-sm" data-action="queue-refresh" style="margin-left:auto">Refresh</button>` : ''}
-      </div>
-      <p class="text-secondary" style="margin:4px 0 16px">
-        Drafts your agents queued for review. One tap approves and posts as
-        far as each platform allows — nothing is published without you.
-      </p>
+      ${screenHead('Agent drafts',
+        'Drafts your Front Office agents queued. One tap approves and posts as far as each platform allows — nothing is published without you.',
+        data.configured ? '<button class="btn btn-secondary btn-sm" data-action="queue-refresh">Refresh</button>' : '')}
       ${identityLine}
       ${hiddenLine}
       ${data.week ? `<p class="text-secondary" style="margin:0 0 12px;font-weight:500">This week: ${data.week.direct} posted direct, ${data.week.assisted} assisted.</p>` : ''}
@@ -2960,11 +2924,13 @@ const SocialOSUI = (() => {
     const container = $('projects-content');
     if (!container) return;
 
+    const active = projects.filter(p => p.status === 'active').length;
+    const openTasks = projects.reduce((n, p) => n + (p.tasks || []).filter(t => t.status !== 'done').length, 0);
+
     container.innerHTML = `
-      <div class="library-header">
-        <h2 class="screen-title">Projects</h2>
-        <button class="btn btn-primary btn-sm" data-action="add-project">+ New</button>
-      </div>
+      ${screenHead('Projects',
+        projects.length ? `${active} active · ${openTasks} open task${openTasks === 1 ? '' : 's'}` : 'Initiatives, tasks and milestones',
+        '<button class="btn btn-primary btn-sm" data-action="add-project">+ New</button>')}
 
       ${!projects.length ? `
         <div class="empty-state">
@@ -2977,18 +2943,21 @@ const SocialOSUI = (() => {
           ${projects.map(p => {
             const s = SocialOSPM.projectStats(p);
             return `
-              <div class="card project-card" data-action="view-project" data-id="${p.id}">
+              <div class="card project-card" data-action="view-project" data-id="${escapeHtml(p.id)}" role="button" tabindex="0" aria-labelledby="proj-t-${escapeHtml(p.id)}">
                 <div class="project-card-top">
                   <span class="priority-dot priority-${p.priority}" title="${p.priority} priority"></span>
-                  <h4 class="project-name">${escapeHtml(SocialOSUtils.truncate(p.name, 48))}</h4>
+                  <h4 class="project-name" id="proj-t-${escapeHtml(p.id)}">${escapeHtml(SocialOSUtils.truncate(p.name, 48))}</h4>
                   <span class="status-pill status-${p.status}">${PROJECT_STATUS_LABELS[p.status] || p.status}</span>
                 </div>
-                <div class="progress-track"><div class="progress-fill" style="width:${s.pct}%"></div></div>
+                <div class="project-progress">
+                  <div class="progress-track"><div class="progress-fill" style="width:${s.pct}%"></div></div>
+                  <span class="project-pct">${s.pct}%</span>
+                </div>
                 <div class="project-meta">
                   <span>${s.doneTasks}/${s.totalTasks} tasks</span>
-                  <span>${s.reachedMilestones}/${s.reachedMilestones + s.openMilestones} milestones</span>
+                  ${s.reachedMilestones + s.openMilestones ? `<span>${s.reachedMilestones}/${s.reachedMilestones + s.openMilestones} milestones</span>` : ''}
                   ${s.blockedTasks ? `<span class="text-danger">${s.blockedTasks} blocked</span>` : ''}
-                  ${s.nextDue ? `<span class="text-secondary">next due ${s.nextDue.due_date}</span>` : ''}
+                  ${s.nextDue ? `<span class="project-due">Due ${escapeHtml(SocialOSUtils.formatDate(s.nextDue.due_date + 'T12:00:00'))}</span>` : ''}
                 </div>
               </div>`;
           }).join('')}
@@ -3158,17 +3127,24 @@ const SocialOSUI = (() => {
   }
 
   /**
-   * Update the approval badge count on the nav tab.
-   * @param {number} count
+   * Update the Inbox badge on the nav tab, and the per-half counts on the
+   * Your posts / Agent drafts switch (both static copies in index.html).
+   * @param {number} count - everything waiting in the Inbox
+   * @param {{posts: number, agents: number|null}} [parts] - agents null = unknown, shown as nothing
    */
-  function updateApprovalBadge(count) {
+  function updateApprovalBadge(count, parts) {
     const badge = $('approval-badge');
-    if (!badge) return;
-    badge.textContent = String(count);
-    badge.style.display = count > 0 ? 'flex' : 'none';
-    // If Approvals is currently collapsed into More, its rolled-up badge
-    // must track the same count.
-    updateNavOverflow();
+    if (badge) {
+      badge.textContent = String(count);
+      badge.style.display = count > 0 ? 'flex' : 'none';
+    }
+    if (!parts) return;
+    document.querySelectorAll('[data-inbox-count]').forEach(el => {
+      const n = /** @type {HTMLElement} */ (el).dataset.inboxCount === 'agents' ? parts.agents : parts.posts;
+      el.textContent = n ? String(n) : '';
+      if (n) el.setAttribute('aria-label', `${n} waiting`);
+      /** @type {HTMLElement} */ (el).hidden = !n;
+    });
   }
 
   // ── Public API ────────────────────────────────────────────────────────
@@ -3651,6 +3627,8 @@ const SocialOSUI = (() => {
     renderLanding,
     renderOnboardingStep,
     renderDashboard,
+    settingsStatus,
+    patchSettingsStatus,
     renderApprovals,
     renderApprovalCard,
     renderAddCommentForm,

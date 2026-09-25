@@ -32,7 +32,19 @@ const SocialOS = (() => {
       // "it's no longer queued" is a claim we can only make when we HAVE the
       // queue — not when the secret is missing or the fetch failed, where the
       // screen is already saying what's wrong.
-      /** @type {boolean} */ loaded: false
+      /** @type {boolean} */ loaded: false,
+      // When `drafts` was last fetched (ms). Home and the Inbox badge count
+      // agent drafts from this cache and refresh it in the background at
+      // most once a minute (refreshAgentDrafts) — never blocking a render.
+      /** @type {number} */ fetchedAt: 0,
+      // Bumped on every local change to `drafts` (approve/deny/edit) and
+      // every screen fetch; a background refresh that started under an older
+      // generation is discarded, so a slow response can't resurrect a draft
+      // you just approved.
+      /** @type {number} */ gen: 0,
+      // The last attempt to read the queue failed — lets Home say "couldn't
+      // check" only after it actually tried, not while still loading.
+      /** @type {boolean} */ fetchFailed: false
     },
     // Work Orders (js/workorders.js) — the server list as last read, plus the
     // board's view state (lane/project/phone/free/quick filters, which rows
@@ -207,6 +219,9 @@ const SocialOS = (() => {
 
     const pm = await SocialOSPM.portfolioSummary();
     const account = await SocialOSAuth.accountStatus();
+    // Same parts as the Inbox tab badge (inboxCounts), so Home and the bar
+    // never disagree about how much is waiting.
+    const inbox = await inboxCounts();
 
     // Growth card (persona/brand-account) — best-effort, one platform's
     // failure never breaks the dashboard.
@@ -227,12 +242,22 @@ const SocialOS = (() => {
     SocialOSUI.renderDashboard({
       profile,
       pendingCount: pending.length,
+      inbox,
       nextPost,
       contentCount: content.length,
       pm,
       account,
       growth
     });
+
+    // Agent drafts live on the server: count from the cache now, refresh it
+    // in the background, and redraw only if the refresh actually fetched and
+    // we're still on Home (a throttled refresh returns false — no loop).
+    refreshAgentDrafts().then(async (fetched) => {
+      if (!fetched) return;
+      await updateBadge();
+      if (state.currentScreen === 'dashboard') await renderDashboard();
+    }).catch(() => {});
   }
 
   async function renderProjects() {
@@ -1382,6 +1407,9 @@ const SocialOS = (() => {
       const drafts = await SocialOSQueue.fetchQueue();
       state.queue.drafts = drafts;
       state.queue.loaded = true;
+      state.queue.fetchedAt = Date.now();
+      state.queue.gen++;
+      state.queue.fetchFailed = false;
       const visible = SocialOSQueue.personaFilter(drafts, persona);
       SocialOSUI.renderQueue({
         configured: true, drafts: visible, hiddenCount: drafts.length - visible.length, persona, error: null,
@@ -1390,6 +1418,7 @@ const SocialOS = (() => {
       loadQueueThumbnails(drafts); // fire-and-forget
     } catch (err) {
       state.queue.loaded = false;
+      state.queue.fetchFailed = true;
       SocialOSUI.renderQueue({
         configured: true, drafts: [], hiddenCount: 0, persona, error: queueErrMsg(err),
         direct, media: state.queue.media, week, reconnect
@@ -1413,6 +1442,7 @@ const SocialOS = (() => {
     try {
       const draft = await SocialOSQueue.approveDraft(id, bodyOverride);
       state.queue.drafts = state.queue.drafts.filter(d => d.id !== id);
+      state.queue.gen++;
 
       if (SocialOSQueue.isComposerChannel(draft)) {
         const handoff = SocialOSQueue.composerHandoff(draft);
@@ -1461,6 +1491,7 @@ const SocialOS = (() => {
     try {
       draft = await SocialOSQueue.approveDraft(id, bodyOverride);
       state.queue.drafts = state.queue.drafts.filter(d => d.id !== id);
+      state.queue.gen++;
     } catch (err) {
       try { if (preopened && !preopened.closed) preopened.close(); } catch { /* best-effort */ }
       SocialOSUI.loading(false);
@@ -1515,6 +1546,7 @@ const SocialOS = (() => {
     try {
       draft = await SocialOSQueue.approveDraft(id, bodyOverride);
       state.queue.drafts = state.queue.drafts.filter(d => d.id !== id);
+      state.queue.gen++;
     } catch (err) {
       releaseWindow();
       SocialOSUI.loading(false);
@@ -1661,6 +1693,7 @@ const SocialOS = (() => {
     try {
       const draft = await SocialOSQueue.approveDraft(id);
       state.queue.drafts = state.queue.drafts.filter(d => d.id !== id);
+      state.queue.gen++;
       const channel = (draft.channel || '').toLowerCase();
       const redditExtra = channel === 'reddit' ? (SocialOSQueue.redditMeta(draft) || {}) : {};
 
@@ -1844,11 +1877,68 @@ const SocialOS = (() => {
     if (live) live.textContent = text;
   }
 
+  /**
+   * Everything waiting in the Inbox, by part. `agents` is null when it can't
+   * honestly be counted — no Front Office secret, or the queue hasn't been
+   * fetched successfully — so no caller shows "0 agent drafts" it never saw.
+   * It counts the drafts this install's identity would show (personaFilter),
+   * the same list the Agent drafts screen renders.
+   * @returns {Promise<{posts: number, engagement: number, handoffs: number, local: number, agents: number|null, configured: boolean, failed: boolean, total: number}>}
+   */
+  async function inboxCounts() {
+    const posts = (await SocialOSDB.getPendingPosts()).length;
+    const engagement = await SocialOSEngagement.pendingCount();
+    const handoffs = (await SocialOSDB.getPendingHandoffs()).length;
+    const local = posts + engagement + handoffs;
+    const configured = await SocialOSQueue.isConfigured();
+    let agents = null;
+    if (configured && state.queue.loaded) {
+      const persona = await SocialOSDB.getPersona();
+      agents = SocialOSQueue.personaFilter(state.queue.drafts, persona).length;
+    }
+    return { posts, engagement, handoffs, local, agents, configured, failed: state.queue.fetchFailed, total: local + (agents || 0) };
+  }
+
+  /** @type {Promise<boolean>|null} */
+  let agentRefreshInFlight = null;
+  const AGENT_REFRESH_MS = 60 * 1000;
+
+  /**
+   * Background refresh of the agent-draft cache for Home and the badge.
+   * Resolves true only when it fetched; false when unconfigured, throttled,
+   * or failed (a failure leaves the last good cache in place — a network
+   * blip is not "the queue is empty").
+   * @returns {Promise<boolean>}
+   */
+  function refreshAgentDrafts() {
+    if (agentRefreshInFlight) return agentRefreshInFlight;
+    if (state.queue.loaded && Date.now() - state.queue.fetchedAt < AGENT_REFRESH_MS) {
+      return Promise.resolve(false);
+    }
+    agentRefreshInFlight = (async () => {
+      try {
+        if (!(await SocialOSQueue.isConfigured())) return false;
+        const gen = state.queue.gen;
+        const drafts = await SocialOSQueue.fetchQueue();
+        if (state.queue.gen !== gen) return false; // stale: the list changed while we waited
+        state.queue.drafts = drafts;
+        state.queue.loaded = true;
+        state.queue.fetchedAt = Date.now();
+        state.queue.fetchFailed = false;
+        return true;
+      } catch {
+        state.queue.fetchFailed = true;
+        return false;
+      } finally {
+        agentRefreshInFlight = null;
+      }
+    })();
+    return agentRefreshInFlight;
+  }
+
   async function updateBadge() {
-    const pending = await SocialOSDB.getPendingPosts();
-    const engagementPending = await SocialOSEngagement.pendingCount();
-    const handoffs = await SocialOSDB.getPendingHandoffs();
-    SocialOSUI.updateApprovalBadge(pending.length + engagementPending + handoffs.length);
+    const c = await inboxCounts();
+    SocialOSUI.updateApprovalBadge(c.total, { posts: c.local, agents: c.agents });
   }
 
   // ── Onboarding logic ──────────────────────────────────────────────────
@@ -3759,6 +3849,9 @@ const SocialOS = (() => {
               : 'Auto-suggest visuals off — the composer posts text-only unless you attach something.',
             'info', 6000
           );
+          // Status line only — a redraw would revert unsaved scrub rules
+          // sitting in this same group.
+          SocialOSUI.patchSettingsStatus('rules', SocialOSUI.settingsStatus.rules(settings));
           break;
         }
 
@@ -3783,6 +3876,9 @@ const SocialOS = (() => {
           profile.updated_at = SocialOSUtils.now();
           await SocialOSDB.saveProfile(/** @type {any} */ (profile));
           SocialOSUI.toast('Profile saved.', 'success');
+          // Patch the group's status line in place — never redraw Settings
+          // here: that would discard unsaved edits in every other open group.
+          SocialOSUI.patchSettingsStatus('profile', SocialOSUI.settingsStatus.profile(profile, await SocialOSDB.getPersona()));
           break;
         }
 
@@ -3797,6 +3893,7 @@ const SocialOS = (() => {
           };
           await SocialOSDB.saveSettings(settings);
           SocialOSUI.toast('Scrubbing rules saved.', 'success');
+          SocialOSUI.patchSettingsStatus('rules', SocialOSUI.settingsStatus.rules(settings));
           break;
         }
 
