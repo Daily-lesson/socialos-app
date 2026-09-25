@@ -2385,6 +2385,27 @@ button.dash-attn:hover { border-color: var(--warning); transform: translateY(-1p
   margin-right: 2px;
 }
 
+/* Task highlights: work orders on their due date, learning objectives on
+   their day. A tappable id, nothing more — the task lives on its own screen.
+   Work orders use the app's warning role (as the WO "Next" lane does);
+   learning uses the tracker's moss, the PySpark + Airflow track colour. */
+.cal-task {
+  display: block; width: 100%; margin-top: 3px; padding: 1px 4px;
+  border: 1px solid var(--bg-border); border-left: 3px solid var(--text-secondary);
+  border-radius: 4px; background: var(--bg-surface); color: var(--text-primary);
+  font: 500 10px/1.4 var(--font-mono); text-align: left; cursor: pointer;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.cal-task-wo  { border-left-color: var(--warning); }
+.cal-task-lrn { border-left-color: #9ABD5B; }
+.cal-task.is-done { color: var(--text-faint); text-decoration: line-through; }
+.cal-task:focus-visible, .cal-task-row:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.cal-task-more { display: block; margin-top: 2px; font: 500 10px/1.2 var(--font-mono); color: var(--text-secondary); }
+.cal-task-row { width: 100%; text-align: left; font: inherit; color: inherit; cursor: pointer; }
+.cal-task-row.is-done .cal-agenda-what { text-decoration: line-through; }
+.cal-task-dot-wo  { background: var(--warning); }
+.cal-task-dot-lrn { background: #9ABD5B; }
+
 /* ═══════════════════════════════════════════════════════════════════
    SETTINGS
    ═══════════════════════════════════════════════════════════════════ */
@@ -3337,6 +3358,7 @@ body.nav-visible .version-badge { display: none; }
 .wo-lane[data-lane="blocked"]  { --lane-c: var(--text-secondary); }
 .wo-lane[data-lane="unscored"] { --lane-c: var(--text-secondary); }
 .wo-lane[data-lane="loose"]    { --lane-c: var(--text-secondary); }
+.wo-lane[data-lane="learning"] { --lane-c: #9ABD5B; } /* the tracker's moss, as on the Calendar */
 .wo-lane-head { display: flex; align-items: baseline; gap: 10px; padding-bottom: 7px; border-bottom: 2px solid var(--lane-c); }
 .wo-lane-head h3 { margin: 0; font: 700 0.8125rem/1 var(--font-display); letter-spacing: .1em; text-transform: uppercase; color: var(--lane-c); }
 .wo-lane-n { font: 600 0.75rem/1 var(--font-mono); color: var(--lane-c); font-variant-numeric: tabular-nums; }
@@ -3450,3 +3472,152 @@ label.wo-opt input[type="radio"] { margin: 3px 0 0; accent-color: var(--accent);
 @media (max-width: 560px) {
   .wo-lane-gloss { display: none; }
 }
+
+/* ═══ My learning (js/learning.js) ══════════════════════════════════════
+   The sprint tracker's look, inside SocialOS: tokens and card grammar ported
+   from the learning repo's sprint
+   tracker.template.html, scoped under .lrn so nothing else in the app moves.
+   Light or dark follows the system, exactly as the tracker artifact does —
+   the screen is meant to read as the same object. */
+.lrn {
+  --ground: #EDEFF1; --surface: #FAFBFB; --raised: #FFFFFF;
+  --ink: #191E23; --ink-2: #4B555C; --muted: #6E7980;
+  --line: #D2D8DB; --line-2: #E2E7E9;
+  --accent: #9C5A06; --accent-s: #FBEEDC;
+  --done: #0D6355; --done-s: #DEEDE9;
+  --t-teal: #0F6B6B; --t-slate: #3C5170; --t-clay: #8A4730;
+  --t-plum: #673C60; --t-ocean: #1D5686; --t-ochre: #7F6110; --t-moss: #4D6A1B;
+  --r: 3px;
+  --lrn-mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  --lrn-sans: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --lrn-cond: "IBM Plex Sans Condensed", "IBM Plex Sans", system-ui, sans-serif;
+  color: var(--ink);
+  background: var(--ground);
+  font-family: var(--lrn-sans);
+  font-size: 15px; line-height: 1.55;
+  border-radius: 10px;
+  padding: 14px;
+}
+@media (prefers-color-scheme: dark) {
+  .lrn {
+    --ground: #121619; --surface: #191E23; --raised: #1E252B;
+    --ink: #E6EAEC; --ink-2: #B4BEC4; --muted: #87939A;
+    --line: #2B3339; --line-2: #242C32;
+    --accent: #E3A153; --accent-s: #2A2116;
+    --done: #5BBFAB; --done-s: #13302B;
+    --t-teal: #46A9A4; --t-slate: #8098BC; --t-clay: #CF8468;
+    --t-plum: #B183AB; --t-ocean: #6BA3D6; --t-ochre: #C0A04A; --t-moss: #9ABD5B;
+  }
+}
+.lrn h2, .lrn h3, .lrn h5 { font-family: var(--lrn-cond); color: var(--ink); margin: 0; letter-spacing: 0; }
+.lrn a { color: var(--accent); }
+.lrn code { font-family: var(--lrn-mono); font-size: .9em; }
+
+.lrn-meterline { display: flex; align-items: center; gap: 12px; }
+.lrn-meter { flex: 1; height: 5px; background: var(--line-2); border-radius: 99px; overflow: hidden; min-width: 70px; }
+.lrn-meter > i { display: block; height: 100%; background: var(--done); transition: width .35s ease; }
+.lrn-meterval { font-family: var(--lrn-mono); font-size: 12px; color: var(--ink-2); white-space: nowrap; font-variant-numeric: tabular-nums; }
+
+.lrn-strip { display: flex; gap: 6px; margin-top: 12px; padding-bottom: 6px; overflow-x: auto; scrollbar-width: thin; }
+.lrn-wk {
+  flex: 1 0 auto; min-width: 84px; display: grid; gap: 4px; padding: 8px 9px 7px;
+  background: var(--raised); color: var(--ink); border: 1px solid var(--line);
+  border-top: 2px solid var(--track, var(--muted)); border-radius: var(--r);
+  cursor: pointer; text-align: left; font: inherit;
+}
+.lrn-wk[aria-pressed="true"] { border-color: var(--track, var(--accent)); background: var(--accent-s); }
+.lrn-wk .wkn { font-family: var(--lrn-mono); font-size: 10.5px; letter-spacing: .07em; text-transform: uppercase; color: var(--muted); display: flex; justify-content: space-between; gap: 6px; font-variant-numeric: tabular-nums; }
+.lrn-wk[aria-pressed="true"] .wkn { color: var(--track, var(--accent)); }
+.lrn-wk .wkt { font-family: var(--lrn-cond); font-weight: 600; font-size: 13px; line-height: 1.2; }
+.lrn-wk .wkbar { height: 3px; background: var(--line-2); border-radius: 99px; overflow: hidden; }
+.lrn-wk .wkbar > i { display: block; height: 100%; background: var(--done); }
+
+.lrn-weekhead {
+  display: grid; gap: 12px; margin: 14px 0 14px; padding: 16px 16px 15px;
+  background: var(--surface); border: 1px solid var(--line);
+  border-left: 3px solid var(--track, var(--accent)); border-radius: var(--r);
+}
+.lrn-weekhead .kicker { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; }
+.lrn-chip {
+  font-family: var(--lrn-mono); font-size: 10.5px; font-weight: 500; letter-spacing: .07em; text-transform: uppercase;
+  padding: 3px 7px; border-radius: 2px; white-space: nowrap;
+  color: var(--track, var(--accent));
+  border: 1px solid color-mix(in srgb, var(--track, var(--accent)) 38%, transparent);
+  background: color-mix(in srgb, var(--track, var(--accent)) 8%, transparent);
+}
+.lrn-range { font-family: var(--lrn-mono); font-size: 12px; color: var(--muted); }
+.lrn-weekhead h2 { font-size: clamp(20px, 5vw, 27px); line-height: 1.12; font-weight: 700; }
+.lrn-weekhead .why { color: var(--ink-2); margin: 0; }
+.lrn-facts { display: grid; gap: 10px; grid-template-columns: repeat(auto-fit, minmax(min(230px, 100%), 1fr)); margin: 2px 0 0; }
+.lrn-facts dt { font-family: var(--lrn-mono); font-size: 10.5px; letter-spacing: .07em; text-transform: uppercase; color: var(--muted); }
+.lrn-facts dd { margin: 2px 0 0; font-size: 13.5px; color: var(--ink-2); }
+
+.lrn-days { display: grid; gap: 12px; grid-template-columns: repeat(auto-fill, minmax(min(258px, 100%), 1fr)); }
+.lrn-day { display: flex; flex-direction: column; gap: 10px; padding: 13px 14px 12px; background: var(--surface); border: 1px solid var(--line); border-radius: var(--r); }
+.lrn-day.today { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+.lrn-day.rest { background: var(--ground); }
+.lrn-dayhead { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.lrn-dayhead .dow { font-family: var(--lrn-cond); font-weight: 700; font-size: 15px; }
+.lrn-dayhead .dt { font-family: var(--lrn-mono); font-size: 11.5px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.lrn-day.today .dayhead .dt, .lrn-day.today .lrn-dayhead .dt { color: var(--accent); font-weight: 600; }
+.lrn-objs { display: grid; gap: 7px; }
+
+.lrn-obj, .lrn-doditem { display: grid; grid-template-columns: auto 1fr; gap: 9px; align-items: start; }
+/* The checkbox is a button (role=checkbox) so the app's one click
+   delegation handles it; a 44px hit area around a 15px box. */
+.lrn-cb {
+  appearance: none; -webkit-appearance: none; position: relative;
+  width: 15px; height: 15px; margin: 4px 0 0; padding: 0; flex: none;
+  border: 1.5px solid var(--muted); border-radius: 2px; background: var(--raised); cursor: pointer;
+}
+.lrn-cb::before { content: ""; position: absolute; inset: -14px; }
+.lrn-cb[aria-checked="true"] { background: var(--done); border-color: var(--done); }
+.lrn-cb[aria-checked="true"]::after {
+  content: ""; position: absolute; inset: 0; background: var(--raised);
+  clip-path: polygon(19% 47%, 12% 56%, 39% 80%, 88% 25%, 80% 18%, 38% 64%);
+}
+.lrn-cb:disabled { opacity: .45; cursor: progress; }
+.lrn-cb:focus-visible, .lrn-objbtn:focus-visible, .lrn-wk:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.lrn-objbtn { text-align: left; background: none; border: 0; padding: 0; cursor: pointer; display: grid; gap: 3px; color: var(--ink); font: inherit; }
+.lrn-objbtn .t { font-size: 13.5px; line-height: 1.35; }
+.lrn-obj.checked .lrn-objbtn .t { color: var(--muted); text-decoration: line-through; text-decoration-thickness: 1px; }
+.lrn-objmeta { display: flex; flex-wrap: wrap; align-items: center; gap: 7px; }
+.lrn-kind { font-family: var(--lrn-mono); font-size: 9.5px; font-weight: 500; letter-spacing: .09em; text-transform: uppercase; padding: 1px 5px; border-radius: 2px; white-space: nowrap; border: 1px solid var(--line); color: var(--muted); }
+.lrn-kind.apply { border-color: var(--t-slate); color: var(--t-slate); }
+.lrn-kind.checkpoint { border-color: var(--accent); color: var(--accent); background: var(--accent-s); }
+.lrn-kind.review { border-style: dashed; }
+.lrn-mins { font-family: var(--lrn-mono); font-size: 10.5px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.lrn-trk { font-family: var(--lrn-mono); font-size: 9.5px; letter-spacing: .06em; text-transform: uppercase; color: var(--track, var(--muted)); white-space: nowrap; }
+
+.lrn-detail { grid-column: 1 / -1; margin: 2px 0 4px 24px; padding: 10px 12px; background: var(--raised); border: 1px solid var(--line-2); border-radius: var(--r); font-size: 13px; color: var(--ink-2); }
+.lrn-detail h5 { font-family: var(--lrn-mono); font-size: 10px; font-weight: 500; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); margin-top: 8px; }
+.lrn-detail h5:first-child { margin-top: 0; }
+.lrn-detail p, .lrn-detail ol { margin: 2px 0 0; }
+.lrn-detail ol { padding-left: 18px; display: grid; gap: 4px; }
+.lrn-links { display: flex; flex-wrap: wrap; gap: 4px 12px; }
+.lrn-dodflag { margin-top: 10px; padding: 8px 10px; border: 1px solid var(--accent); background: var(--accent-s); border-radius: var(--r); color: var(--ink); }
+.lrn-dodflag b { display: block; font-family: var(--lrn-mono); font-size: 10px; letter-spacing: .08em; text-transform: uppercase; color: var(--accent); }
+.lrn-when { font-family: var(--lrn-mono); font-size: 11px; color: var(--done); }
+
+.lrn-dod { margin-top: 20px; padding: 15px 16px; background: var(--surface); border: 1px solid var(--line); border-radius: var(--r); display: grid; gap: 9px; }
+.lrn-dod h3 { font-size: 17px; }
+.lrn-dod .lede { margin: 0 0 4px; font-size: 13px; color: var(--muted); }
+.lrn-doditem .txt { font-size: 13.5px; }
+.lrn-doditem.checked .txt { color: var(--muted); text-decoration: line-through; }
+.lrn-doditem .wk-ref { font-family: var(--lrn-mono); font-size: 10.5px; color: var(--muted); }
+.lrn-note { margin: 16px 0 0; padding: 12px 14px; font-size: 12.5px; line-height: 1.5; color: var(--muted); border: 1px dashed var(--line); border-radius: var(--r); }
+
+/* Home's card: the same parts at card size. */
+.lrn-card { display: grid; gap: 10px; margin-bottom: 16px; border: 1px solid var(--line); }
+.lrn-cardhead { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.lrn-card h3 { font-size: 15px; font-weight: 700; }
+.lrn-quiet { margin: 0; font-size: 13px; color: var(--muted); }
+.lrn-card .btn { justify-self: start; }
+/* The app's flash fades to its own dark --bg-card; inside the tracker's
+   palette (light by default) that painted dark ink on a dark ground. */
+.lrn .card-focused { outline: 2px solid var(--accent); outline-offset: 3px; box-shadow: none; animation: lrn-focus-flash 2.4s ease-out; }
+@keyframes lrn-focus-flash {
+  0%   { background: var(--accent-s); }
+  100% { background: transparent; }
+}
+@media (prefers-reduced-motion: reduce) { .lrn .card-focused { animation: none; } }

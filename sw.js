@@ -7,7 +7,7 @@
  * approval notifications with one-tap actions and routes taps into the app.
  */
 
-const CACHE_NAME = 'socialos-v39'; // v39: js/version.js (CSP-safe version badge), docked feedback button, reworked Calendar/Library/Projects/Settings; v38: three-tab bar (Home · Create · Inbox) + Home hub redesign; v37: Night Shift icon set (v3 art, ?v=3 hrefs); v36: Work Orders in the board's layout + WOS-1 lanes; v35: Work Orders screen (js/workorders.js + the nav tab); v34: deep-link focus survives the queue's thumbnail re-render
+const CACHE_NAME = 'socialos-v40'; // v40: My learning screen + Home card (js/learning.js); v39: js/version.js (CSP-safe version badge), docked feedback button, reworked Calendar/Library/Projects/Settings; v38: three-tab bar (Home · Create · Inbox) + Home hub redesign; v37: Night Shift icon set (v3 art, ?v=3 hrefs); v36: Work Orders in the board's layout + WOS-1 lanes; v35: Work Orders screen (js/workorders.js + the nav tab); v34: deep-link focus survives the queue's thumbnail re-render
 const SHELL_ASSETS = [
   './',
   './index.html',
@@ -33,6 +33,7 @@ const SHELL_ASSETS = [
   './js/push.js',
   './js/queue.js',
   './js/workorders.js',
+  './js/learning.js',
   './js/self-healing.js',
   './js/ui.js',
   './js/utils.js',

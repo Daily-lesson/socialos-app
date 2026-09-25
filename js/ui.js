@@ -369,6 +369,7 @@ const SocialOSUI = (() => {
     user:     '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></svg>',
     doc:      '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M14 3v6h6M8 13h8M8 17h5"/></svg>',
     box:      '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 8v13H3V8"/><path d="M1 3h22v5H1z"/><path d="M10 12h4"/></svg>',
+    book:     '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5V5a2 2 0 0 1 2-2h13v16H6a2 2 0 0 0-2 2z"/><path d="M4 19.5A2 2 0 0 0 6 22h13v-3"/><path d="M9 7h6M9 11h4"/></svg>',
     chevron:  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg>'
   };
 
@@ -885,6 +886,7 @@ const SocialOSUI = (() => {
       { action: 'go-projects',   icon: ICONS.star,      title: 'Projects',     meta: `${activeProjects} active · ${openTasks} task${openTasks === 1 ? '' : 's'}` },
       { action: 'go-queue',      icon: ICONS.inbox,     title: 'Agent drafts', meta: 'From the Front Office' },
       { action: 'go-workorders', icon: ICONS.clipboard, title: 'Work orders',  meta: 'Dev & ops tasks' },
+      { action: 'go-learning',   icon: ICONS.book,      title: 'My learning',  meta: data.learningMeta || 'Your sprint, tickable' },
       { action: 'go-settings',   icon: ICONS.gear,      title: 'Settings',     meta: 'Accounts & sync' }
     ];
 
@@ -978,6 +980,7 @@ const SocialOSUI = (() => {
         </div>
 
         <div class="dash-col-side">
+          ${renderLearningCard(data.learning, data.learningBusy || '')}
           ${renderGrowthCard(data.growth || {})}
 
           <div class="card quick-actions">
@@ -1834,8 +1837,11 @@ const SocialOSUI = (() => {
    * Render the calendar view.
    * @param {CalendarSlot[]} slots
    * @param {string} [focusDate] - YYYY-MM-DD
+   * @param {{date: string, kind: 'wo'|'lrn', id: string, label: string, route: string, done: boolean}[]} [tasks]
+   *   Work orders on their due date and learning objectives on their day —
+   *   highlights only: each one links to its task, and nothing is edited here.
    */
-  function renderCalendar(slots, focusDate) {
+  function renderCalendar(slots, focusDate, tasks = []) {
     const container = $('calendar-content');
     if (!container) return;
 
@@ -1853,7 +1859,13 @@ const SocialOSUI = (() => {
         date.setDate(date.getDate() + w * 7 + d);
         const dateStr = SocialOSUtils.dateString(date);
         const daySlots = slots.filter(s => s.date === dateStr);
-        week.push({ date, dateStr, slots: daySlots });
+        // Tasks carry real calendar dates, so they match the LOCAL date the
+        // cell prints (date.getDate()). dateStr is a UTC slice, a day off in
+        // US zones; it stays for the post slots, which generateCalendar keys
+        // the same way and so line up with themselves.
+        const localKey = calLocalKey(date);
+        const dayTasks = tasks.filter(t => t.date === localKey);
+        week.push({ date, dateStr, localKey, slots: daySlots, tasks: dayTasks });
       }
       weeks.push(week);
     }
@@ -1884,6 +1896,14 @@ const SocialOSUI = (() => {
     };
 
     const statusLabel = (/** @type {string} */ st) => (st || 'planned').replace(/_/g, ' ');
+    const inWindow = new Set(weeks.reduce((acc, week) => acc.concat(week.map(d => d.localKey)), /** @type {string[]} */ ([])));
+    // The grid carries every highlight; the list is for what's actionable —
+    // learning for the next seven days, and every work order in the window.
+    // Both bounds are local dates, like the tasks' own.
+    const localToday = calLocalKey(new Date());
+    const weekAhead = calLocalKey(new Date(Date.now() + 7 * 86400000));
+    const taskList = tasks.filter(t => inWindow.has(t.date) && (t.kind === 'wo' || (t.date >= localToday && t.date < weekAhead)))
+      .sort((a, b) => a.date.localeCompare(b.date) || a.kind.localeCompare(b.kind) || a.id.localeCompare(b.id));
 
     container.innerHTML = `
       ${screenHead('Calendar',
@@ -1902,16 +1922,33 @@ const SocialOSUI = (() => {
         ${weeks.map(week => `
           <div class="cal-week">
             ${week.map(day => `
-              <div class="cal-day ${day.dateStr === today ? 'today' : ''} ${day.slots.length ? 'has-posts' : ''}">
+              <div class="cal-day ${day.localKey === calLocalKey(new Date()) ? 'today' : ''} ${day.slots.length ? 'has-posts' : ''}">
                 <span class="cal-date">${day.date.getDate()}</span>
                 ${day.slots.map(s => `
                   <div class="cal-slot" style="background:${PLATFORM_COLORS[s.platform] || '#888'}" title="${escapeHtml(platformLabel(s.platform))} · ${escapeHtml(themeLabel(s.theme))}"></div>
                 `).join('')}
+                ${day.tasks.slice(0, 3).map(t => calTaskChip(t)).join('')}
+                ${day.tasks.length > 3 ? `<span class="cal-task-more">+${day.tasks.length - 3}</span>` : ''}
               </div>
             `).join('')}
           </div>
         `).join('')}
       </div>
+
+      ${taskList.length ? `
+        <h2 class="dash-section-title">Tasks — work orders, and learning this week</h2>
+        <div class="cal-agenda">
+          ${taskList.map(t => `
+            <button class="cal-agenda-item cal-task-row${t.done ? ' is-done' : ''}" data-action="task-link" data-route="${woEsc(t.route)}">
+              <span class="cal-agenda-dot cal-task-dot-${t.kind}"></span>
+              <span class="cal-agenda-text">
+                <span class="cal-agenda-when">${escapeHtml(agendaWhen(new Date(`${t.date}T12:00:00`), ''))} · ${woEsc(t.id)}</span>
+                <span class="cal-agenda-what">${woEsc(t.label)}</span>
+              </span>
+              <span class="cal-agenda-status">${t.kind === 'wo' ? 'Work order' : t.done ? 'Done' : 'Learning'}</span>
+            </button>
+          `).join('')}
+        </div>` : ''}
 
       <h2 class="dash-section-title">Up next</h2>
       ${agenda.length ? `
@@ -1929,6 +1966,21 @@ const SocialOSUI = (() => {
         </div>
       ` : `<p class="text-secondary cal-agenda-empty">Nothing scheduled in these four weeks yet. Generate a calendar to plan posts, or add them from Create.</p>`}
     `;
+  }
+
+  /** A Date's LOCAL calendar day as YYYY-MM-DD. @param {Date} d */
+  function calLocalKey(d) {
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  }
+
+  /**
+   * One task highlight in a calendar day: the id, tappable, routed to the
+   * task itself. Text is escaped (repo content), route is built by app.js
+   * from a validated id and re-checked on tap.
+   * @param {{kind: string, id: string, label: string, route: string, done: boolean}} t
+   */
+  function calTaskChip(t) {
+    return `<button class="cal-task cal-task-${t.kind === 'wo' ? 'wo' : 'lrn'}${t.done ? ' is-done' : ''}" data-action="task-link" data-route="${woEsc(t.route)}" title="${woEsc(t.id)} · ${woEsc(t.label)}" aria-label="${woEsc(t.id)}: ${woEsc(t.label)}">${woEsc(t.id)}</button>`;
   }
 
   // ── Settings ──────────────────────────────────────────────────────────
@@ -2203,6 +2255,10 @@ const SocialOSUI = (() => {
           <div class="form-group">
             <label for="set-fo-secret">Shared secret</label>
             <input type="password" id="set-fo-secret" class="input" value="${escapeHtml(settings.front_office_secret || '')}" autocomplete="off">
+          </div>
+          <div class="form-group">
+            <label for="set-lrn-secret">My learning secret <span class="text-secondary">(a second secret, only for My learning; kept on this device, never synced)</span></label>
+            <input type="password" id="set-lrn-secret" class="input" value="${escapeHtml(settings.learning_secret || '')}" autocomplete="off">
           </div>
           <div class="form-group">
             <label for="set-fo-url">Queue function URL <span class="text-secondary">(leave as-is unless developing locally)</span></label>
@@ -2722,7 +2778,7 @@ const SocialOSUI = (() => {
    * collapsible rows ranked by WOS-1. Same data too: the server reads the
    * same Scots_Tasks.md and scores it with a port of the board's scorer.
    * Four states like the Queue: not connected, error, empty, list.
-   * @param {{configured: boolean, orders: WorkOrder[], done: WorkOrder[], projects: string[], view: {lane: string, project: string, phone: boolean, free: boolean, quick: boolean}, expanded: Object<string, boolean>, choices: Object<string, string>, today: string, nextNum: number, loaded: boolean, fetchedAt: string, cached: boolean, error: string|null}} data
+   * @param {{configured: boolean, orders: WorkOrder[], done: WorkOrder[], projects: string[], view: {lane: string, project: string, phone: boolean, free: boolean, quick: boolean}, expanded: Object<string, boolean>, choices: Object<string, string>, today: string, nextNum: number, loaded: boolean, fetchedAt: string, cached: boolean, error: string|null, learningToday?: {id: string, title: string, kind: string, mins: number, done: boolean}[]|null}} data
    */
   function renderWorkOrders(data) {
     const container = $('workorders-content');
@@ -2803,6 +2859,22 @@ const SocialOSUI = (() => {
         </select>
         <span class="wo-count" id="wo-shown"></span>
       </div>`;
+
+    // Learning — a different kind of order, read-only here: today's
+    // objectives from the learning sprint, each linking to its row on My
+    // learning, where it is ticked. Absent (never an empty lane) until the
+    // plan has been read, and hidden under any filter — none of them
+    // describes a learning objective.
+    const lt = data.learningToday;
+    if (lt && lt.length && !v.lane && !v.project && !v.phone && !v.free && !v.quick) {
+      html += woLane('learning', 'Learning · today', 'From your learning sprint — tick them in My learning', lt.length,
+        lt.map(o => `
+          <article class="wo${o.done ? ' is-done' : ''}"><button type="button" class="wo-bar" data-action="task-link" data-route="learning/${woEsc(o.id)}">
+            <span class="wo-rail"></span>
+            <span class="wo-mid"><span class="wo-id">${woEsc(o.id)}</span><span class="wo-title">${o.done ? '<s>' : ''}${woEsc(o.title)}${o.done ? '</s>' : ''}</span>
+              <span class="wo-meta"><span class="wo-tag wo-t-plain">${woEsc(o.kind)}</span><span class="wo-tag wo-t-plain">${Number(o.mins) || 0} min</span>${o.done ? '<span class="wo-tag wo-t-free">done</span>' : ''}</span></span>
+          </button></article>`).join(''));
+    }
 
     let shown = 0;
     for (const [key, label, gloss] of SocialOSWorkOrders.LANES) {
@@ -3612,6 +3684,229 @@ const SocialOSUI = (() => {
       </div>`;
   }
 
+  // ── My learning (js/learning.js) ───────────────────────────────────────
+  // The sprint tracker's look, inside SocialOS: its tokens and card grammar
+  // are scoped under `.lrn` in css/app.css (a port of the learning repo's
+  // tracker.template.html), so the screen and the published artifact read as
+  // one thing. Every string from the plan is escaped with woEsc (quotes
+  // included — some land in attributes); only https links become hrefs, and
+  // the server has already dropped anything else.
+
+  const LRN_DOW = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+  const LRN_MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  const LRN_HUES = ['teal', 'slate', 'clay', 'plum', 'ocean', 'ochre', 'moss'];
+
+  /** @param {string} iso YYYY-MM-DD */
+  function lrnDate(iso) {
+    const d = new Date(`${iso}T00:00:00Z`);
+    return Number.isNaN(d.getTime()) ? { dow: '', short: iso, num: iso }
+      : {
+        dow: LRN_DOW[d.getUTCDay()],
+        short: `${LRN_DOW[d.getUTCDay()]} ${d.getUTCDate()} ${LRN_MON[d.getUTCMonth()]}`,
+        num: `${String(d.getUTCDate()).padStart(2, '0')}.${String(d.getUTCMonth() + 1).padStart(2, '0')}`
+      };
+  }
+
+  /** The track's colour as a CSS var, or the accent for an unknown hue.
+   *  @param {any} plan @param {string} key */
+  function lrnHue(plan, key) {
+    const hue = plan.tracks?.[key]?.hue;
+    return LRN_HUES.includes(hue) ? `var(--t-${hue})` : 'var(--accent)';
+  }
+
+  /** Today in the phone's own zone — the day card to highlight.
+   *  (The server picks the default WEEK in UTC; this only marks a card.) */
+  function lrnToday() {
+    const n = new Date();
+    return `${n.getFullYear()}-${String(n.getMonth() + 1).padStart(2, '0')}-${String(n.getDate()).padStart(2, '0')}`;
+  }
+
+  /**
+   * One objective row: a checkbox-button that commits the tick, and a title
+   * button that opens the detail in place.
+   * @param {any} plan @param {any} o @param {boolean} open @param {string} busy
+   * @param {boolean} [inCard] Home's copy: no focus anchor and no detail id,
+   *   so a deep link (focusCard) and aria-controls can only ever resolve to
+   *   the row on the My learning screen, never to the hidden Home card.
+   */
+  function lrnObjRow(plan, o, open, busy, inCard) {
+    const on = !!plan.ticks[o.id];
+    const id = woEsc(o.id);
+    const trk = o.track && plan.tracks[o.track]
+      ? `<span class="lrn-trk" style="--track:${lrnHue(plan, o.track)}">${woEsc(plan.tracks[o.track].label)}</span>` : '';
+    const detail = open ? `
+      <div class="lrn-detail" id="lrn-d-${id}">
+        <h5>What</h5><p>${woEsc(o.what)}</p>
+        <h5>Why</h5><p>${woEsc(o.why)}</p>
+        ${o.how.length ? `<h5>How</h5><ol>${o.how.map((/** @type {string} */ s) => `<li>${woEsc(s)}</li>`).join('')}</ol>` : ''}
+        <h5>Where</h5><p>${woEsc(o.where)}</p>
+        ${o.links.length ? `<h5>Links</h5><p class="lrn-links">${o.links.map((/** @type {any} */ l) =>
+          `<a href="${woEsc(l.url)}" target="_blank" rel="noopener noreferrer">${woEsc(l.label)}</a>`).join('')}</p>` : ''}
+        ${o.dod.length ? `<div class="lrn-dodflag"><b>Definition of Done</b>${o.dod.map((/** @type {string} */ k) => {
+          const item = plan.definitionOfDone.find((/** @type {any} */ x) => x.id === k);
+          return item ? `<div>• ${woEsc(item.text)}</div>` : '';
+        }).join('')}</div>` : ''}
+        ${on ? `<p class="lrn-when">Ticked ${woEsc(plan.ticks[o.id])}</p>` : ''}
+      </div>` : '';
+    return `
+      <div class="lrn-obj${on ? ' checked' : ''}"${inCard ? '' : ` data-lrn-id="${id}"`}>
+        <button class="lrn-cb" role="checkbox" aria-checked="${on}" data-action="lrn-tick" data-kind="objective" data-id="${id}"
+          aria-label="${woEsc(o.title)}"${busy ? ' disabled' : ''}></button>
+        <button class="lrn-objbtn" data-action="lrn-open" data-id="${id}"${inCard ? '' : ` aria-expanded="${open}" aria-controls="lrn-d-${id}"`}>
+          <span class="t">${woEsc(o.title)}</span>
+          <span class="lrn-objmeta"><span class="lrn-kind ${woEsc(o.kind)}">${woEsc(o.kind)}</span><span class="lrn-mins">${Number(o.mins) || 0} min</span>${trk}</span>
+        </button>
+        ${detail}
+      </div>`;
+  }
+
+  /**
+   * The My learning screen.
+   * @param {{configured: boolean, plan: any, loaded: boolean, error: string|null, week: number, open: Object<string, boolean>, busy: string}} data
+   */
+  function renderLearning(data) {
+    const container = $('learning-content');
+    if (!container) return;
+    const plan = data.plan;
+    const actions = data.configured ? `
+      <button class="btn btn-secondary btn-sm" data-action="lrn-refresh">Refresh</button>
+      ${plan?.trackerUrl ? `<a class="btn btn-secondary btn-sm" href="${woEsc(plan.trackerUrl)}" target="_blank" rel="noopener noreferrer">Tracker ↗</a>` : ''}` : '';
+
+    let html = screenHead('My learning', plan?.title || 'Your learning sprint, tickable', actions);
+
+    if (!data.configured) {
+      container.innerHTML = html + `
+        <div class="empty-state">
+          <h2>Not connected</h2>
+          <p class="text-secondary">Add two secrets in Settings → Front Office: the shared secret the Queue and Work orders use, and the My learning secret, which only this device holds.</p>
+          <button class="btn btn-primary" data-action="go-settings" style="margin-top:12px">Open Settings</button>
+        </div>`;
+      return;
+    }
+    if (data.error) {
+      container.innerHTML = html + `
+        <div class="empty-state">
+          <h2>Couldn't load your learning</h2>
+          <p class="text-secondary">${woEsc(data.error)}</p>
+          <button class="btn btn-primary" data-action="lrn-refresh" style="margin-top:12px">Try Again</button>
+        </div>`;
+      return;
+    }
+    if (!plan || !plan.weeks.length) {
+      container.innerHTML = html + `
+        <div class="empty-state">
+          <h2>No sprint to show</h2>
+          <p class="text-secondary">The learning repo returned no weeks. Nothing on this screen was changed.</p>
+        </div>`;
+      return;
+    }
+
+    const w = plan.weeks.find((/** @type {any} */ x) => x.n === data.week) || plan.weeks[0];
+    const all = SocialOSLearning.progressOf(plan, 0);
+    const today = lrnToday();
+    const hue = lrnHue(plan, w.track);
+
+    html += `<div class="lrn">
+      <div class="lrn-top">
+        <div class="lrn-meterline">
+          <div class="lrn-meter" role="progressbar" aria-label="Objectives complete" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${all.pct}"><i style="width:${all.pct}%"></i></div>
+          <span class="lrn-meterval">${all.done} / ${all.total} · ${all.pct}%</span>
+        </div>
+        <div class="lrn-strip" role="group" aria-label="Weeks">
+          ${plan.weeks.map((/** @type {any} */ x) => {
+            const p = SocialOSLearning.progressOf(plan, x.n);
+            return `<button class="lrn-wk" data-action="lrn-week" data-week="${Number(x.n)}" aria-pressed="${x.n === w.n}" style="--track:${lrnHue(plan, x.track)}">
+              <span class="wkn"><span>W${Number(x.n)}${x.n === SocialOSLearning.localWeek(plan) ? ' ·' : ''}</span><span>${p.done}/${p.total}</span></span>
+              <span class="wkt">${woEsc(plan.tracks[x.track]?.label || '')}</span>
+              <span class="wkbar"><i style="width:${p.pct}%"></i></span>
+            </button>`;
+          }).join('')}
+        </div>
+      </div>
+
+      <section class="lrn-weekhead" style="--track:${hue}">
+        <div class="kicker">
+          <span class="lrn-chip">Week ${Number(w.n)} · ${woEsc(plan.tracks[w.track]?.label || '')}</span>
+          <span class="lrn-range">${woEsc(lrnDate(w.first).short)} – ${woEsc(lrnDate(w.last).short)}</span>
+        </div>
+        <h2>${woEsc(w.title)}</h2>
+        <p class="why">${woEsc(w.why)}</p>
+        <dl class="lrn-facts">
+          <div><dt>What to learn</dt><dd>${woEsc(w.learn)}</dd></div>
+          ${w.course.label ? `<div><dt>Course</dt><dd>${w.course.url
+            ? `<a href="${woEsc(w.course.url)}" target="_blank" rel="noopener noreferrer">${woEsc(w.course.label)}</a>`
+            : woEsc(w.course.label)}</dd></div>` : ''}
+          <div><dt>Applied task</dt><dd>${woEsc(w.applied)}</dd></div>
+          <div><dt>Checkpoint</dt><dd>${woEsc(w.checkpoint)}</dd></div>
+        </dl>
+      </section>
+
+      <div class="lrn-days">
+        ${w.days.map((/** @type {any} */ day) => {
+          const dd = lrnDate(day.date);
+          const rest = day.objectives.every((/** @type {any} */ o) => o.kind === 'review');
+          return `<article class="lrn-day${day.date === today ? ' today' : ''}${rest ? ' rest' : ''}">
+            <div class="lrn-dayhead"><span class="dow">${woEsc(dd.dow)}</span><span class="dt">${woEsc(dd.num)}</span></div>
+            <div class="lrn-objs">${day.objectives.map((/** @type {any} */ o) =>
+              lrnObjRow(plan, o, !!data.open[o.id], data.busy)).join('')}</div>
+          </article>`;
+        }).join('')}
+      </div>
+
+      <section class="lrn-dod">
+        <h3>Definition of Done</h3>
+        <p class="lede">The closing checkpoint. Tick only what you can do unassisted.</p>
+        ${plan.definitionOfDone.map((/** @type {any} */ item) => {
+          const on = !!plan.dod[item.id];
+          return `<div class="lrn-doditem${on ? ' checked' : ''}" data-lrn-id="${woEsc(item.id)}">
+            <button class="lrn-cb" role="checkbox" aria-checked="${on}" data-action="lrn-tick" data-kind="dod" data-id="${woEsc(item.id)}"
+              aria-label="${woEsc(item.text)}"${data.busy ? ' disabled' : ''}></button>
+            <span class="txt">${woEsc(item.text)} <span class="wk-ref">W${Number(item.week)}</span></span>
+          </div>`;
+        }).join('')}
+      </section>
+
+      <p class="lrn-note">Each tick is one commit to <code>progress.json</code> in the learning repo. That file is the only record, and the tracker artifact shows it the next time it's rebuilt. The day log lives in the tracker, not here.${plan.updatedAt ? ` Last tick ${woEsc(lrnDate(String(plan.updatedAt).slice(0, 10)).short)}.` : ''}${plan.cached ? ' (Read from the server\'s 5-minute cache. Refresh re-reads the repo.)' : ''}</p>
+    </div>`;
+    container.innerHTML = html;
+    // Keep the shown week in view on a phone-width strip. Horizontal only:
+    // scrollIntoView would also jump the page up after a tick further down.
+    const strip = /** @type {HTMLElement|null} */ (container.querySelector('.lrn-strip'));
+    const pressed = /** @type {HTMLElement|null} */ (container.querySelector('.lrn-wk[aria-pressed="true"]'));
+    if (strip && pressed) strip.scrollLeft = pressed.offsetLeft - strip.offsetLeft - (strip.clientWidth - pressed.offsetWidth) / 2;
+  }
+
+  /**
+   * Home's My learning card: this week's meter and today's objectives,
+   * tickable in place, in the tracker's look. Absent until the plan has been
+   * read once (never a fake "0 done").
+   * @param {any} plan
+   * @param {string} busy
+   */
+  function renderLearningCard(plan, busy) {
+    if (!plan || !plan.weeks?.length) return '';
+    const today = lrnToday();
+    const w = plan.weeks.find((/** @type {any} */ x) => x.n === SocialOSLearning.localWeek(plan)) || plan.weeks[0];
+    const day = w.days.find((/** @type {any} */ d) => d.date === today);
+    const p = SocialOSLearning.progressOf(plan, w.n);
+    const inSprint = today >= plan.weeks[0].first && today <= plan.weeks[plan.weeks.length - 1].last;
+    const body = day
+      ? `<div class="lrn-objs">${day.objectives.map((/** @type {any} */ o) => lrnObjRow(plan, o, false, busy, true)).join('')}</div>`
+      : `<p class="lrn-quiet">${inSprint ? 'Nothing scheduled today.' : today < plan.weeks[0].first
+        ? `Starts ${woEsc(lrnDate(plan.weeks[0].first).short)}.` : 'The sprint is over. Tick the Definition of Done honestly.'}</p>`;
+    return `
+      <div class="lrn lrn-card" style="--track:${lrnHue(plan, w.track)}">
+        <div class="lrn-cardhead">
+          <span class="lrn-chip">Week ${Number(w.n)} · ${woEsc(plan.tracks[w.track]?.label || '')}</span>
+          <span class="lrn-meterval">${p.done}/${p.total}</span>
+        </div>
+        <div class="lrn-meter" role="progressbar" aria-label="This week's objectives complete" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${p.pct}"><i style="width:${p.pct}%"></i></div>
+        <h3>${day ? `Today · ${woEsc(lrnDate(day.date).short)}` : woEsc(w.title)}</h3>
+        ${body}
+        <button class="btn btn-secondary btn-sm" data-action="go-learning">Open My learning</button>
+      </div>`;
+  }
+
   return {
     $,
     setHTML,
@@ -3647,6 +3942,7 @@ const SocialOSUI = (() => {
     renderQueue,
     renderQueueEdit,
     renderWorkOrders,
+    renderLearning,
     renderScanProgress,
     renderPickerProgress,
     renderComposer,

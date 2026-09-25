@@ -66,6 +66,23 @@ const SocialOS = (() => {
       cached: false,
       /** @type {string|null} */ error: null
     },
+    // My learning (js/learning.js) — the sprint plan + ticks as last read
+    // from the server, plus which week is shown and which rows are open.
+    // Never persisted: the learning repo's progress.json is the only record.
+    learning: {
+      /** @type {any} */ plan: null,
+      week: 0,
+      /** @type {Object<string, boolean>} */ open: {},
+      // The id whose tick is committing — every tick control is disabled
+      // meanwhile, so two taps can't race two commits.
+      busy: '',
+      // Bumped when a tick starts: a read that began before it is stale and
+      // must not put the pre-tick plan back on screen.
+      gen: 0,
+      loaded: false,
+      /** @type {number} */ fetchedAt: 0,
+      /** @type {string|null} */ error: null
+    },
     // Quick Composer (js/composer.js) view state — all ephemeral, never persisted.
     composer: {
       mode: 'post',        // 'post' | 'reply'
@@ -179,6 +196,12 @@ const SocialOS = (() => {
         await renderWorkOrders();
         break;
 
+      case 'learning':
+        SocialOSUI.showNav(true);
+        SocialOSUI.showScreen('screen-learning');
+        await renderLearning();
+        break;
+
       case 'calendar':
         SocialOSUI.showNav(true);
         SocialOSUI.showScreen('screen-calendar');
@@ -239,6 +262,8 @@ const SocialOS = (() => {
       }
     } catch { /* dashboard renders without the growth card */ }
 
+    const lp = state.learning.plan;
+    const lpWeek = lp ? SocialOSLearning.progressOf(lp, SocialOSLearning.localWeek(lp)) : null;
     SocialOSUI.renderDashboard({
       profile,
       pendingCount: pending.length,
@@ -247,8 +272,17 @@ const SocialOS = (() => {
       contentCount: content.length,
       pm,
       account,
-      growth
+      growth,
+      learning: lp,
+      learningBusy: state.learning.busy,
+      learningMeta: lp && lpWeek ? `Week ${SocialOSLearning.localWeek(lp)} · ${lpWeek.done}/${lpWeek.total} done` : ''
     });
+
+    // Same pattern for the learning card: shown from the last read, refreshed
+    // in the background at most every few minutes, redrawn only if it fetched.
+    refreshLearning().then(async (fetched) => {
+      if (fetched && state.currentScreen === 'dashboard') await renderDashboard();
+    }).catch(() => {});
 
     // Agent drafts live on the server: count from the cache now, refresh it
     // in the background, and redraw only if the refresh actually fetched and
@@ -1351,8 +1385,27 @@ const SocialOS = (() => {
    * @param {string} [refocus]  a selector for the control to focus afterwards
    */
   function renderWorkOrdersView(refocus) {
-    SocialOSUI.renderWorkOrders({ configured: true, ...state.workorders });
+    SocialOSUI.renderWorkOrders({ configured: true, ...state.workorders, learningToday: learningTodayRows() });
     if (refocus) /** @type {HTMLElement|null} */ (document.querySelector(refocus))?.focus();
+  }
+
+  /**
+   * Today's learning objectives for the Work Orders screen's read-only
+   * Learning lane, or null when the plan hasn't been read (the lane is then
+   * absent, not empty).
+   * @returns {{id: string, title: string, kind: string, mins: number, done: boolean}[]|null}
+   */
+  function learningTodayRows() {
+    const plan = state.learning.loaded ? state.learning.plan : null;
+    if (!plan) return null;
+    const today = SocialOSLearning.localToday();
+    for (const w of plan.weeks) for (const day of w.days) {
+      if (day.date !== today) continue;
+      return day.objectives
+        .filter((/** @type {any} */ o) => /^w\d{1,2}d\d{1,2}[a-z]$/.test(o.id))
+        .map((/** @type {any} */ o) => ({ id: o.id, title: o.title, kind: o.kind, mins: o.mins, done: !!plan.ticks[o.id] }));
+    }
+    return [];
   }
 
   /**
@@ -1375,6 +1428,121 @@ const SocialOS = (() => {
     }
     SocialOSUI.loading(false);
     renderWorkOrdersView();
+    // The Learning lane reads the learning plan; fetch it quietly if stale
+    // and redraw only if it arrived while this screen is still up.
+    refreshLearning().then((fetched) => {
+      if (!fetched || state.currentScreen !== 'workorders') return;
+      renderWorkOrdersView();
+      // The lane lands ABOVE the Now lane and rewrites the list, so a card a
+      // push deep-linked to must be re-found and re-flashed (gotcha 12).
+      reapplyFocus();
+    }).catch(() => {});
+  }
+
+  /**
+   * Friendly wording for a learning failure (same rules as woErrMsg).
+   * @param {unknown} err
+   * @returns {string}
+   */
+  function lrnErrMsg(err) {
+    // @ts-ignore tag set by js/learning.js `call`
+    if (err && err.unsupported) {
+      return 'the mkt-queue function on the server predates My learning — deploy it (see the SocialOS section of Scots_Tasks.md) and try again.';
+    }
+    return woErrMsg(err);
+  }
+
+  /**
+   * Store a server plan. The server owns progress.json; every tick on
+   * screen is one the server confirmed.
+   * @param {any} plan
+   */
+  function applyLearningPlan(plan) {
+    const l = state.learning;
+    l.plan = plan;
+    if (!l.week || !plan.weeks.some((/** @type {any} */ w) => w.n === l.week)) l.week = SocialOSLearning.localWeek(plan);
+    l.loaded = true;
+    l.fetchedAt = Date.now();
+    l.error = null;
+  }
+
+  /** @param {string} [refocus] selector of the control to re-focus */
+  function renderLearningView(refocus) {
+    SocialOSUI.renderLearning({ configured: true, ...state.learning });
+    // Scoped: Home's card carries the same controls for today's rows.
+    if (refocus) /** @type {HTMLElement|null} */ (document.querySelector(`#learning-content ${refocus}`))?.focus();
+  }
+
+  /**
+   * Load + render My learning. `refresh` bypasses the server's short cache.
+   * @param {boolean} [refresh]
+   */
+  async function renderLearning(refresh) {
+    if (!(await SocialOSLearning.isConfigured())) {
+      state.learning.loaded = false;
+      SocialOSUI.renderLearning({ configured: false, ...state.learning });
+      return;
+    }
+    // A plan read in the last few minutes renders at once; Refresh re-reads.
+    if (refresh || !state.learning.loaded || Date.now() - state.learning.fetchedAt > LEARNING_REFRESH_MS) {
+      SocialOSUI.loading(true, 'Reading your learning sprint…');
+      try {
+        const gen = state.learning.gen;
+        const wasBusy = !!state.learning.busy;
+        const plan = await SocialOSLearning.fetchPlan(refresh);
+        // A read that overlapped a tick (started during it, or before it)
+        // may predate the commit — the tick's own response is the truth.
+        if (gen === state.learning.gen && !wasBusy && !state.learning.busy) applyLearningPlan(plan);
+      } catch (err) {
+        state.learning.loaded = false;
+        state.learning.error = lrnErrMsg(err);
+      }
+      SocialOSUI.loading(false);
+    }
+    renderLearningView();
+  }
+
+  /**
+   * Commit one tick (or untick) and re-render wherever it was tapped.
+   * @param {'objective'|'dod'} kind
+   * @param {string} id
+   */
+  async function learningTick(kind, id) {
+    const l = state.learning;
+    if (!l.plan || l.busy) return;
+    const done = !(kind === 'dod' ? l.plan.dod[id] : l.plan.ticks[id]);
+    const redraw = async () => {
+      if (state.currentScreen === 'learning') renderLearningView(`[data-action="lrn-tick"][data-id="${CSS.escape(id)}"]`);
+      else if (state.currentScreen === 'dashboard') {
+        await renderDashboard();
+        /** @type {HTMLElement|null} */ (document.querySelector(`#dashboard-content .lrn-card [data-action="lrn-tick"][data-id="${CSS.escape(id)}"]`))?.focus();
+      }
+    };
+    l.busy = id;
+    const myGen = ++l.gen;
+    await redraw();
+    try {
+      const r = await SocialOSLearning.tick(kind, id, done);
+      // Settings cleared a secret meanwhile (it bumps gen and resets the
+      // state): the answer must not refill what the device may no longer read.
+      if (l.gen !== myGen) { l.busy = ''; return; }
+      applyLearningPlan(r.plan);
+      SocialOSUI.toast(
+        r.changed
+          ? `${id} ${done ? 'done' : 'unticked'}${r.commit ? ` — commit ${r.commit.slice(0, 7)}` : ''}.`
+          : `${id} was already ${done ? 'ticked' : 'unticked'} — refreshed.`,
+        'success', 3000
+      );
+    } catch (err) {
+      SocialOSUI.toast(`Couldn't ${done ? 'tick' : 'untick'} ${id} — ${lrnErrMsg(err)}`, 'error', 6000);
+      // @ts-ignore tag set by js/learning.js `call` — the plan on screen is stale
+      if (err && err.status === 409) {
+        try { applyLearningPlan(await SocialOSLearning.fetchPlan(true)); } catch { /* keep the old plan */ }
+      }
+    }
+    l.busy = '';
+    l.gen++; // settles the tick: reads started during it are now stale too
+    await redraw();
   }
 
   /**
@@ -1815,7 +1983,68 @@ const SocialOS = (() => {
 
   async function renderCalendar() {
     const slots = await SocialOSDB.getAllCalendarSlots();
-    SocialOSUI.renderCalendar(slots, state.calendarFocusDate || undefined);
+    SocialOSUI.renderCalendar(slots, state.calendarFocusDate || undefined, calendarTasks());
+    // Tasks come from the two lanes' last reads; refresh them quietly and
+    // redraw only if something was fetched and we're still on the calendar.
+    Promise.all([refreshWorkOrdersQuiet(), refreshLearning()]).then(async ([a, b]) => {
+      if ((a || b) && state.currentScreen === 'calendar') {
+        SocialOSUI.renderCalendar(await SocialOSDB.getAllCalendarSlots(), state.calendarFocusDate || undefined, calendarTasks());
+      }
+    }).catch(() => {});
+  }
+
+  /**
+   * Calendar highlights: open work orders on their due date, learning
+   * objectives on their scheduled day. Only ids that pass the same patterns
+   * the routes accept are turned into links. Nothing is shown for a lane that
+   * hasn't been read — never an empty week that looks like "nothing due".
+   * @returns {{date: string, kind: 'wo'|'lrn', id: string, label: string, route: string, done: boolean}[]}
+   */
+  function calendarTasks() {
+    /** @type {{date: string, kind: 'wo'|'lrn', id: string, label: string, route: string, done: boolean}[]} */
+    const out = [];
+    const DATE = /^\d{4}-\d{2}-\d{2}$/;
+    if (state.workorders.loaded) {
+      for (const o of state.workorders.orders) {
+        if (!/^WO-\d{1,5}$/.test(o.id || '') || !DATE.test(o.due || '')) continue;
+        out.push({ date: o.due, kind: 'wo', id: o.id, label: String(o.title || ''), route: `workorders/${o.id}`, done: false });
+      }
+    }
+    const plan = state.learning.loaded ? state.learning.plan : null;
+    if (plan) {
+      for (const w of plan.weeks) for (const day of w.days) for (const o of day.objectives) {
+        if (!/^w\d{1,2}d\d{1,2}[a-z]$/.test(o.id) || !DATE.test(day.date)) continue;
+        out.push({ date: day.date, kind: 'lrn', id: o.id, label: o.title, route: `learning/${o.id}`, done: !!plan.ticks[o.id] });
+      }
+    }
+    return out;
+  }
+
+  /** @type {Promise<boolean>|null} */
+  let woRefreshInFlight = null;
+
+  /**
+   * Background read of the work orders for the calendar (same 5-minute
+   * window as the learning lane). True only when it fetched.
+   * @returns {Promise<boolean>}
+   */
+  function refreshWorkOrdersQuiet() {
+    if (woRefreshInFlight) return woRefreshInFlight;
+    if (state.workorders.loaded && Date.now() - Date.parse(state.workorders.fetchedAt || '') < LEARNING_REFRESH_MS) {
+      return Promise.resolve(false);
+    }
+    woRefreshInFlight = (async () => {
+      try {
+        if (!(await SocialOSWorkOrders.isConfigured())) return false;
+        applyWorkOrderList(await SocialOSWorkOrders.fetchWorkOrders());
+        return true;
+      } catch {
+        return false;
+      } finally {
+        woRefreshInFlight = null;
+      }
+    })();
+    return woRefreshInFlight;
   }
 
   /**
@@ -1934,6 +2163,38 @@ const SocialOS = (() => {
       }
     })();
     return agentRefreshInFlight;
+  }
+
+  /** @type {Promise<boolean>|null} */
+  let learningRefreshInFlight = null;
+  const LEARNING_REFRESH_MS = 5 * 60 * 1000;
+
+  /**
+   * Background read of the learning plan for Home. True only when it
+   * fetched; a failure keeps the last good plan (a blip is not "no sprint").
+   * @returns {Promise<boolean>}
+   */
+  function refreshLearning() {
+    if (learningRefreshInFlight) return learningRefreshInFlight;
+    if (state.learning.busy) return Promise.resolve(false);
+    if (state.learning.loaded && Date.now() - state.learning.fetchedAt < LEARNING_REFRESH_MS) {
+      return Promise.resolve(false);
+    }
+    learningRefreshInFlight = (async () => {
+      try {
+        if (!(await SocialOSLearning.isConfigured())) return false;
+        const gen = state.learning.gen;
+        const plan = await SocialOSLearning.fetchPlan();
+        if (gen !== state.learning.gen || state.learning.busy) return false; // a tick landed meanwhile
+        applyLearningPlan(plan);
+        return true;
+      } catch {
+        return false;
+      } finally {
+        learningRefreshInFlight = null;
+      }
+    })();
+    return learningRefreshInFlight;
   }
 
   async function updateBadge() {
@@ -2671,7 +2932,7 @@ const SocialOS = (() => {
   // Cards already carry the ids — data-draft-id / data-post-id /
   // data-handoff-id in js/ui.js — so this reads the rendered DOM rather than
   // adding a parallel lookup that could drift from what's on screen.
-  const FOCUS_ATTR = { draft: 'data-draft-id', post: 'data-post-id', handoff: 'data-handoff-id', wo: 'data-wo-id' };
+  const FOCUS_ATTR = { draft: 'data-draft-id', post: 'data-post-id', handoff: 'data-handoff-id', wo: 'data-wo-id', lrn: 'data-lrn-id' };
   const FOCUS_FLASH_MS = 2400;
 
   /**
@@ -2686,7 +2947,7 @@ const SocialOS = (() => {
    * Scroll the card for `id` into view and highlight it briefly.
    * Matches on the dataset value rather than a built attribute selector, so an
    * id carrying a quote can never break (or inject into) the query.
-   * @param {'draft'|'post'|'handoff'|'wo'} kind
+   * @param {'draft'|'post'|'handoff'|'wo'|'lrn'} kind
    * @param {string} id
    * @returns {boolean} false when no such card is on screen — the caller owns
    *   the honest "it's not here any more / it's not yours" message.
@@ -2816,6 +3077,31 @@ const SocialOS = (() => {
         return true;
       }
 
+      // 'learning' alone = this week; 'learning/w5d2a' (or dod9) = that row,
+      // opened; 'learning/YYYY-MM-DD' = that day's week (the route the
+      // planned check-in push uses — alys office/PERSONAL_MANAGER.md §4.2).
+      case 'learning': {
+        await navigate('learning');
+        const plan = state.learning.plan;
+        // No plan read this session (offline, no secret): "not in the plan"
+        // would be a fabrication — renderLearning already shows the reason.
+        if (!arg || !plan || !state.learning.loaded) return true;
+        if (/^\d{4}-\d{2}-\d{2}$/.test(arg)) {
+          const wk = SocialOSLearning.weekOfDate(plan, arg);
+          if (wk) { state.learning.week = wk; renderLearningView(); }
+          return true;
+        }
+        const hit = SocialOSLearning.locate(plan, arg);
+        if (hit) {
+          state.learning.week = hit.week;
+          state.learning.open[arg] = true;
+          renderLearningView();
+        }
+        if (focusCard('lrn', arg)) return true;
+        SocialOSUI.toast(`${arg} isn't in the sprint plan.`, 'info', 4000);
+        return true;
+      }
+
       case 'queue-post': {
         // "Approve & Post" straight from the notification: load the queue,
         // then run the same one-tap flow as the in-app button.
@@ -2912,7 +3198,7 @@ const SocialOS = (() => {
     const h = (location.hash || '').replace(/^#\/?/, '');
     if (!h) return null;
     const cmd = h.split('/')[0];
-    if (!['queue', 'queue-post', 'queue-edit', 'due', 'approvals', 'handoff', 'compose', 'settings', 'workorders'].includes(cmd)) return null;
+    if (!['queue', 'queue-post', 'queue-edit', 'due', 'approvals', 'handoff', 'compose', 'settings', 'workorders', 'learning'].includes(cmd)) return null;
     history.replaceState(null, '', location.pathname + location.search);
     return h;
   }
@@ -2995,6 +3281,7 @@ const SocialOS = (() => {
         case 'go-approvals':   navigate('approvals'); break;
         case 'go-queue':       navigate('queue'); break;
         case 'go-workorders':  navigate('workorders'); break;
+        case 'go-learning':    navigate('learning'); break;
         case 'go-calendar':    navigate('calendar'); break;
         case 'go-library':     navigate('library'); break;
         case 'go-projects':    navigate('projects'); break;
@@ -3769,6 +4056,14 @@ const SocialOS = (() => {
         case 'save-frontoffice-settings': {
           const settings = await SocialOSDB.getOrCreateSettings();
           settings.front_office_secret = /** @type {HTMLInputElement} */ (SocialOSUI.$('set-fo-secret'))?.value?.trim() || '';
+          settings.learning_secret = /** @type {HTMLInputElement} */ (SocialOSUI.$('set-lrn-secret'))?.value?.trim() || '';
+          if (!settings.learning_secret || !settings.front_office_secret) {
+            // Clearing a secret must also clear what it let this device read:
+            // Home's card, the calendar chips and the Learning lane all draw
+            // from this state, not from a fresh request.
+            Object.assign(state.learning, { plan: null, week: 0, open: {}, busy: '', loaded: false, fetchedAt: 0, error: null });
+            state.learning.gen++;
+          }
           settings.mkt_queue_url = /** @type {HTMLInputElement} */ (SocialOSUI.$('set-fo-url'))?.value?.trim() || SocialOSDB.DEFAULT_MKT_QUEUE_URL;
           await SocialOSDB.saveSettings(settings);
           SocialOSUI.toast('Front Office settings saved.', 'success');
@@ -4483,6 +4778,37 @@ const SocialOS = (() => {
           break;
         }
 
+        // ── My learning (js/learning.js) ───────────────────────────────
+        case 'lrn-refresh':
+          await renderLearning(true);
+          break;
+
+        case 'lrn-week': {
+          const wk = Number(/** @type {HTMLElement} */ (actionEl).dataset?.week) || 0;
+          if (!wk) break;
+          state.learning.week = wk;
+          renderLearningView(`[data-action="lrn-week"][data-week="${wk}"]`);
+          break;
+        }
+
+        case 'lrn-open': {
+          if (!id) break;
+          if (state.currentScreen !== 'learning') {
+            // Home's card: open the full screen on that row.
+            await handleRoute(`learning/${id}`);
+            break;
+          }
+          state.learning.open[id] = !state.learning.open[id];
+          renderLearningView(`[data-action="lrn-open"][data-id="${CSS.escape(id)}"]`);
+          break;
+        }
+
+        case 'lrn-tick': {
+          const kind = /** @type {HTMLElement} */ (actionEl).dataset?.kind === 'dod' ? 'dod' : 'objective';
+          if (id) await learningTick(kind, id);
+          break;
+        }
+
         // ── Front Office Queue (Phase 2 Cockpit, js/queue.js) ──────────
         case 'queue-refresh':
           await renderQueue();
@@ -4863,6 +5189,14 @@ const SocialOS = (() => {
           await generateCalendar();
           break;
 
+        case 'task-link': {
+          // A highlight only links; the route is re-checked here because the
+          // attribute is markup and the two patterns are all it may carry.
+          const route = /** @type {HTMLElement} */ (actionEl).dataset?.route || '';
+          if (/^(workorders\/WO-\d{1,5}|learning\/w\d{1,2}d\d{1,2}[a-z])$/.test(route)) await handleRoute(route);
+          break;
+        }
+
         case 'cal-prev': {
           const d = state.calendarFocusDate ? new Date(state.calendarFocusDate) : new Date();
           d.setDate(d.getDate() - 28);
@@ -4980,6 +5314,7 @@ const SocialOS = (() => {
       'screen-approvals': 'approvals',
       'screen-queue': 'queue',
       'screen-workorders': 'workorders',
+      'screen-learning': 'learning',
       'screen-calendar': 'calendar',
       'screen-library': 'library',
       'screen-projects': 'projects',
