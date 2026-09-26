@@ -3722,14 +3722,45 @@ const SocialOSUI = (() => {
   }
 
   /**
+   * The journal composer under an opened lesson (alys run 084): keep any of
+   * the lesson's suggested notes, add your own, save as ONE commit to the
+   * learning repo's journal. The warning line is the wall's only guard at
+   * the point of typing, so it shows every time.
+   * @param {any} plan
+   * @param {any} o  one objective (LearningObjective in js/learning.js)
+   * @param {{kept: number[], mine: string}|undefined} draft
+   * @param {string} saving  the id whose entry is committing, or ''
+   */
+  function lrnJournal(plan, o, draft, saving) {
+    const id = woEsc(o.id);
+    const notes = Array.isArray(o.journal) ? o.journal : [];
+    const kept = new Set(draft?.kept || []);
+    const done = Array.isArray(plan.journaled) && plan.journaled.includes(o.id);
+    const busy = saving === o.id;
+    return `
+      <div class="lrn-journal">
+        <h5>Keep in your journal${done ? ' <span class="lrn-jdone">· journaled ✓</span>' : ''}</h5>
+        ${notes.map((/** @type {string} */ n, /** @type {number} */ i) => `
+          <label class="lrn-keep"><input type="checkbox" data-lrn-draft="keep" data-id="${id}" data-i="${i}"${kept.has(i) ? ' checked' : ''}${busy ? ' disabled' : ''}> <span>${woEsc(n)}</span></label>`).join('')}
+        <label class="lrn-minelabel" for="lrn-mine-${id}">Your own note</label>
+        <p class="lrn-warn">Role words only: no names, sites, systems or real numbers from work.</p>
+        <textarea id="lrn-mine-${id}" class="input lrn-mine" rows="3" maxlength="2000" data-lrn-draft="mine" data-id="${id}"
+          placeholder="What stuck, what broke, what you'd do differently"${busy ? ' readonly' : ''}>${woEsc(draft?.mine || '')}</textarea>
+        <button class="btn btn-primary btn-sm" data-action="lrn-journal" data-id="${id}"${busy || saving ? ' disabled' : ''}>${busy ? 'Saving…' : (done ? 'Add another entry' : 'Save to journal')}</button>
+      </div>`;
+  }
+
+  /**
    * One objective row: a checkbox-button that commits the tick, and a title
    * button that opens the detail in place.
    * @param {any} plan @param {any} o @param {boolean} open @param {string} busy
    * @param {boolean} [inCard] Home's copy: no focus anchor and no detail id,
    *   so a deep link (focusCard) and aria-controls can only ever resolve to
    *   the row on the My learning screen, never to the hidden Home card.
+   * @param {{kept: number[], mine: string}} [draft]  the journal composer's draft for this row
+   * @param {string} [saving]  the id whose journal entry is committing
    */
-  function lrnObjRow(plan, o, open, busy, inCard) {
+  function lrnObjRow(plan, o, open, busy, inCard, draft, saving) {
     const on = !!plan.ticks[o.id];
     const id = woEsc(o.id);
     const trk = o.track && plan.tracks[o.track]
@@ -3746,7 +3777,9 @@ const SocialOSUI = (() => {
           const item = plan.definitionOfDone.find((/** @type {any} */ x) => x.id === k);
           return item ? `<div>• ${woEsc(item.text)}</div>` : '';
         }).join('')}</div>` : ''}
+        ${o.learned ? `<h5>After this lesson</h5><p>${woEsc(o.learned)}</p>` : ''}
         ${on ? `<p class="lrn-when">Ticked ${woEsc(plan.ticks[o.id])}</p>` : ''}
+        ${inCard ? '' : lrnJournal(plan, o, draft, saving || '')}
       </div>` : '';
     return `
       <div class="lrn-obj${on ? ' checked' : ''}"${inCard ? '' : ` data-lrn-id="${id}"`}>
@@ -3762,7 +3795,7 @@ const SocialOSUI = (() => {
 
   /**
    * The My learning screen.
-   * @param {{configured: boolean, plan: any, loaded: boolean, error: string|null, week: number, open: Object<string, boolean>, busy: string}} data
+   * @param {{configured: boolean, plan: any, loaded: boolean, error: string|null, week: number, open: Object<string, boolean>, busy: string, drafts?: Object<string, {kept: number[], mine: string}>, saving?: string}} data
    */
   function renderLearning(data) {
     const container = $('learning-content');
@@ -3862,7 +3895,7 @@ const SocialOSUI = (() => {
           return `<article class="lrn-day${day.date === today ? ' today' : ''}${rest ? ' rest' : ''}">
             <div class="lrn-dayhead"><span class="dow">${woEsc(dd.dow)}</span><span class="dt">${woEsc(dd.num)}</span></div>
             <div class="lrn-objs">${day.objectives.map((/** @type {any} */ o) =>
-              lrnObjRow(plan, o, !!data.open[o.id], data.busy)).join('')}</div>
+              lrnObjRow(plan, o, !!data.open[o.id], data.busy, false, data.drafts?.[o.id], data.saving)).join('')}</div>
           </article>`;
         }).join('')}
       </div>
@@ -3880,7 +3913,7 @@ const SocialOSUI = (() => {
         }).join('')}
       </section>
 
-      <p class="lrn-note">Each tick is one commit to <code>progress.json</code> in the learning repo. That file is the only record, and the tracker artifact shows it the next time it's rebuilt. The day log lives in the tracker, not here.${plan.updatedAt ? ` Last tick ${woEsc(lrnDate(String(plan.updatedAt).slice(0, 10)).short)}.` : ''}${plan.cached ? ' (Read from the server\'s 5-minute cache. Refresh re-reads the repo.)' : ''}</p>
+      <p class="lrn-note">Each tick is one commit to <code>progress.json</code> in the learning repo. That file is the only record, and the tracker artifact shows it the next time it's rebuilt. Journal entries are one commit each to <code>journal/</code> in the same repo, never published.${plan.updatedAt ? ` Last tick ${woEsc(lrnDate(String(plan.updatedAt).slice(0, 10)).short)}.` : ''}${plan.cached ? ' (Read from the server\'s 5-minute cache. Refresh re-reads the repo.)' : ''}</p>
     </div>`;
     container.innerHTML = html;
     // Keep the shown week in view on a phone-width strip. Horizontal only:

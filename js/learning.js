@@ -39,6 +39,8 @@
  * @property {{label: string, url: string}[]} links
  * @property {string[]} dod
  * @property {string} track  '' unless the objective belongs to another thread than its week
+ * @property {string} learned  one plain sentence: what the lesson leaves you able to do (alys run 084)
+ * @property {string[]} journal  2–3 suggested notes the journal composer offers to keep
  */
 
 /**
@@ -52,6 +54,7 @@
  * @property {Record<string, string>} ticks  objective id -> YYYY-MM-DD ticked
  * @property {Record<string, string>} dod    DoD id -> YYYY-MM-DD ticked
  * @property {string|null} updatedAt
+ * @property {string[]} journaled  objective ids with a journal entry in this week's file (ids only — the text never leaves the server)
  * @property {any} roadmap  the zoomed-out plan (the learning repo's roadmap.json, allowlisted server-side), or null
  * @property {string} today
  * @property {number} currentWeek
@@ -129,6 +132,7 @@ const SocialOSLearning = (() => {
       definitionOfDone: Array.isArray(d?.definitionOfDone) ? d.definitionOfDone : [],
       ticks: obj(d?.ticks),
       dod: obj(d?.dod),
+      journaled: Array.isArray(d?.journaled) ? d.journaled.filter((/** @type {unknown} */ x) => typeof x === 'string') : [],
       updatedAt: typeof d?.updatedAt === 'string' ? d.updatedAt : null,
       today: String(d?.today || ''),
       currentWeek: Number(d?.currentWeek) || 0,
@@ -225,5 +229,65 @@ const SocialOSLearning = (() => {
     return weekOfDate(plan, localToday()) || plan.currentWeek;
   }
 
-  return { isConfigured, fetchPlan, tick, progressOf, locate, weekOfDate, localToday, localWeek };
+  /**
+   * Save one journal entry (alys run 084): the suggested notes Scot kept,
+   * verbatim, and his own text. ONE commit to the learning repo's
+   * journal/<sprint>/week-NN.md. The server dates it and refuses an empty
+   * entry, a note that isn't this lesson's, or text over 2,000 characters.
+   * @param {string} id
+   * @param {string[]} kept
+   * @param {string} mine
+   * @returns {Promise<{commit: string|null, journaled: string[]}>}
+   */
+  async function journal(id, kept, mine) {
+    const d = await call({ action: 'learning-journal', id, kept, mine });
+    return {
+      commit: typeof d?.commit === 'string' ? d.commit : null,
+      journaled: Array.isArray(d?.journaled) ? d.journaled.filter((/** @type {unknown} */ x) => typeof x === 'string') : []
+    };
+  }
+
+  /**
+   * (Re)book this sprint's lesson pushes: a start and a recap per sprint day,
+   * each queued as a FIXED sentence with a date route. The lesson text is
+   * fetched by the service worker when the push arrives (pushText below),
+   * never stored in the queue. Idempotent server-side.
+   * @returns {Promise<number>} rows booked
+   */
+  async function schedule() {
+    const d = await call({ action: 'learning-schedule' });
+    return Number(d?.scheduled) || 0;
+  }
+
+  /**
+   * What a lesson push shows, drawn from the plan at display time (sw.js).
+   * HIGH LEVEL ONLY, by Scot's ruling (2026-09-26, alys run 084): the week
+   * and day, how many lessons and minutes — never a lesson title, a learned
+   * line or anything from work. Hiding even that while the phone is locked
+   * is the OS's job ("Show Previews: When Unlocked"); the page cannot tell.
+   * null when the date isn't a sprint day, so the fixed sentence stands.
+   * @param {LearningPlan} plan
+   * @param {string} date  YYYY-MM-DD, from the push's `learning/<date>` route
+   * @param {'start'|'recap'} slot
+   * @returns {{title: string, body: string, route: string}|null}
+   */
+  function pushText(plan, date, slot) {
+    for (const w of plan.weeks || []) for (const day of w.days || []) {
+      if (day.date !== date || !(day.objectives || []).length) continue;
+      const objs = day.objectives;
+      const where = `week ${Number(w.n)}, day ${Number(day.d)}`;
+      const n = (/** @type {number} */ k, /** @type {string} */ one) => `${k} ${one}${k === 1 ? '' : 's'}`;
+      if (slot === 'start') {
+        const mins = objs.reduce((t, o) => t + (Number(o.mins) || 0), 0);
+        return { title: `Today's lesson · ${where}`, body: `${n(objs.length, 'lesson')}, ${mins} min. Tap for the plan and links.`, route: `learning/${date}` };
+      }
+      const done = new Set(plan.journaled || []);
+      const left = objs.filter((o) => !done.has(o.id));
+      if (!left.length) return { title: `Journal's done · ${where}`, body: 'Every lesson today has an entry.', route: `learning/${date}` };
+      return { title: `Time to journal · ${where}`, body: `${n(left.length, 'lesson')} still to journal. Tap to keep today's notes.`, route: `learning/${left[0].id}` };
+    }
+    return null;
+  }
+
+  return { isConfigured, fetchPlan, tick, journal, schedule, pushText, progressOf, locate, weekOfDate, localToday, localWeek };
 })();

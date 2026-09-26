@@ -76,6 +76,12 @@ const SocialOS = (() => {
       // The id whose tick is committing — every tick control is disabled
       // meanwhile, so two taps can't race two commits.
       busy: '',
+      // Journal composer drafts per objective (kept suggestion indexes + own
+      // text), held here so a re-render never wipes what Scot is typing.
+      // Memory only: free text is never written to IndexedDB or storage.
+      /** @type {Object<string, {kept: number[], mine: string}>} */ drafts: {},
+      // The id whose journal entry is committing.
+      saving: '',
       // Sprint | Roadmap on the My learning screen — a per-device convenience
       // (remembered in localStorage, never synced, never load-bearing).
       view: (() => { try { return localStorage.getItem('socialos-learning-view') === 'roadmap' ? 'roadmap' : 'sprint'; } catch { return 'sprint'; } })(),
@@ -1496,6 +1502,7 @@ const SocialOS = (() => {
         // A read that overlapped a tick (started during it, or before it)
         // may predate the commit — the tick's own response is the truth.
         if (gen === state.learning.gen && !wasBusy && !state.learning.busy) applyLearningPlan(plan);
+        scheduleLessonPushes();
       } catch (err) {
         state.learning.loaded = false;
         state.learning.error = lrnErrMsg(err);
@@ -1530,6 +1537,8 @@ const SocialOS = (() => {
       // state): the answer must not refill what the device may no longer read.
       if (l.gen !== myGen) { l.busy = ''; return; }
       applyLearningPlan(r.plan);
+      // Ticked done: open the lesson so the journal composer is right there.
+      if (done && kind === 'objective' && r.changed) l.open[id] = true;
       SocialOSUI.toast(
         r.changed
           ? `${id} ${done ? 'done' : 'unticked'}${r.commit ? ` — commit ${r.commit.slice(0, 7)}` : ''}.`
@@ -1546,6 +1555,57 @@ const SocialOS = (() => {
     l.busy = '';
     l.gen++; // settles the tick: reads started during it are now stale too
     await redraw();
+  }
+
+  /**
+   * Save one journal entry (alys run 084): the kept suggestions plus Scot's
+   * own text, one commit. The draft clears only when the server confirms.
+   * @param {string} id
+   */
+  async function learningJournal(id) {
+    const l = state.learning;
+    if (!l.plan || l.saving) return;
+    if (l.busy) {
+      SocialOSUI.toast('A tick is still saving — try again in a moment.', 'info', 3000);
+      return;
+    }
+    const hit = SocialOSLearning.locate(l.plan, id);
+    if (!hit) return;
+    const draft = l.drafts[id] || { kept: [], mine: '' };
+    const notes = Array.isArray(hit.objective.journal) ? hit.objective.journal : [];
+    const kept = draft.kept.filter((i) => Number.isInteger(i) && notes[i]).map((i) => notes[i]);
+    const mine = (draft.mine || '').trim();
+    if (!kept.length && !mine) {
+      SocialOSUI.toast('Nothing to save yet. Tick a suggested note or write your own.', 'info', 4000);
+      return;
+    }
+    l.saving = id;
+    renderLearningView();
+    try {
+      const r = await SocialOSLearning.journal(id, kept, mine);
+      // Merge, never replace: the response lists one week file's ids, the
+      // plan may hold two weeks' worth.
+      if (l.plan) l.plan.journaled = [...new Set([...(l.plan.journaled || []), ...r.journaled, id])];
+      delete l.drafts[id];
+      SocialOSUI.toast(`Saved to your journal${r.commit ? ` — commit ${r.commit.slice(0, 7)}` : ''}.`, 'success', 3000);
+    } catch (err) {
+      SocialOSUI.toast(`Couldn't save the journal entry — ${lrnErrMsg(err)}`, 'error', 6000);
+    }
+    l.saving = '';
+    renderLearningView(`[data-action="lrn-journal"][data-id="${CSS.escape(id)}"]`);
+  }
+
+  /**
+   * Book this sprint's lesson pushes (fixed-sentence rows; the SW fetches the
+   * lesson). Idempotent server-side; run at most once a day per device, and
+   * quietly — an older function or a failure costs the pushes, never the screen.
+   */
+  function scheduleLessonPushes() {
+    const today = SocialOSLearning.localToday();
+    try { if (localStorage.getItem('socialos-learning-scheduled') === today) return; } catch { /* storage blocked: book anyway */ }
+    SocialOSLearning.schedule().then(() => {
+      try { localStorage.setItem('socialos-learning-scheduled', today); } catch { /* convenience only */ }
+    }).catch(() => { /* retried on the next visit */ });
   }
 
   /**
@@ -3105,7 +3165,15 @@ const SocialOS = (() => {
         if (!arg || !plan || !state.learning.loaded) return true;
         if (/^\d{4}-\d{2}-\d{2}$/.test(arg)) {
           const wk = SocialOSLearning.weekOfDate(plan, arg);
-          if (wk) { state.learning.week = wk; renderLearningView(); }
+          if (wk) {
+            state.learning.week = wk;
+            // A lesson push lands here: open that day's lessons so the plan
+            // and its links are on screen, not one more tap away.
+            for (const w of plan.weeks) for (const day of w.days) {
+              if (day.date === arg) for (const o of day.objectives) state.learning.open[o.id] = true;
+            }
+            renderLearningView();
+          }
           return true;
         }
         const hit = SocialOSLearning.locate(plan, arg);
@@ -4078,7 +4146,7 @@ const SocialOS = (() => {
             // Clearing a secret must also clear what it let this device read:
             // Home's card, the calendar chips and the Learning lane all draw
             // from this state, not from a fresh request.
-            Object.assign(state.learning, { plan: null, week: 0, open: {}, busy: '', loaded: false, fetchedAt: 0, error: null });
+            Object.assign(state.learning, { plan: null, week: 0, open: {}, busy: '', drafts: {}, saving: '', loaded: false, fetchedAt: 0, error: null });
             state.learning.gen++;
           }
           settings.mkt_queue_url = /** @type {HTMLInputElement} */ (SocialOSUI.$('set-fo-url'))?.value?.trim() || SocialOSDB.DEFAULT_MKT_QUEUE_URL;
@@ -4833,6 +4901,11 @@ const SocialOS = (() => {
           break;
         }
 
+        case 'lrn-journal': {
+          if (id) await learningJournal(id);
+          break;
+        }
+
         // ── Front Office Queue (Phase 2 Cockpit, js/queue.js) ──────────
         case 'queue-refresh':
           await renderQueue();
@@ -5300,6 +5373,24 @@ const SocialOS = (() => {
         }
       }
     });
+
+    // Journal composer drafts (My learning) — recorded as typed, never
+    // re-rendered from here, so focus and caret stay put.
+    const lrnDraft = (/** @type {Event} */ e) => {
+      const t = /** @type {HTMLElement} */ (e.target);
+      const kind = t?.dataset?.lrnDraft;
+      const oid = t?.dataset?.id || '';
+      if (!kind || !/^w\d{1,2}d\d{1,2}[a-z]$/.test(oid)) return;
+      const d = state.learning.drafts[oid] || (state.learning.drafts[oid] = { kept: [], mine: '' });
+      if (kind === 'mine' && t instanceof HTMLTextAreaElement) d.mine = t.value;
+      if (kind === 'keep' && t instanceof HTMLInputElement) {
+        const i = Number(t.dataset.i);
+        d.kept = d.kept.filter((x) => x !== i);
+        if (t.checked && Number.isInteger(i)) d.kept.push(i);
+      }
+    };
+    document.addEventListener('input', lrnDraft);
+    document.addEventListener('change', lrnDraft);
 
     // Live quote-card preview — in place, never re-renders (keeps textarea
     // focus). opp 1 / C5.

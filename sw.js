@@ -7,7 +7,7 @@
  * approval notifications with one-tap actions and routes taps into the app.
  */
 
-const CACHE_NAME = 'socialos-v41'; // v41: My learning Roadmap view (the whole plan, read-only); v40: My learning screen + Home card (js/learning.js); v39: js/version.js (CSP-safe version badge), docked feedback button, reworked Calendar/Library/Projects/Settings; v38: three-tab bar (Home · Create · Inbox) + Home hub redesign; v37: Night Shift icon set (v3 art, ?v=3 hrefs); v36: Work Orders in the board's layout + WOS-1 lanes; v35: Work Orders screen (js/workorders.js + the nav tab); v34: deep-link focus survives the queue's thumbnail re-render
+const CACHE_NAME = 'socialos-v42'; // v42: My learning journal composer + lesson pushes (sw.js swLearningNotification); v41: My learning Roadmap view (the whole plan, read-only); v40: My learning screen + Home card (js/learning.js); v39: js/version.js (CSP-safe version badge), docked feedback button, reworked Calendar/Library/Projects/Settings; v38: three-tab bar (Home · Create · Inbox) + Home hub redesign; v37: Night Shift icon set (v3 art, ?v=3 hrefs); v36: Work Orders in the board's layout + WOS-1 lanes; v35: Work Orders screen (js/workorders.js + the nav tab); v34: deep-link focus survives the queue's thumbnail re-render
 const SHELL_ASSETS = [
   './',
   './index.html',
@@ -70,6 +70,47 @@ try {
   SW_MODULES_OK = true;
 } catch (e) {
   // Offline shell + notifications still work; only auto-post is off.
+}
+
+// Lesson pushes (alys run 084): the queue row is a fixed sentence and a
+// `learning/<date>` route, and the lesson itself is fetched here, through
+// the same two-secret lane the My learning screen uses, when the push lands.
+// A separate guard, so a problem here can never switch auto-post off.
+let SW_LEARNING_OK = false;
+try {
+  if (SW_MODULES_OK) { importScripts('js/learning.js'); SW_LEARNING_OK = true; }
+} catch (e) {
+  // The fixed sentence still shows; only the lesson text is missing.
+}
+const SW_LEARNING_FETCH_MS = 8000;
+
+/**
+ * Draw a lesson push: today's lesson (start) or the first one not yet
+ * journaled (recap), from the live plan. Any failure — no secret, offline,
+ * a slow server, an older function — leaves the row's fixed sentence and
+ * date route, which is still true and still lands on the day.
+ */
+async function swLearningNotification(data, base) {
+  let title = data.title || 'SocialOS';
+  let body = data.body || '';
+  let route = typeof data.url === 'string' && data.url.startsWith('learning') ? data.url : 'learning';
+  const date = (/^learning\/(\d{4}-\d{2}-\d{2})$/.exec(route) || [])[1] || '';
+  if (SW_LEARNING_OK && date && (data.slot === 'start' || data.slot === 'recap')) {
+    try {
+      const plan = await Promise.race([
+        SocialOSLearning.fetchPlan(false),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), SW_LEARNING_FETCH_MS))
+      ]);
+      const t = SocialOSLearning.pushText(plan, date, data.slot);
+      if (t) ({ title, body, route } = t);
+    } catch (e) { /* keep the fixed sentence */ }
+  }
+  return self.registration.showNotification(title, {
+    ...base,
+    body,
+    tag: data.tag || ('learning-' + (data.slot || '') + '-' + date),
+    data: { type: 'info', url: route }
+  });
 }
 
 // Install — cache the app shell
@@ -447,6 +488,14 @@ async function swHandlePush(data) {
     badge: './icons/icon-192.png',
     renotify: false
   };
+
+  // A lesson push. The deployed mkt-push may predate the 'learning' type and
+  // send the row as a plain 'due' with no postId — recognise that shape too
+  // (the route is the tell), so it never reaches the auto-post branch below.
+  if (type === 'learning') return swLearningNotification(data, base);
+  if (type === 'due' && !data.postId && typeof data.url === 'string' && /^learning\/\d{4}-\d{2}-\d{2}$/.test(data.url)) {
+    return swLearningNotification({ ...data, slot: data.title === 'Time to journal' ? 'recap' : 'start' }, base);
+  }
 
   // A due scheduled post: try to publish it right now, no tap needed.
   // This guard is load-bearing beyond tidiness. push-schedule allowlists
