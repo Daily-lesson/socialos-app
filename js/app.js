@@ -1516,13 +1516,20 @@ const SocialOS = (() => {
         // A read that overlapped a tick (started during it, or before it)
         // may predate the commit — the tick's own response is the truth.
         if (gen === state.learning.gen && !wasBusy && !state.learning.busy) applyLearningPlan(plan);
-        scheduleLessonPushes();
       } catch (err) {
         state.learning.loaded = false;
         state.learning.error = lrnErrMsg(err);
       }
       SocialOSUI.loading(false);
     }
+    // Outside the fetch gate on purpose: Home's quiet background refresh
+    // (refreshLearning(), never this function) routinely already has the
+    // plan cached and fresh by the time the screen itself opens, so an
+    // in-cache render used to skip this call every time — the pushes were
+    // never booked on a real device, though a cold-cache test never caught
+    // it. scheduleLessonPushes() carries its own once-a-day guard, so
+    // calling it on every screen open is exactly the intended cadence.
+    if (state.learning.loaded) scheduleLessonPushes();
     renderLearningView();
   }
 
