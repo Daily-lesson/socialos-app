@@ -76,6 +76,9 @@ const SocialOS = (() => {
       // The id whose tick is committing — every tick control is disabled
       // meanwhile, so two taps can't race two commits.
       busy: '',
+      // Sprint | Roadmap on the My learning screen — a per-device convenience
+      // (remembered in localStorage, never synced, never load-bearing).
+      view: (() => { try { return localStorage.getItem('socialos-learning-view') === 'roadmap' ? 'roadmap' : 'sprint'; } catch { return 'sprint'; } })(),
       // Bumped when a tick starts: a read that began before it is stale and
       // must not put the pre-tick plan back on screen.
       gen: 0,
@@ -2170,6 +2173,16 @@ const SocialOS = (() => {
   const LEARNING_REFRESH_MS = 5 * 60 * 1000;
 
   /**
+   * Sprint (the 8 weeks) or Roadmap (the whole plan, read-only). Remembered
+   * per device — a view preference, not state anything else relies on.
+   * @param {'sprint'|'roadmap'} view
+   */
+  function setLearningView(view) {
+    state.learning.view = view;
+    try { localStorage.setItem('socialos-learning-view', view); } catch { /* private window, blocked storage */ }
+  }
+
+  /**
    * Background read of the learning plan for Home. True only when it
    * fetched; a failure keeps the last good plan (a blip is not "no sprint").
    * @returns {Promise<boolean>}
@@ -3081,6 +3094,10 @@ const SocialOS = (() => {
       // opened; 'learning/YYYY-MM-DD' = that day's week (the route the
       // planned check-in push uses — alys office/PERSONAL_MANAGER.md §4.2).
       case 'learning': {
+        // A row or a day lives in the Sprint view; a saved Roadmap view
+        // would swallow the link.
+        // Not saved: the next plain visit keeps the view Scot chose.
+        if (arg) state.learning.view = 'sprint';
         await navigate('learning');
         const plan = state.learning.plan;
         // No plan read this session (offline, no secret): "not in the plan"
@@ -4782,6 +4799,13 @@ const SocialOS = (() => {
         case 'lrn-refresh':
           await renderLearning(true);
           break;
+
+        case 'lrn-view': {
+          const view = /** @type {HTMLElement} */ (actionEl).dataset?.view === 'roadmap' ? 'roadmap' : 'sprint';
+          setLearningView(view);
+          renderLearningView(`[data-action="lrn-view"][data-view="${view}"]`);
+          break;
+        }
 
         case 'lrn-week': {
           const wk = Number(/** @type {HTMLElement} */ (actionEl).dataset?.week) || 0;

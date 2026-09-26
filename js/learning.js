@@ -52,6 +52,7 @@
  * @property {Record<string, string>} ticks  objective id -> YYYY-MM-DD ticked
  * @property {Record<string, string>} dod    DoD id -> YYYY-MM-DD ticked
  * @property {string|null} updatedAt
+ * @property {any} roadmap  the zoomed-out plan (the learning repo's roadmap.json, allowlisted server-side), or null
  * @property {string} today
  * @property {number} currentWeek
  * @property {string} fetched_at
@@ -132,7 +133,8 @@ const SocialOSLearning = (() => {
       today: String(d?.today || ''),
       currentWeek: Number(d?.currentWeek) || 0,
       fetched_at: String(d?.fetched_at || ''),
-      cached: !!d?.cached
+      cached: !!d?.cached,
+      roadmap: d?.roadmap && typeof d.roadmap === 'object' && Array.isArray(d.roadmap.phases) && d.roadmap.phases.length ? d.roadmap : null
     };
   }
 

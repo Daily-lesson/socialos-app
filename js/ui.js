@@ -3801,12 +3801,26 @@ const SocialOSUI = (() => {
       return;
     }
 
+    // Sprint | Roadmap — the tracker's own switch. Hidden when the server
+    // sent no roadmap (an older deployment, or roadmap.json unreadable).
+    const zoomed = data.view === 'roadmap' && !!plan.roadmap;
+    const views = plan.roadmap ? `
+      <div class="lrn-views" role="group" aria-label="View">
+        <button type="button" class="lrn-viewbtn" data-action="lrn-view" data-view="sprint" aria-pressed="${!zoomed}">Sprint</button>
+        <button type="button" class="lrn-viewbtn" data-action="lrn-view" data-view="roadmap" aria-pressed="${zoomed}">Roadmap</button>
+      </div>` : '';
+    if (zoomed) {
+      container.innerHTML = html + `<div class="lrn">${views}${renderLrnRoadmap(plan.roadmap)}</div>`;
+      return;
+    }
+
     const w = plan.weeks.find((/** @type {any} */ x) => x.n === data.week) || plan.weeks[0];
     const all = SocialOSLearning.progressOf(plan, 0);
     const today = lrnToday();
     const hue = lrnHue(plan, w.track);
 
     html += `<div class="lrn">
+      ${views}
       <div class="lrn-top">
         <div class="lrn-meterline">
           <div class="lrn-meter" role="progressbar" aria-label="Objectives complete" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${all.pct}"><i style="width:${all.pct}%"></i></div>
@@ -3874,6 +3888,64 @@ const SocialOSUI = (() => {
     const strip = /** @type {HTMLElement|null} */ (container.querySelector('.lrn-strip'));
     const pressed = /** @type {HTMLElement|null} */ (container.querySelector('.lrn-wk[aria-pressed="true"]'));
     if (strip && pressed) strip.scrollLeft = pressed.offsetLeft - strip.offsetLeft - (strip.clientWidth - pressed.offsetWidth) / 2;
+  }
+
+  /**
+   * The zoomed-out view: the whole 30-month plan, read-only, section for
+   * section as the tracker's Roadmap view draws it. Every string is repo
+   * content and goes through woEsc; hues come from a fixed list.
+   * @param {any} r  the server's roadmapModel
+   */
+  function renderLrnRoadmap(r) {
+    const hue = (/** @type {string} */ h) => (LRN_HUES.includes(h) ? `var(--t-${h})` : 'var(--accent)');
+    const sec = (/** @type {string} */ title, /** @type {string} */ lede, /** @type {string} */ body) => `
+      <section class="lrn-rsection"><h3>${woEsc(title)}</h3>${lede ? `<p class="lrn-rlede">${woEsc(lede)}</p>` : ''}${body}</section>`;
+    const row = (/** @type {string} */ badge, /** @type {string} */ text, /** @type {string} */ sub) => `
+      <div class="lrn-plainrow"><span class="lrn-badge">${woEsc(badge)}</span><span>${woEsc(text)}${sub ? `<span class="lrn-sub">${woEsc(sub)}</span>` : ''}</span></div>`;
+    const sp = r.sprintPlacement;
+    const os = r.operatingSystem || {};
+    return `
+      <div class="lrn-northstar">
+        <div class="lrn-eyebrow">North Star</div>
+        <blockquote>${woEsc(r.northStar)}</blockquote>
+        ${r.wedge ? `<p class="lrn-wedge">${woEsc(r.wedge)}</p>` : ''}
+        <div class="lrn-horizon">${woEsc([r.horizon, r.horizonNote].filter(Boolean).join(' · '))}</div>
+      </div>
+      ${sp ? `<div class="lrn-placement">
+        <div class="ph">${woEsc(`${sp.label || 'This sprint sits at'} · ${sp.where}`)}</div>
+        <div class="pt">${woEsc(`${sp.sprint} — ${sp.window}`)}</div>
+        <p>${woEsc(sp.note)}</p>
+      </div>` : ''}
+      ${sec('Phases', 'They overlap: the month ranges run into each other.', `
+        <div class="lrn-phases">${(r.phases || []).map((/** @type {any} */ x) => `
+          <div class="lrn-phase" style="--track:${hue(x.hue)}">
+            <div class="pn"><b>Phase ${Number(x.n) || ''}</b><span>Months ${woEsc(x.months)}</span></div>
+            <h4>${woEsc(x.name)}</h4>
+            <p>${woEsc(x.why)}</p>
+            <div class="cap"><b>Capstone</b>${woEsc(x.capstone)}</div>
+          </div>`).join('')}</div>`)}
+      ${sec('The operating system', 'How the plan gets done, week to week.', `
+        <div class="lrn-plainlist">
+          ${row('Floor week', os.floor, '')}${row('Flow week', os.flow, '')}${row('The month', os.month, '')}${row('Highest leverage', os.leverage, '')}
+        </div>`)}
+      ${sec('The calendar', r.horizon || '', `
+        <div class="lrn-caltable"><table>
+          <thead><tr>${['Months', 'Dates', 'Program', 'Focus', 'Artifacts', 'Credential'].map(h => `<th>${h}</th>`).join('')}</tr></thead>
+          <tbody>${(r.calendar || []).map((/** @type {any} */ c) => `
+            <tr${c.gate ? ' class="gate"' : ''}>${[c.months, c.dates, c.omscs, c.focus, c.artifacts, c.credential].map(v => `<td>${woEsc(v)}</td>`).join('')}</tr>`).join('')}
+          </tbody></table></div>
+        ${r.hardGate ? `<div class="lrn-gatebox">
+          <div class="gh">The one immovable date</div>
+          <div class="gt">${woEsc(`${r.hardGate.what} — ${r.hardGate.when}`)}</div>
+          <p>${woEsc(r.hardGate.why)}</p>
+        </div>` : ''}`)}
+      ${sec('Certifications', '', `
+        <div class="lrn-plainlist">${(r.certs || []).map((/** @type {any} */ c) => row(c.when, c.name, c.why)).join('')}</div>`)}
+      ${sec('Milestones', 'Ticked at the monthly review, not here.', `
+        <div class="lrn-plainlist">${(r.milestones || []).map((/** @type {any} */ m) => row(m.month ? `Month ${m.month}` : 'Ongoing', m.text, '')).join('')}</div>`)}
+      ${sec('Risks, honestly', ['Named in advance.', r.risksNote].filter(Boolean).join(' '), `
+        <ul class="lrn-risks">${(r.risks || []).map((/** @type {string} */ x) => `<li>${woEsc(x)}</li>`).join('')}</ul>`)}
+      <p class="lrn-note">The shallow version of the plan. The full one is ROADMAP.md in the learning repo.</p>`;
   }
 
   /**

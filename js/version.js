@@ -8,7 +8,7 @@
 // Loaded right after self-healing.js (which must stay first), before every
 // other module, so the global exists before anything reads it.
 (function () {
-  /** @type {any} */ (window).SOCIALOS_VERSION = '1.2.0';
+  /** @type {any} */ (window).SOCIALOS_VERSION = '1.3.0';
   const b = document.getElementById('version-badge');
   if (b) {
     b.textContent = 'v' + /** @type {any} */ (window).SOCIALOS_VERSION;
