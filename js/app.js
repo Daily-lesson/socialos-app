@@ -241,26 +241,17 @@ const SocialOS = (() => {
 
   // ── Screen data loaders ───────────────────────────────────────────────
 
-  async function renderDashboard() {
-    const profile = await SocialOSDB.getProfile();
-    const pending = await SocialOSDB.getPendingPosts();
-    const content = await SocialOSDB.getAllContent();
-    const nextPost = pending.length > 0
-      ? pending.sort((a, b) => (a.scheduled_time || '').localeCompare(b.scheduled_time || ''))[0]
-      : null;
-
-    const pm = await SocialOSPM.portfolioSummary();
-    const account = await SocialOSAuth.accountStatus();
-    // Same parts as the Inbox tab badge (inboxCounts), so Home and the bar
-    // never disagree about how much is waiting.
-    const inbox = await inboxCounts();
-
-    // Growth card (persona/brand-account) — best-effort, one platform's
-    // failure never breaks the dashboard.
+  /**
+   * Follower-growth snapshots per linked platform, for the Growth tile and
+   * sheet — best-effort, one platform's failure never breaks Home.
+   * @param {any} [profile]
+   * @returns {Promise<Object<string, {latest: any, delta: any, note: string}>>}
+   */
+  async function loadGrowth(profile) {
     /** @type {Object<string, {latest: any, delta: any, note: string}>} */
-    let growth = {};
+    const growth = {};
     try {
-      const linked = profile?.linked_accounts || {};
+      const linked = (profile === undefined ? await SocialOSDB.getProfile() : profile)?.linked_accounts || {};
       for (const platform of Object.keys(linked)) {
         if (!SocialOSGrowth.FOLLOWER_CAPABLE[platform]) continue;
         growth[platform] = {
@@ -269,7 +260,32 @@ const SocialOS = (() => {
           note: SocialOSGrowth.capabilityNote(platform)
         };
       }
-    } catch { /* dashboard renders without the growth card */ }
+    } catch { /* Home renders without growth numbers */ }
+    return growth;
+  }
+
+  /** Redraw whichever growth surfaces are showing: the sheet, then Home. */
+  async function redrawGrowth() {
+    if (SocialOSUI.growthSheetOpen()) SocialOSUI.renderGrowthSheet(await loadGrowth());
+    if (state.currentScreen === 'dashboard') await renderDashboard();
+  }
+
+  async function renderDashboard() {
+    const profile = await SocialOSDB.getProfile();
+    const pending = await SocialOSDB.getPendingPosts();
+    const content = await SocialOSDB.getAllContent();
+    // The Calendar tile's "Next:" is the next APPROVED post with a time (what
+    // the Calendar plans); drafts awaiting approval are the Inbox strip's.
+    const nextPost = (await SocialOSDB.getScheduledPosts())[0] || null;
+
+    const pm = await SocialOSPM.portfolioSummary();
+    const account = await SocialOSAuth.accountStatus();
+    // Same parts as the Inbox tab badge (inboxCounts), so Home and the bar
+    // never disagree about how much is waiting.
+    const inbox = await inboxCounts();
+
+    // Growth tile's one line (the card itself opens in a sheet).
+    const growth = await loadGrowth(profile);
 
     const lp = state.learning.plan;
     const lpWeek = lp ? SocialOSLearning.progressOf(lp, SocialOSLearning.localWeek(lp)) : null;
@@ -282,12 +298,10 @@ const SocialOS = (() => {
       pm,
       account,
       growth,
-      learning: lp,
-      learningBusy: state.learning.busy,
       learningMeta: lp && lpWeek ? `Week ${SocialOSLearning.localWeek(lp)} · ${lpWeek.done}/${lpWeek.total} done` : ''
     });
 
-    // Same pattern for the learning card: shown from the last read, refreshed
+    // Same pattern for the My learning tile: shown from the last read, refreshed
     // in the background at most every few minutes, redrawn only if it fetched.
     refreshLearning().then(async (fetched) => {
       if (fetched && state.currentScreen === 'dashboard') await renderDashboard();
@@ -1523,10 +1537,7 @@ const SocialOS = (() => {
     const done = !(kind === 'dod' ? l.plan.dod[id] : l.plan.ticks[id]);
     const redraw = async () => {
       if (state.currentScreen === 'learning') renderLearningView(`[data-action="lrn-tick"][data-id="${CSS.escape(id)}"]`);
-      else if (state.currentScreen === 'dashboard') {
-        await renderDashboard();
-        /** @type {HTMLElement|null} */ (document.querySelector(`#dashboard-content .lrn-card [data-action="lrn-tick"][data-id="${CSS.escape(id)}"]`))?.focus();
-      }
+      else if (state.currentScreen === 'dashboard') await renderDashboard();
     };
     l.busy = id;
     const myGen = ++l.gen;
@@ -3743,14 +3754,22 @@ const SocialOS = (() => {
           break;
         }
 
-        // ── Growth (follower snapshots, js/growth.js — Dashboard card) ──
+        // ── Growth (follower snapshots, js/growth.js — Home tile → sheet) ──
+        case 'growth-open':
+          SocialOSUI.renderGrowthSheet(await loadGrowth());
+          break;
+
+        case 'growth-close':
+          SocialOSUI.closeSheet();
+          break;
+
         case 'growth-refresh': {
           SocialOSUI.loading(true, 'Checking public follower counts…');
           try {
             await SocialOSGrowth.snapshotAll();
           } catch { /* best-effort — see js/growth.js */ }
           SocialOSUI.loading(false);
-          if (state.currentScreen === 'dashboard') await renderDashboard();
+          await redrawGrowth();
           break;
         }
 
@@ -3773,7 +3792,7 @@ const SocialOS = (() => {
           } catch (err) {
             SocialOSUI.toast(err instanceof Error ? err.message : String(err), 'error');
           }
-          if (state.currentScreen === 'dashboard') await renderDashboard();
+          await redrawGrowth();
           break;
         }
 
@@ -4780,12 +4799,6 @@ const SocialOS = (() => {
           break;
         }
 
-        case 'review-post': {
-          if (!id) break;
-          navigate('approvals');
-          break;
-        }
-
         // ── Work Orders (js/workorders.js) ──────────────────────────────
         case 'wo-refresh':
           await renderWorkOrders(true);
@@ -4886,7 +4899,7 @@ const SocialOS = (() => {
         case 'lrn-open': {
           if (!id) break;
           if (state.currentScreen !== 'learning') {
-            // Home's card: open the full screen on that row.
+            // Not on the screen (a row rendered elsewhere): open it on that row.
             await handleRoute(`learning/${id}`);
             break;
           }

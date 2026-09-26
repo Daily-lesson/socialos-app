@@ -369,6 +369,7 @@ const SocialOSUI = (() => {
     user:     '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></svg>',
     doc:      '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M14 3v6h6M8 13h8M8 17h5"/></svg>',
     box:      '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 8v13H3V8"/><path d="M1 3h22v5H1z"/><path d="M10 12h4"/></svg>',
+    growth:   '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m3 17 6-6 4 4 8-8"/><path d="M14 7h7v7"/></svg>',
     book:     '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5V5a2 2 0 0 1 2-2h13v16H6a2 2 0 0 0-2 2z"/><path d="M4 19.5A2 2 0 0 0 6 22h13v-3"/><path d="M9 7h6M9 11h4"/></svg>',
     chevron:  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg>'
   };
@@ -843,7 +844,16 @@ const SocialOSUI = (() => {
    * Render the dashboard screen — Home is also the hub for every screen
    * that has no tab of its own (the bar holds three: Home · Create · Inbox),
    * so the workspace tiles below are navigation, not decoration.
-   * @param {{profile?: any, pendingCount?: number, inbox?: {posts: number, engagement: number, handoffs: number, local: number, agents: number|null, configured: boolean, failed?: boolean, total: number}, nextPost?: any, contentCount?: number, pm?: any, account?: any, growth?: any}} data
+   *
+   * Home fits one phone screen with no scrolling (Scot, 2026-09-26): a
+   * header, one "things need you" strip, and a tile per destination. What
+   * used to be cards rides in the tiles' meta line instead — the next post
+   * on Calendar, due-this-week on Projects, the sprint on My learning — and
+   * the Growth card opens in a sheet (renderGrowthSheet). Adding content and
+   * "Share an update" live on Create and the Library, not here. A new tile
+   * costs a row of height; check the screen still fits at 375×667 before
+   * adding one.
+   * @param {{profile?: any, pendingCount?: number, inbox?: {posts: number, engagement: number, handoffs: number, local: number, agents: number|null, configured: boolean, failed?: boolean, total: number}, nextPost?: any, contentCount?: number, pm?: any, account?: any, growth?: any, learningMeta?: string}} data
    */
   function renderDashboard(data) {
     const container = $('dashboard-content');
@@ -879,134 +889,113 @@ const SocialOSUI = (() => {
     const openTasks = data.pm?.openTasks || 0;
     const contentCount = data.contentCount || 0;
 
+    // Short enough for a half-width tile on a 375px phone ("Next: Sep 27").
+    const npWhen = np?.scheduled_time ? new Date(np.scheduled_time) : null;
+    const calendarMeta = np
+      ? `Next: ${npWhen && !isNaN(npWhen.getTime()) ? npWhen.toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) : 'unscheduled'}`
+      : 'Plan the week';
+    const projectsMeta = dueSoon.length
+      ? `${dueSoon.length} due this week`
+      : `${activeProjects} active · ${openTasks} task${openTasks === 1 ? '' : 's'}`;
+
     /** @type {{action: string, icon: string, title: string, meta: string}[]} */
     const tiles = [
-      { action: 'go-calendar',   icon: ICONS.calendar,  title: 'Calendar',     meta: 'Plan the week' },
+      { action: 'go-calendar',   icon: ICONS.calendar,  title: 'Calendar',     meta: calendarMeta },
       { action: 'go-library',    icon: ICONS.photos,    title: 'Library',      meta: `${contentCount} item${contentCount === 1 ? '' : 's'}` },
-      { action: 'go-projects',   icon: ICONS.star,      title: 'Projects',     meta: `${activeProjects} active · ${openTasks} task${openTasks === 1 ? '' : 's'}` },
+      { action: 'go-projects',   icon: ICONS.star,      title: 'Projects',     meta: projectsMeta },
       { action: 'go-queue',      icon: ICONS.inbox,     title: 'Agent drafts', meta: 'From the Front Office' },
       { action: 'go-workorders', icon: ICONS.clipboard, title: 'Work orders',  meta: 'Dev & ops tasks' },
       { action: 'go-learning',   icon: ICONS.book,      title: 'My learning',  meta: data.learningMeta || 'Your sprint, tickable' },
+      { action: 'growth-open',   icon: ICONS.growth,    title: 'Growth',       meta: growthMeta(data.growth || {}) },
       { action: 'go-settings',   icon: ICONS.gear,      title: 'Settings',     meta: 'Accounts & sync' }
     ];
 
     container.innerHTML = `
-      <header class="dash-top">
-        <div class="dash-top-text">
-          <p class="dash-date">${escapeHtml(today)}</p>
-          <h1>${greeting}, <span class="grad">${escapeHtml(data.profile?.name?.split(' ')[0] || 'there')}</span></h1>
-          <button class="dash-sync${signedIn ? ' is-synced' : ''}" data-action="go-settings"
-            title="${signedIn ? 'Synced to your SocialOS account' : 'Sign in to sync across devices'}">
-            <span class="dash-sync-dot" aria-hidden="true"></span>
-            ${signedIn ? escapeHtml(data.account.email || 'Signed in') + ' · synced' : 'Local only — sign in to sync'}
-          </button>
-        </div>
-        <button class="dash-gear" data-action="go-settings" aria-label="Settings">${ICONS.gear}</button>
-      </header>
-
-      <button class="quickpost-hero" data-action="go-compose" aria-label="Open Quick Post">
-        <div class="quickpost-hero-glow" aria-hidden="true"></div>
-        <div class="quickpost-hero-body">
-          <div class="quickpost-hero-icon" aria-hidden="true">${ICONS.compose || '✎'}</div>
-          <div class="quickpost-hero-text">
-            <span class="quickpost-hero-title">Share an update</span>
-            <span class="quickpost-hero-sub">One box — draft &amp; post everywhere in a tap.</span>
+      <div class="dash">
+        <header class="dash-top">
+          <div class="dash-top-text">
+            <p class="dash-date">${escapeHtml(today)}</p>
+            <h1>${greeting}, <span class="grad">${escapeHtml(data.profile?.name?.split(' ')[0] || 'there')}</span></h1>
+            <button class="dash-sync${signedIn ? ' is-synced' : ''}" data-action="go-settings"
+              title="${signedIn ? 'Synced to your SocialOS account' : 'Sign in to sync across devices'}">
+              <span class="dash-sync-dot" aria-hidden="true"></span>
+              ${signedIn ? escapeHtml(data.account.email || 'Signed in') + ' · synced' : 'Local only — sign in to sync'}
+            </button>
           </div>
-          <span class="quickpost-hero-cta">Quick&nbsp;Post</span>
-        </div>
-      </button>
+          <button class="dash-gear" data-action="go-settings" aria-label="Settings">${ICONS.gear}</button>
+        </header>
 
-      <div class="dash-columns">
-        <div class="dash-col-main">
-          ${inbox > 0 ? `
-            <button class="dash-attn" data-action="${inboxAction}">
-              <span class="dash-attn-count">${inbox}</span>
-              <span class="dash-attn-text">
-                <span class="dash-attn-title">${inbox === 1 ? 'One thing needs you' : `${inbox} things need you`}</span>
-                <span class="dash-attn-sub">${escapeHtml(parts.join(' · '))}</span>
-              </span>
-              <span class="dash-attn-go" aria-hidden="true">${ICONS.chevron}</span>
-            </button>
-          ` : `
-            <div class="dash-attn is-clear" role="status">
-              <span class="dash-attn-count" aria-hidden="true">${ICONS.check}</span>
-              <span class="dash-attn-text">
-                <span class="dash-attn-title">You're all caught up</span>
-                <span class="dash-attn-sub">${clearSub}</span>
-              </span>
-            </div>
-          `}
+        ${inbox > 0 ? `
+          <button class="dash-attn" data-action="${inboxAction}">
+            <span class="dash-attn-count">${inbox}</span>
+            <span class="dash-attn-text">
+              <span class="dash-attn-title">${inbox === 1 ? 'One thing needs you' : `${inbox} things need you`}</span>
+              <span class="dash-attn-sub">${escapeHtml(parts.join(' · '))}</span>
+            </span>
+            <span class="dash-attn-go" aria-hidden="true">${ICONS.chevron}</span>
+          </button>
+        ` : `
+          <div class="dash-attn is-clear" role="status">
+            <span class="dash-attn-count" aria-hidden="true">${ICONS.check}</span>
+            <span class="dash-attn-text">
+              <span class="dash-attn-title">You're all caught up</span>
+              <span class="dash-attn-sub">${clearSub}</span>
+            </span>
+          </div>
+        `}
 
-          ${np ? `
-            <div class="card next-post-card">
-              <div class="card-header">
-                <span class="platform-badge" style="background:${PLATFORM_COLORS[np.platform]}">${PLATFORM_ICONS[np.platform]}</span>
-                <span>Next post</span>
-                <span class="text-secondary">${np.scheduled_time ? SocialOSUtils.formatDate(np.scheduled_time) : 'Unscheduled'}</span>
-              </div>
-              <p class="post-preview">${escapeHtml(SocialOSUtils.truncate(np.draft?.text || '', 150))}</p>
-              <button class="btn btn-primary btn-sm" data-action="review-post" data-id="${np.id}">Review</button>
-            </div>
-          ` : `
-            <button class="card dash-empty" data-action="go-library">
-              <span class="dash-empty-title">No posts queued yet</span>
-              <span class="text-secondary">Add some content and SocialOS will draft posts for you.</span>
-            </button>
-          `}
-
-          ${dueSoon.length ? `
-            <div class="card duesoon-card">
-              <div class="card-header"><span>Due this week</span></div>
-              ${dueSoon.slice(0, 4).map(d => `
-                <div class="duesoon-row">
-                  <span class="duesoon-title">${escapeHtml(SocialOSUtils.truncate(d.title, 40))}</span>
-                  <span class="text-secondary">${escapeHtml(d.project)} · ${escapeHtml(d.due_date)}</span>
-                </div>
-              `).join('')}
-              <button class="btn btn-secondary btn-sm" data-action="go-projects" style="margin-top:8px">Open Projects</button>
-            </div>
-          ` : ''}
-
-          <h2 class="dash-section-title">Workspace</h2>
-          <div class="dash-tiles">
-            ${tiles.map(t => `
-              <button class="dash-tile" data-action="${t.action}">
-                <span class="dash-tile-icon" aria-hidden="true">${t.icon}</span>
+        <nav class="dash-tiles" aria-label="Workspace">
+          ${tiles.map(t => `
+            <button class="dash-tile" data-action="${t.action}">
+              <span class="dash-tile-icon" aria-hidden="true">${t.icon}</span>
+              <span class="dash-tile-text">
                 <span class="dash-tile-title">${t.title}</span>
                 <span class="dash-tile-meta">${escapeHtml(t.meta)}</span>
-              </button>
-            `).join('')}
-          </div>
-        </div>
-
-        <div class="dash-col-side">
-          ${renderLearningCard(data.learning, data.learningBusy || '')}
-          ${renderGrowthCard(data.growth || {})}
-
-          <div class="card quick-actions">
-            <h3>Add content</h3>
-            <div class="action-grid">
-              <button class="action-btn" data-action="upload-local">
-                <span class="action-icon">${ICONS.upload}</span>
-                <span>Upload</span>
-              </button>
-              <button class="action-btn" data-action="add-content-manual">
-                <span class="action-icon">${ICONS.note}</span>
-                <span>Note</span>
-              </button>
-              <button class="action-btn" data-action="scan-drive">
-                <span class="action-icon">${ICONS.drive}</span>
-                <span>Drive</span>
-              </button>
-              <button class="action-btn" data-action="pick-photos">
-                <span class="action-icon">${ICONS.photos}</span>
-                <span>Photos</span>
-              </button>
-            </div>
-          </div>
-        </div>
+              </span>
+            </button>
+          `).join('')}
+        </nav>
       </div>
     `;
+  }
+
+  /**
+   * One line for the Growth tile: the first platform with a snapshot, or
+   * what's missing. Never a fabricated number — same rule as the sheet.
+   * @param {Object<string, {latest: {followers:number}|null}>} growth
+   * @returns {string}
+   */
+  function growthMeta(growth) {
+    const platforms = Object.keys(growth);
+    if (!platforms.length) return 'Link an account';
+    const withCount = platforms.find(p => growth[p].latest);
+    if (!withCount) return 'No snapshot yet';
+    const g = /** @type {{followers:number}} */ (growth[withCount].latest);
+    return `${PLATFORM_LABELS[withCount] || withCount} · ${g.followers.toLocaleString()}`;
+  }
+
+  /**
+   * The Growth card in the bottom sheet — Home's Growth tile opens it, and
+   * the growth-refresh / growth-manual actions redraw it in place.
+   * @param {Object<string, {latest: any, delta: any, note: string}>} growth
+   */
+  function renderGrowthSheet(growth) {
+    const sheet = $('bottom-sheet');
+    if (!sheet) return;
+    setHTML('bottom-sheet-content', `
+      <div class="growth-sheet">
+        ${renderGrowthCard(growth)}
+        <div class="sheet-actions">
+          <button class="btn btn-secondary" data-action="growth-close">Done</button>
+        </div>
+      </div>
+    `);
+    sheet.classList.add('open');
+  }
+
+  /** @returns {boolean} whether the Growth sheet is the one open right now */
+  function growthSheetOpen() {
+    return !!$('bottom-sheet')?.classList.contains('open') && !!document.querySelector('#bottom-sheet-content .growth-sheet');
   }
 
   function getGreeting() {
@@ -3754,13 +3743,10 @@ const SocialOSUI = (() => {
    * One objective row: a checkbox-button that commits the tick, and a title
    * button that opens the detail in place.
    * @param {any} plan @param {any} o @param {boolean} open @param {string} busy
-   * @param {boolean} [inCard] Home's copy: no focus anchor and no detail id,
-   *   so a deep link (focusCard) and aria-controls can only ever resolve to
-   *   the row on the My learning screen, never to the hidden Home card.
    * @param {{kept: number[], mine: string}} [draft]  the journal composer's draft for this row
    * @param {string} [saving]  the id whose journal entry is committing
    */
-  function lrnObjRow(plan, o, open, busy, inCard, draft, saving) {
+  function lrnObjRow(plan, o, open, busy, draft, saving) {
     const on = !!plan.ticks[o.id];
     const id = woEsc(o.id);
     const trk = o.track && plan.tracks[o.track]
@@ -3779,13 +3765,13 @@ const SocialOSUI = (() => {
         }).join('')}</div>` : ''}
         ${o.learned ? `<h5>After this lesson</h5><p>${woEsc(o.learned)}</p>` : ''}
         ${on ? `<p class="lrn-when">Ticked ${woEsc(plan.ticks[o.id])}</p>` : ''}
-        ${inCard ? '' : lrnJournal(plan, o, draft, saving || '')}
+        ${lrnJournal(plan, o, draft, saving || '')}
       </div>` : '';
     return `
-      <div class="lrn-obj${on ? ' checked' : ''}"${inCard ? '' : ` data-lrn-id="${id}"`}>
+      <div class="lrn-obj${on ? ' checked' : ''}" data-lrn-id="${id}">
         <button class="lrn-cb" role="checkbox" aria-checked="${on}" data-action="lrn-tick" data-kind="objective" data-id="${id}"
           aria-label="${woEsc(o.title)}"${busy ? ' disabled' : ''}></button>
-        <button class="lrn-objbtn" data-action="lrn-open" data-id="${id}"${inCard ? '' : ` aria-expanded="${open}" aria-controls="lrn-d-${id}"`}>
+        <button class="lrn-objbtn" data-action="lrn-open" data-id="${id}" aria-expanded="${open}" aria-controls="lrn-d-${id}">
           <span class="t">${woEsc(o.title)}</span>
           <span class="lrn-objmeta"><span class="lrn-kind ${woEsc(o.kind)}">${woEsc(o.kind)}</span><span class="lrn-mins">${Number(o.mins) || 0} min</span>${trk}</span>
         </button>
@@ -3895,7 +3881,7 @@ const SocialOSUI = (() => {
           return `<article class="lrn-day${day.date === today ? ' today' : ''}${rest ? ' rest' : ''}">
             <div class="lrn-dayhead"><span class="dow">${woEsc(dd.dow)}</span><span class="dt">${woEsc(dd.num)}</span></div>
             <div class="lrn-objs">${day.objectives.map((/** @type {any} */ o) =>
-              lrnObjRow(plan, o, !!data.open[o.id], data.busy, false, data.drafts?.[o.id], data.saving)).join('')}</div>
+              lrnObjRow(plan, o, !!data.open[o.id], data.busy, data.drafts?.[o.id], data.saving)).join('')}</div>
           </article>`;
         }).join('')}
       </div>
@@ -3981,37 +3967,6 @@ const SocialOSUI = (() => {
       <p class="lrn-note">The shallow version of the plan. The full one is ROADMAP.md in the learning repo.</p>`;
   }
 
-  /**
-   * Home's My learning card: this week's meter and today's objectives,
-   * tickable in place, in the tracker's look. Absent until the plan has been
-   * read once (never a fake "0 done").
-   * @param {any} plan
-   * @param {string} busy
-   */
-  function renderLearningCard(plan, busy) {
-    if (!plan || !plan.weeks?.length) return '';
-    const today = lrnToday();
-    const w = plan.weeks.find((/** @type {any} */ x) => x.n === SocialOSLearning.localWeek(plan)) || plan.weeks[0];
-    const day = w.days.find((/** @type {any} */ d) => d.date === today);
-    const p = SocialOSLearning.progressOf(plan, w.n);
-    const inSprint = today >= plan.weeks[0].first && today <= plan.weeks[plan.weeks.length - 1].last;
-    const body = day
-      ? `<div class="lrn-objs">${day.objectives.map((/** @type {any} */ o) => lrnObjRow(plan, o, false, busy, true)).join('')}</div>`
-      : `<p class="lrn-quiet">${inSprint ? 'Nothing scheduled today.' : today < plan.weeks[0].first
-        ? `Starts ${woEsc(lrnDate(plan.weeks[0].first).short)}.` : 'The sprint is over. Tick the Definition of Done honestly.'}</p>`;
-    return `
-      <div class="lrn lrn-card" style="--track:${lrnHue(plan, w.track)}">
-        <div class="lrn-cardhead">
-          <span class="lrn-chip">Week ${Number(w.n)} · ${woEsc(plan.tracks[w.track]?.label || '')}</span>
-          <span class="lrn-meterval">${p.done}/${p.total}</span>
-        </div>
-        <div class="lrn-meter" role="progressbar" aria-label="This week's objectives complete" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${p.pct}"><i style="width:${p.pct}%"></i></div>
-        <h3>${day ? `Today · ${woEsc(lrnDate(day.date).short)}` : woEsc(w.title)}</h3>
-        ${body}
-        <button class="btn btn-secondary btn-sm" data-action="go-learning">Open My learning</button>
-      </div>`;
-  }
-
   return {
     $,
     setHTML,
@@ -4027,6 +3982,8 @@ const SocialOSUI = (() => {
     renderLanding,
     renderOnboardingStep,
     renderDashboard,
+    renderGrowthSheet,
+    growthSheetOpen,
     settingsStatus,
     patchSettingsStatus,
     renderApprovals,

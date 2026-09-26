@@ -1387,7 +1387,7 @@ select.input {
   display: flex;
   align-items: flex-start;
   gap: var(--space-md);
-  margin-bottom: var(--space-lg);
+  margin-bottom: var(--space-md);
 }
 
 .dash-top-text { flex: 1; min-width: 0; }
@@ -1515,23 +1515,6 @@ button.dash-attn:hover { border-color: var(--warning); transform: translateY(-1p
 
 .dash-attn.is-clear .dash-attn-count { background: rgba(52, 211, 153, 0.18); color: var(--success); }
 
-/* No next post: one quiet line into the Library, not a hero-sized card */
-.dash-empty {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  width: 100%;
-  text-align: left;
-  font-family: var(--font-body);
-  font-size: 0.875rem;
-  color: var(--text-primary);
-  border-style: dashed;
-  cursor: pointer;
-}
-
-.dash-empty:hover { border-color: var(--bg-border-strong); }
-.dash-empty-title { font-family: var(--font-display); font-weight: 600; font-size: 1rem; }
-
 /* Workspace tiles — the way into every screen without a tab */
 .dash-section-title {
   margin: var(--space-lg) 0 var(--space-sm);
@@ -1547,20 +1530,21 @@ button.dash-attn:hover { border-color: var(--warning); transform: translateY(-1p
   display: grid;
   grid-template-columns: repeat(2, 1fr);
   gap: var(--space-sm);
-  margin-bottom: var(--space-md);
 }
 
 @media (min-width: 640px) {
-  .dash-tiles { grid-template-columns: repeat(3, 1fr); }
+  .dash-tiles { grid-template-columns: repeat(4, 1fr); }
 }
 
+/* Compact rows — icon beside the text — so Home fits one phone screen
+   with no scrolling (renderDashboard in js/ui.js). */
 .dash-tile {
   display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 2px;
+  align-items: center;
+  gap: 10px;
   min-width: 0;
-  padding: var(--space-md);
+  min-height: 64px;
+  padding: 10px 12px;
   text-align: left;
   color: var(--text-primary);
   font-family: var(--font-body);
@@ -1578,17 +1562,18 @@ button.dash-attn:hover { border-color: var(--warning); transform: translateY(-1p
 }
 
 .dash-tile-icon {
+  flex: none;
   display: grid;
   place-items: center;
   width: 36px;
   height: 36px;
-  margin-bottom: var(--space-sm);
   border-radius: var(--radius-sm);
   background: rgba(110, 123, 255, 0.12);
   color: var(--accent);
 }
 
 .dash-tile-icon svg { width: 20px; height: 20px; }
+.dash-tile-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
 .dash-tile-title { font-family: var(--font-display); font-weight: 600; font-size: 0.9375rem; }
 
 .dash-tile-meta {
@@ -1623,71 +1608,6 @@ button.dash-attn:hover { border-color: var(--warning); transform: translateY(-1p
 
 .screen-head-actions { flex: none; display: flex; gap: var(--space-sm); padding-top: 4px; }
 
-/* Two-column dashboard body on desktop */
-.dash-columns { display: block; }
-
-@media (min-width: 1024px) {
-  .dash-columns {
-    display: grid;
-    grid-template-columns: 1.2fr 1fr;
-    gap: var(--space-md);
-    align-items: start;
-  }
-}
-
-.next-post-card .card-header { margin-bottom: var(--space-sm); }
-
-.post-preview {
-  font-family: var(--font-mono);
-  font-size: 0.8125rem;
-  color: var(--text-secondary);
-  line-height: 1.5;
-  margin-bottom: var(--space-sm);
-}
-
-.quick-actions h3 { margin-bottom: var(--space-md); }
-
-.action-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: var(--space-sm);
-}
-
-@media (min-width: 640px) {
-  .action-grid { grid-template-columns: repeat(4, 1fr); }
-}
-
-.action-btn {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 6px;
-  padding: var(--space-md);
-  background: var(--bg-surface);
-  border: 1px solid var(--bg-border);
-  border-radius: var(--radius-sm);
-  color: var(--text-primary);
-  font-size: 0.8125rem;
-  cursor: pointer;
-  transition: border-color 0.2s, background 0.2s, transform 0.15s;
-  min-height: 44px;
-  font-family: var(--font-body);
-}
-
-.action-btn:hover {
-  border-color: var(--accent);
-  background: rgba(110, 123, 255, 0.06);
-  transform: translateY(-1px);
-}
-
-.action-icon {
-  display: inline-flex;
-  width: 22px;
-  height: 22px;
-  color: var(--accent);
-}
-
-.action-icon svg { width: 100%; height: 100%; }
 
 .empty-state {
   text-align: center;
@@ -2642,6 +2562,10 @@ body.nav-visible #screen-settings > #settings-content { max-width: 760px; }
   border-radius: var(--radius-lg) var(--radius-lg) 0 0;
   padding: var(--space-lg);
   padding-bottom: calc(var(--space-lg) + var(--safe-bottom));
+  /* A tall sheet (Growth with 3+ accounts) scrolls instead of running off
+     the top of the screen. */
+  max-height: calc(100dvh - 48px);
+  overflow-y: auto;
   transform: translateY(100%);
   transition: transform 0.3s ease;
 }
@@ -2766,17 +2690,6 @@ body.nav-visible .version-badge { display: none; }
    PROJECTS / PROGRAM MANAGER
    ═══════════════════════════════════════════════════════════════════ */
 
-.duesoon-card { margin-top: var(--space-md); }
-.duesoon-row {
-  display: flex;
-  justify-content: space-between;
-  gap: var(--space-sm);
-  padding: 6px 0;
-  border-bottom: 1px solid var(--bg-border);
-  font-size: 0.85rem;
-}
-.duesoon-row:last-of-type { border-bottom: none; }
-.duesoon-title { font-weight: 500; }
 
 .project-list {
   display: flex;
@@ -2965,66 +2878,8 @@ body.nav-visible .version-badge { display: none; }
 }
 
 /* ═══════════════════════════════════════════════════════════════════
-   Quick Composer (js/composer.js + renderComposer) + Home hero
+   Quick Composer (js/composer.js + renderComposer)
    ═══════════════════════════════════════════════════════════════════ */
-
-/* ── Home hero: the front door to Quick Post ───────────────────────── */
-.quickpost-hero {
-  position: relative;
-  display: block;
-  width: 100%;
-  text-align: left;
-  border: 1px solid var(--bg-border-strong);
-  border-radius: var(--radius-lg);
-  background: var(--bg-card);
-  padding: 0;
-  margin-bottom: var(--space-lg);
-  cursor: pointer;
-  overflow: hidden;
-  transition: transform 0.15s ease, box-shadow 0.2s ease, border-color 0.2s ease;
-}
-.quickpost-hero:hover { transform: translateY(-1px); box-shadow: var(--glow-accent); border-color: var(--accent); }
-.quickpost-hero:active { transform: translateY(0); }
-.quickpost-hero-glow {
-  position: absolute; inset: 0;
-  background: var(--grad-aurora);
-  opacity: 0.14;
-  pointer-events: none;
-}
-.quickpost-hero-body {
-  position: relative;
-  display: flex;
-  align-items: center;
-  gap: var(--space-md);
-  padding: var(--space-lg);
-}
-.quickpost-hero-icon {
-  flex: 0 0 auto;
-  width: 44px; height: 44px;
-  display: grid; place-items: center;
-  border-radius: var(--radius-md);
-  background: var(--grad-accent);
-  color: #fff;
-  box-shadow: var(--glow-accent);
-}
-.quickpost-hero-icon svg { width: 22px; height: 22px; }
-.quickpost-hero-text { display: flex; flex-direction: column; min-width: 0; flex: 1; }
-.quickpost-hero-title { font-family: var(--font-display); font-weight: 600; font-size: 1.05rem; color: var(--text-primary); }
-.quickpost-hero-sub { color: var(--text-secondary); font-size: 0.85rem; }
-.quickpost-hero-cta {
-  flex: 0 0 auto;
-  font-family: var(--font-display); font-weight: 600; font-size: 0.85rem;
-  color: #fff;
-  background: var(--accent);
-  padding: 8px 14px;
-  border-radius: var(--radius-full);
-}
-
-/* Phones: the whole card is the button — drop the pill so the copy breathes */
-@media (max-width: 479px) {
-  .quickpost-hero-cta { display: none; }
-  .quickpost-hero-body { padding: var(--space-md); }
-}
 
 /* ── Composer screen ───────────────────────────────────────────────── */
 .cmp-header { margin-bottom: var(--space-md); }
@@ -3620,11 +3475,7 @@ label.wo-opt input[type="radio"] { margin: 3px 0 0; accent-color: var(--accent);
 .lrn-note { margin: 16px 0 0; padding: 12px 14px; font-size: 12.5px; line-height: 1.5; color: var(--muted); border: 1px dashed var(--line); border-radius: var(--r); }
 
 /* Home's card: the same parts at card size. */
-.lrn-card { display: grid; gap: 10px; margin-bottom: 16px; border: 1px solid var(--line); }
-.lrn-cardhead { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-.lrn-card h3 { font-size: 15px; font-weight: 700; }
 .lrn-quiet { margin: 0; font-size: 13px; color: var(--muted); }
-.lrn-card .btn { justify-self: start; }
 /* The app's flash fades to its own dark --bg-card; inside the tracker's
    palette (light by default) that painted dark ink on a dark ground. */
 /* My learning → Roadmap view: the zoomed-out 30-month plan, ported from the
