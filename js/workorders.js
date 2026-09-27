@@ -108,6 +108,14 @@ const SocialOSWorkOrders = (() => {
     ['blocked', 'Blocked', 'Waiting on another work order']
   ];
 
+  /** The sort views (Scot, 2026-09-27): key -> the label the screen shows. */
+  const SORTS = {
+    score: 'score',
+    id: 'WO number',
+    due: 'due (completion) date',
+    impact: 'impact — your P-level'
+  };
+
   /** @returns {Promise<{url: string, secret: string}>} */
   async function config() {
     const settings = await SocialOSDB.getSettings();
@@ -218,6 +226,55 @@ const SocialOSWorkOrders = (() => {
   }
 
   /**
+   * A sorted copy of `orders` — a PORT of alys scripts/tasks/build.mjs
+   * `sortOrders`, which the board runs; change one, change the other.
+   * `score` is the server's own order (score desc, oldest, id); `id` is the
+   * WO number; `due` is the due (completion) date, task-bound orders last in
+   * either direction; `impact` is the P-level, P0 first. `reverse` flips the
+   * chosen key only — ties always fall back to the score order. Unscored
+   * orders (no `score`) sort as the lowest score.
+   * @param {WorkOrder[]} orders
+   * @param {string} key  one of SORTS; anything else is `score`
+   * @param {boolean} reverse
+   * @returns {WorkOrder[]}
+   */
+  function sortOrders(orders, key, reverse) {
+    /** @type {Object<string, number>} */
+    const rank = { P0: 0, P1: 1, P2: 2, P3: 3 };
+    const num = (/** @type {WorkOrder} */ o) => {
+      const m = /^WO-(\d+)$/.exec(String(o.id || ''));
+      return m ? Number(m[1]) : Infinity;
+    };
+    const total = (/** @type {WorkOrder} */ o) => (o.score ? o.score.total : -1);
+    // Exactly the server's order (a string id compare, as there), so
+    // re-sorting a lane never disagrees with it.
+    const byScore = (/** @type {WorkOrder} */ a, /** @type {WorkOrder} */ b) =>
+      total(b) - total(a) ||
+      String(a.date || '').localeCompare(String(b.date || '')) || String(a.id).localeCompare(String(b.id));
+    const dated = (/** @type {WorkOrder} */ o) => /^\d{4}-\d{2}-\d{2}$/.test(String(o.due || ''));
+    const dir = reverse ? -1 : 1;
+    /** @type {(a: WorkOrder, b: WorkOrder) => number} */
+    let cmp;
+    if (key === 'id') {
+      cmp = (a, b) => dir * (num(a) - num(b)) || byScore(a, b);
+    } else if (key === 'due') {
+      cmp = (a, b) => {
+        const da = dated(a), db = dated(b);
+        if (da !== db) return da ? -1 : 1;
+        return (da ? dir * String(a.due).localeCompare(String(b.due)) : 0) || byScore(a, b);
+      };
+    } else if (key === 'impact') {
+      cmp = (a, b) => {
+        const pa = a.priority in rank ? rank[a.priority] : 9, pb = b.priority in rank ? rank[b.priority] : 9;
+        return dir * (pa - pb) || byScore(a, b);
+      };
+    } else {
+      cmp = (a, b) => dir * (total(b) - total(a)) || byScore(a, b);
+    }
+    return orders.slice().sort(cmp);
+  }
+
+  /**
    * Whole days since the entry was written (never negative, never a guess
    * for a missing date).
    * @param {string} date  YYYY-MM-DD
@@ -235,6 +292,8 @@ const SocialOSWorkOrders = (() => {
   return {
     PRIORITY_LABELS,
     LANES,
+    SORTS,
+    sortOrders,
     isConfigured,
     fetchWorkOrders,
     markDone,

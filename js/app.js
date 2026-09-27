@@ -11,7 +11,7 @@ const SocialOS = (() => {
 
   /**
    * In-memory working state.
-   * @type {{currentScreen: string, onboardingStep: number, onboardingData: Object<string, any>, calendarFocusDate: string|null, approvalsTab: string, engagementSubTab: string, queue: {drafts: any[], direct: Object<string, boolean>, media: Object<string, {dataUri: string, alt: string}>, loaded: boolean}, workorders: {orders: any[], done: any[], projects: string[], today: string, nextNum: number, view: {lane: string, project: string, phone: boolean, free: boolean, quick: boolean}, expanded: Object<string, boolean>, choices: Object<string, string>, loaded: boolean, fetchedAt: string, cached: boolean, error: string|null}, composer: {mode: string, text: string, link: string, selected: string[]|null, oneTap: boolean, posts: any[], results: any[]|null, schedule: {show: boolean, time: string}, replyPlatform: string, comment: string, postSummary: string, reply: {reply: string, alternative: string}|null, attach: {contentId: string, thumbUrl: string, title: string, flagged: boolean, auto?: boolean}|null, attachPicker: boolean, autoCardId: string|null, autoVisualBlocked: boolean, gen: {show: boolean, template: string, size: string, text: string, autoText: string, note: string, byline: string}, linkFind: {show: boolean, loading: boolean, items: any[], error: string}}}}
+   * @type {{currentScreen: string, onboardingStep: number, onboardingData: Object<string, any>, calendarFocusDate: string|null, approvalsTab: string, engagementSubTab: string, queue: {drafts: any[], direct: Object<string, boolean>, media: Object<string, {dataUri: string, alt: string}>, loaded: boolean}, workorders: {orders: any[], done: any[], projects: string[], today: string, nextNum: number, view: {lane: string, project: string, phone: boolean, free: boolean, quick: boolean, sort: string, rev: boolean}, expanded: Object<string, boolean>, choices: Object<string, string>, loaded: boolean, fetchedAt: string, cached: boolean, error: string|null}, composer: {mode: string, text: string, link: string, selected: string[]|null, oneTap: boolean, posts: any[], results: any[]|null, schedule: {show: boolean, time: string}, replyPlatform: string, comment: string, postSummary: string, reply: {reply: string, alternative: string}|null, attach: {contentId: string, thumbUrl: string, title: string, flagged: boolean, auto?: boolean}|null, attachPicker: boolean, autoCardId: string|null, autoVisualBlocked: boolean, gen: {show: boolean, template: string, size: string, text: string, autoText: string, note: string, byline: string}, linkFind: {show: boolean, loading: boolean, items: any[], error: string}}}}
    */
   const state = {
     currentScreen: 'landing',
@@ -52,14 +52,17 @@ const SocialOS = (() => {
     },
     // Work Orders (js/workorders.js) — the server list as last read, plus the
     // board's view state (lane/project/phone/free/quick filters, which rows
-    // are expanded). Never persisted.
+    // are expanded). Never persisted — except the sort, below.
     workorders: {
       /** @type {any[]} */ orders: [],
       /** @type {any[]} */ done: [],
       /** @type {string[]} */ projects: [],
       today: '',
       nextNum: 0,
-      view: { lane: '', project: '', phone: false, free: false, quick: false },
+      // `sort`/`rev` are the sort views (score lanes, WO #, due date, impact)
+      // and ARE remembered per device, like My learning's view — a filter
+      // hides orders, a sort never does, so a stale saved sort is harmless.
+      view: { lane: '', project: '', phone: false, free: false, quick: false, ...savedWoSort() },
       /** @type {Object<string, boolean>} */ expanded: {},
       // Which lettered option is picked per order, id -> letter. Drives only
       // which option's own "Say this in a chat" sentence is on screen — never
@@ -1416,6 +1419,25 @@ const SocialOS = (() => {
       return "can't reach the queue service. You're likely on a preview link or offline — open the live app (the installed / Add-to-Home-Screen URL), which is the origin the backend is configured for.";
     }
     return m;
+  }
+
+  /**
+   * The Work Orders sort view this device last chose — a convenience in
+   * localStorage, never synced, and the default when storage is blocked.
+   * A function declaration, so `state` can call it while being built.
+   * @returns {{sort: string, rev: boolean}}
+   */
+  function savedWoSort() {
+    try {
+      const v = JSON.parse(localStorage.getItem('socialos-wo-sort') || 'null');
+      const sort = v && typeof v.sort === 'string' && Object.prototype.hasOwnProperty.call(SocialOSWorkOrders.SORTS, v.sort) ? v.sort : 'score';
+      return { sort, rev: !!(v && v.rev) };
+    } catch { return { sort: 'score', rev: false }; }
+  }
+
+  function saveWoSort() {
+    const { sort, rev } = state.workorders.view;
+    try { localStorage.setItem('socialos-wo-sort', JSON.stringify({ sort, rev })); } catch { /* private window, blocked storage */ }
   }
 
   /**
@@ -3219,7 +3241,9 @@ const SocialOS = (() => {
         if (state.workorders.orders.some(o => o.id === arg)) {
           // Open it, and clear any filter that would hide it — a push about
           // one order must land on that order, not on a filtered list.
-          state.workorders.view = { lane: '', project: '', phone: false, free: false, quick: false };
+          // The sort stays: it reorders, it never hides.
+          const { sort, rev } = state.workorders.view;
+          state.workorders.view = { lane: '', project: '', phone: false, free: false, quick: false, sort, rev };
           state.workorders.expanded[arg] = true;
           renderWorkOrdersView();
         }
@@ -4879,6 +4903,14 @@ const SocialOS = (() => {
           break;
         }
 
+        case 'wo-sort-reverse': {
+          const v = state.workorders.view;
+          v.rev = !v.rev;
+          saveWoSort();
+          renderWorkOrdersView('[data-action="wo-sort-reverse"]');
+          break;
+        }
+
         case 'wo-toggle-filter': {
           const key = /** @type {HTMLElement} */ (actionEl).dataset?.filter || '';
           const v = state.workorders.view;
@@ -5400,6 +5432,13 @@ const SocialOS = (() => {
       if (el.id === 'wo-proj') {
         state.workorders.view.project = /** @type {any} */ (el).value || '';
         renderWorkOrdersView('#wo-proj');
+        return;
+      }
+      if (el.id === 'wo-sort') {
+        const key = /** @type {any} */ (el).value || '';
+        state.workorders.view.sort = Object.prototype.hasOwnProperty.call(SocialOSWorkOrders.SORTS, key) ? key : 'score';
+        saveWoSort();
+        renderWorkOrdersView('#wo-sort');
         return;
       }
       // A work order's option radio (board parity): picking a different

@@ -2860,16 +2860,20 @@ const SocialOSUI = (() => {
    * @param {boolean} open
    * @param {string} [choice]  the letter picked for this order, if any
    */
-  function renderWorkOrderRow(o, open, choice) {
+  function renderWorkOrderRow(o, open, choice, showLane) {
     const id = woEsc(o.id || '');
+    // A flat sort view names each card's lane (colour alone is not enough)
+    // and carries it on the card, so the rail keeps its lane colour.
+    const laneKey = o.band || 'unscored';
+    const laneName = (SocialOSWorkOrders.LANES.find(([k]) => k === o.band) || [, 'Unscored'])[1];
     return `
-      <article class="wo${open ? ' is-open' : ''}" data-wo-id="${id}">
+      <article class="wo${open ? ' is-open' : ''}" data-wo-id="${id}"${showLane ? ` data-lane="${woEsc(laneKey)}"` : ''}>
         <button type="button" class="wo-bar" data-action="wo-toggle" data-id="${id}" aria-expanded="${open}" aria-controls="wo-b-${id}">
           <span class="wo-rail"></span>
           <span class="wo-mid">
             <span class="wo-id">${id}</span>
             <span class="wo-title">${woPlain(o.title)}</span>
-            <span class="wo-meta">${woTags(o)}</span>
+            <span class="wo-meta">${showLane ? `<span class="wo-tag wo-t-lane">${woEsc(laneName)}</span>` : ''}${woTags(o)}</span>
           </span>
           <span class="wo-right"><span class="wo-sc">${o.score ? Number(o.score.total) : '—'}</span><span class="wo-sc-l">score</span></span>
         </button>
@@ -2898,7 +2902,7 @@ const SocialOSUI = (() => {
    * collapsible rows ranked by WOS-1. Same data too: the server reads the
    * same Scots_Tasks.md and scores it with a port of the board's scorer.
    * Four states like the Queue: not connected, error, empty, list.
-   * @param {{configured: boolean, orders: WorkOrder[], done: WorkOrder[], projects: string[], view: {lane: string, project: string, phone: boolean, free: boolean, quick: boolean}, expanded: Object<string, boolean>, choices: Object<string, string>, today: string, nextNum: number, loaded: boolean, fetchedAt: string, cached: boolean, error: string|null, learningToday?: {id: string, title: string, kind: string, mins: number, done: boolean}[]|null}} data
+   * @param {{configured: boolean, orders: WorkOrder[], done: WorkOrder[], projects: string[], view: {lane: string, project: string, phone: boolean, free: boolean, quick: boolean, sort?: string, rev?: boolean}, expanded: Object<string, boolean>, choices: Object<string, string>, today: string, nextNum: number, loaded: boolean, fetchedAt: string, cached: boolean, error: string|null, learningToday?: {id: string, title: string, kind: string, mins: number, done: boolean}[]|null}} data
    */
   function renderWorkOrders(data) {
     const container = $('workorders-content');
@@ -2963,6 +2967,7 @@ const SocialOSUI = (() => {
     // Unscored orders have no lane, so a lane filter hides them.
     const unscored = v.lane ? [] : ided.filter(o => !o.band && SocialOSWorkOrders.passes(o, v));
     const loose = orders.filter(o => !o.id);
+    const sortKey = v.sort && Object.prototype.hasOwnProperty.call(SocialOSWorkOrders.SORTS, v.sort) ? v.sort : 'score';
 
     html += `
       <p class="wo-asof">as of <b>${escapeHtml(data.today || '')}</b> · <b>${ided.length}</b> open${data.nextNum ? ` · next id <b>WO-${String(data.nextNum).padStart(3, '0')}</b>` : ''}${fetched ? ` · read ${escapeHtml(fetched)}${data.cached ? ' (cached — Refresh re-reads the file)' : ''}` : ''}</p>
@@ -2977,6 +2982,11 @@ const SocialOSUI = (() => {
           <option value="">All projects</option>
           ${(data.projects || []).slice().sort().map(p => `<option value="${woEsc(p)}"${v.project === p ? ' selected' : ''}>${escapeHtml(p)}</option>`).join('')}
         </select>
+        <select class="wo-proj" id="wo-sort" aria-label="Sort by">
+          ${[['score', 'Sort: score (lanes)'], ['id', 'Sort: WO #'], ['due', 'Sort: due / completion date'], ['impact', 'Sort: impact (P0 first)']]
+            .map(([k, l]) => `<option value="${k}"${sortKey === k ? ' selected' : ''}>${l}</option>`).join('')}
+        </select>
+        <button type="button" class="chip chip-sm${v.rev ? ' selected' : ''}" data-action="wo-sort-reverse" aria-pressed="${!!v.rev}" title="Reverse the sort order">⇅ Reverse</button>
         <span class="wo-count" id="wo-shown"></span>
       </div>`;
 
@@ -2997,13 +3007,27 @@ const SocialOSUI = (() => {
     }
 
     let shown = 0;
-    for (const [key, label, gloss] of SocialOSWorkOrders.LANES) {
-      const list = scored.filter(o => o.band === key && SocialOSWorkOrders.passes(o, v));
+    const row = (/** @type {WorkOrder} */ o, /** @type {boolean} */ showLane) =>
+      renderWorkOrderRow(o, !!data.expanded[o.id || ''], (data.choices || {})[o.id || ''], showLane);
+    if (sortKey !== 'score') {
+      // A flat view: the lanes ARE the score order, so any other order is one
+      // list (unscored orders included, as the lowest score), each card
+      // naming its lane. Same rule as the board.
+      const flat = SocialOSWorkOrders.sortOrders([...scored.filter(o => SocialOSWorkOrders.passes(o, v)), ...unscored], sortKey, !!v.rev);
+      shown = flat.length;
+      if (flat.length) {
+        html += woLane('sorted', `By ${SocialOSWorkOrders.SORTS[sortKey]}`,
+          `Every lane in one list${v.rev ? ', reversed' : ''} — each card names its lane`, flat.length,
+          flat.map(o => row(o, true)).join(''));
+      }
+    }
+    if (sortKey === 'score') for (const [key, label, gloss] of SocialOSWorkOrders.LANES) {
+      const list = SocialOSWorkOrders.sortOrders(scored.filter(o => o.band === key && SocialOSWorkOrders.passes(o, v)), 'score', !!v.rev);
       if (!list.length) continue;
       shown += list.length;
-      html += woLane(key, label, gloss, list.length, list.map(o => renderWorkOrderRow(o, !!data.expanded[o.id || ''], (data.choices || {})[o.id || ''])).join(''));
+      html += woLane(key, label, gloss, list.length, list.map(o => row(o, false)).join(''));
     }
-    if (unscored.length) {
+    if (sortKey === 'score' && unscored.length) {
       shown += unscored.length;
       html += woLane('unscored', 'Unscored', 'A block missing its v2 fields — listed so it is never lost', unscored.length,
         unscored.map(o => renderWorkOrderRow(o, !!data.expanded[o.id || ''], (data.choices || {})[o.id || ''])).join(''));
@@ -3036,6 +3060,8 @@ const SocialOSUI = (() => {
         <b>Scots_Tasks.md</b> in <code>Daily-lesson/alys</code> is the only canon. This tab reads it live and ranks it with the
         Work Order Board's own <b>WOS-1</b> score: urgency + stakes + ease + age − friction, capped at 100, with your P-level
         flooring the lane so a P0 never sorts below a P1 — unless it is Blocked or Gated, which win over the floor.
+        <b>Sort</b> reads the same orders by WO number, by due (completion) date with task-bound orders last, or by
+        impact (your P-level, P0 first), as one list with each card naming its lane; <b>Reverse</b> flips it (in the score view, within each lane).
         <b>Mark done</b> commits the tick to the file; the board shows it from its next rebuild.
       </p>`;
     container.innerHTML = html;

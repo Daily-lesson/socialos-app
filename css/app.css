@@ -3230,12 +3230,14 @@ body.nav-visible .version-badge { display: none; }
 
 /* lanes — the colour role each lane carries */
 .wo-lane { margin-bottom: var(--space-lg); --lane-c: var(--text-secondary); }
-.wo-lane[data-lane="now"]      { --lane-c: var(--danger); }
-.wo-lane[data-lane="next"]     { --lane-c: var(--warning); }
-.wo-lane[data-lane="soon"]     { --lane-c: var(--accent-3); }
-.wo-lane[data-lane="later"]    { --lane-c: var(--accent); }
-.wo-lane[data-lane="gated"]    { --lane-c: var(--accent-2); }
-.wo-lane[data-lane="blocked"]  { --lane-c: var(--text-secondary); }
+/* a card carries its own lane in a flat sort view, so its rail keeps the colour */
+.wo-lane[data-lane="now"],      .wo[data-lane="now"]      { --lane-c: var(--danger); }
+.wo-lane[data-lane="next"],     .wo[data-lane="next"]     { --lane-c: var(--warning); }
+.wo-lane[data-lane="soon"],     .wo[data-lane="soon"]     { --lane-c: var(--accent-3); }
+.wo-lane[data-lane="later"],    .wo[data-lane="later"]    { --lane-c: var(--accent); }
+.wo-lane[data-lane="gated"],    .wo[data-lane="gated"]    { --lane-c: var(--accent-2); }
+.wo-lane[data-lane="blocked"],  .wo[data-lane="blocked"]  { --lane-c: var(--text-secondary); }
+.wo[data-lane="unscored"]                                 { --lane-c: var(--text-secondary); }
 .wo-lane[data-lane="unscored"] { --lane-c: var(--text-secondary); }
 .wo-lane[data-lane="loose"]    { --lane-c: var(--text-secondary); }
 .wo-lane[data-lane="learning"] { --lane-c: #9ABD5B; } /* the tracker's moss, as on the Calendar */
@@ -3280,6 +3282,8 @@ body.nav-visible .version-badge { display: none; }
 .wo-t-due { color: var(--text-primary); }
 .wo-t-hot { color: var(--danger); border-color: var(--danger); background: rgba(248, 113, 113, 0.10); }
 .wo-t-plain { color: var(--text-secondary); }
+/* the lane, named on the card in a flat sort view */
+.wo-t-lane { color: var(--lane-c); border-color: var(--lane-c); text-transform: uppercase; letter-spacing: .06em; }
 .wo-t-dev-phone   { color: var(--accent-2); }
 .wo-t-dev-desktop { color: var(--accent-3); }
 .wo-t-dev-either  { color: var(--text-secondary); }
