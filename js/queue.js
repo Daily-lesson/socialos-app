@@ -63,6 +63,35 @@ const SocialOSQueue = (() => {
   const BRAND_AGENTS = ['brand-engine'];
 
   /**
+   * Human names for the `mkt_drafts.agent` slugs, as the Front Office roster
+   * names them (canon: `Daily-lesson/alys` → `PERSONAS.md`). Labels only —
+   * nothing here decides what a draft may do. A slug that isn't listed prints
+   * as itself, so an agent that joins the roster before this map catches up
+   * is shown under its slug, never hidden or mislabelled.
+   */
+  const AGENT_LABELS = {
+    'chief-of-staff': 'Chief of Staff',
+    'seo-engine': 'SEO Engine',
+    'narrator': 'Narrator',
+    'community-scout': 'Community Scout',
+    'analyst': 'Analyst',
+    'track-record': 'Track Record',
+    'off-races-track-record': 'Track Record',
+    'closer': 'The Closer',
+    'voice-trainer': 'Voice Trainer',
+    'brand-engine': 'Brand Engine'
+  };
+
+  /**
+   * @param {string|null|undefined} slug an mkt_drafts.agent value
+   * @returns {string} the roster name, or the slug itself when unknown
+   */
+  function agentLabel(slug) {
+    const k = String(slug || '').trim().toLowerCase();
+    return AGENT_LABELS[k] || k || 'unknown agent';
+  }
+
+  /**
    * Resolve the queue endpoint + secret from settings. The URL is baked in
    * (js/db.js DEFAULT_MKT_QUEUE_URL, overridable for local dev); the secret
    * has no default — until Scot enters it in Settings the screen shows a
@@ -310,6 +339,8 @@ const SocialOSQueue = (() => {
   return {
     COMPOSER_CHANNELS,
     BRAND_AGENTS,
+    AGENT_LABELS,
+    agentLabel,
     isConfigured,
     fetchQueue,
     approveDraft,

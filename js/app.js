@@ -44,7 +44,11 @@ const SocialOS = (() => {
       /** @type {number} */ gen: 0,
       // The last attempt to read the queue failed — lets Home say "couldn't
       // check" only after it actually tried, not while still loading.
-      /** @type {boolean} */ fetchFailed: false
+      /** @type {boolean} */ fetchFailed: false,
+      // The SAFO strip's dispatcher line as last read (pushLivenessText), so
+      // the thumbnail re-render (loadQueueThumbnails) redraws the same
+      // sentence instead of dropping it mid-view.
+      /** @type {string} */ liveness: ''
     },
     // Work Orders (js/workorders.js) — the server list as last read, plus the
     // board's view state (lane/project/phone/free/quick filters, which rows
@@ -63,6 +67,9 @@ const SocialOS = (() => {
       /** @type {Object<string, string>} */ choices: {},
       loaded: false,
       fetchedAt: '',
+      // When THIS device last applied a list (ms, client clock) — the
+      // refresh throttle's clock; fetchedAt is the server's and is display only.
+      /** @type {number} */ readAt: 0,
       cached: false,
       /** @type {string|null} */ error: null
     },
@@ -289,6 +296,21 @@ const SocialOS = (() => {
 
     const lp = state.learning.plan;
     const lpWeek = lp ? SocialOSLearning.progressOf(lp, SocialOSLearning.localWeek(lp)) : null;
+
+    // Tile counts — each from a lane that was actually read (ui.js shows the
+    // plain label otherwise, never a 0 it can't stand behind). Work orders:
+    // the board's Now lane (overdue, due today, or a P0 you can start);
+    // learning: today's objectives not yet ticked; Settings: platforms whose
+    // sign-in expired. All from state or IndexedDB — nothing here fetches.
+    const wo = state.workorders;
+    const workorders = {
+      loaded: wo.loaded,
+      now: wo.loaded ? wo.orders.filter(o => o.band === 'now').length : 0,
+      open: wo.loaded ? wo.orders.length : 0
+    };
+    const todayRows = learningTodayRows();
+    const learningToday = { left: todayRows ? todayRows.filter(r => !r.done).length : null };
+
     SocialOSUI.renderDashboard({
       profile,
       pendingCount: pending.length,
@@ -298,8 +320,24 @@ const SocialOS = (() => {
       pm,
       account,
       growth,
-      learningMeta: lp && lpWeek ? `Week ${SocialOSLearning.localWeek(lp)} · ${lpWeek.done}/${lpWeek.total} done` : ''
+      learningMeta: lp && lpWeek ? `Week ${SocialOSLearning.localWeek(lp)} · ${lpWeek.done}/${lpWeek.total} done` : '',
+      workorders,
+      learningToday
     });
+
+    // Settings tile: the reconnect check can refresh a token over the
+    // network (getConnectionStatus → getAccessToken), so it runs after the
+    // paint and patches the tile in place — Home never waits on a broker.
+    reconnectNeededPlatforms().then((reconnect) => {
+      if (state.currentScreen !== 'dashboard') return;
+      SocialOSUI.updateDashTile('go-settings', { meta: SocialOSUI.settingsTileMeta(reconnect), count: reconnect.length });
+    }).catch(() => {});
+
+    // Work orders tile: same shape as the learning lane below — count from
+    // the last read now, refresh quietly, redraw only if it fetched.
+    refreshWorkOrdersQuiet().then(async (fetched) => {
+      if (fetched && state.currentScreen === 'dashboard') await renderDashboard();
+    }).catch(() => {});
 
     // Same pattern for the My learning tile: shown from the last read, refreshed
     // in the background at most every few minutes, redrawn only if it fetched.
@@ -1355,7 +1393,7 @@ const SocialOS = (() => {
       const visible = SocialOSQueue.personaFilter(state.queue.drafts, persona);
       SocialOSUI.renderQueue({
         configured: true, drafts: visible, hiddenCount: state.queue.drafts.length - visible.length, persona, error: null,
-        direct: state.queue.direct, media: state.queue.media, week, reconnect
+        direct: state.queue.direct, media: state.queue.media, week, reconnect, liveness: state.queue.liveness
       });
       reapplyFocus(); // this render just replaced the card a push tap focused
     }
@@ -1393,6 +1431,7 @@ const SocialOS = (() => {
     w.today = list.today;
     w.nextNum = list.next_num;
     w.fetchedAt = list.fetched_at;
+    w.readAt = Date.now();
     w.cached = list.cached;
     w.loaded = true;
     w.error = null;
@@ -1652,8 +1691,17 @@ const SocialOS = (() => {
     const week = await weeklyPostCounts();
     const reconnect = await reconnectNeededPlatforms();
     const persona = await SocialOSDB.getPersona();
+    // The SAFO strip's dispatcher line — the same fact Settings shows, read
+    // through the same secret, in parallel with the queue so the screen pays
+    // no extra round trip. serverInfo never throws; null = couldn't check,
+    // and the strip says only that (the queue's own error names the cause).
+    const infoP = SocialOSPush.serverInfo();
+    const draftsP = SocialOSQueue.fetchQueue();
+    const info = await infoP;
+    const liveness = info === null ? 'Push dispatcher: couldn\'t check just now.' : pushLivenessText(info, 'Push dispatcher');
+    state.queue.liveness = liveness;
     try {
-      const drafts = await SocialOSQueue.fetchQueue();
+      const drafts = await draftsP;
       state.queue.drafts = drafts;
       state.queue.loaded = true;
       state.queue.fetchedAt = Date.now();
@@ -1662,7 +1710,7 @@ const SocialOS = (() => {
       const visible = SocialOSQueue.personaFilter(drafts, persona);
       SocialOSUI.renderQueue({
         configured: true, drafts: visible, hiddenCount: drafts.length - visible.length, persona, error: null,
-        direct, media: state.queue.media, week, reconnect
+        direct, media: state.queue.media, week, reconnect, liveness
       });
       loadQueueThumbnails(drafts); // fire-and-forget
     } catch (err) {
@@ -1670,7 +1718,7 @@ const SocialOS = (() => {
       state.queue.fetchFailed = true;
       SocialOSUI.renderQueue({
         configured: true, drafts: [], hiddenCount: 0, persona, error: queueErrMsg(err),
-        direct, media: state.queue.media, week, reconnect
+        direct, media: state.queue.media, week, reconnect, liveness
       });
     }
     SocialOSUI.loading(false);
@@ -2111,7 +2159,11 @@ const SocialOS = (() => {
    */
   function refreshWorkOrdersQuiet() {
     if (woRefreshInFlight) return woRefreshInFlight;
-    if (state.workorders.loaded && Date.now() - Date.parse(state.workorders.fetchedAt || '') < LEARNING_REFRESH_MS) {
+    // Throttle on the CLIENT clock (readAt), never on the server's cache
+    // stamp (fetchedAt): a phone clock ahead of the function's would read
+    // every cached list as stale and, with Home redrawing on each fetch,
+    // loop fetch → render → fetch until the skew window closed.
+    if (state.workorders.loaded && Date.now() - state.workorders.readAt < LEARNING_REFRESH_MS) {
       return Promise.resolve(false);
     }
     woRefreshInFlight = (async () => {
@@ -2159,28 +2211,36 @@ const SocialOS = (() => {
    * "patch in place, don't steal focus" discipline elsewhere in this file).
    * Never says "down", only "may have stopped" (contract RECEIPTS).
    */
+  /**
+   * One sentence on whether the push dispatcher (mkt-push, pg_cron every 5
+   * min) is alive, from `SocialOSPush.serverInfo()`. Shared by Settings and
+   * the SAFO strip so the two never disagree about the same fact.
+   * @param {{lastDispatchAt?: string|null}|null} info
+   * @param {string} [who] the subject, e.g. 'Background service'
+   * @returns {string}
+   */
+  function pushLivenessText(info, who = 'Background service') {
+    if (info === null) {
+      return `${who}: couldn't check (offline, or the secret isn't saved).`;
+    } else if (info.lastDispatchAt === undefined) {
+      return `${who}: this dispatcher build doesn't report liveness yet.`;
+    } else if (info.lastDispatchAt === null) {
+      return `${who}: hasn't reported a run yet.`;
+    }
+    const minsAgo = Math.max(0, Math.round((Date.now() - new Date(info.lastDispatchAt).getTime()) / 60000));
+    if (minsAgo < 20) {
+      return `${who} last ran ${minsAgo} min ago ✓`;
+    } else if (minsAgo < 60) {
+      return `${who} last ran ${minsAgo} min ago.`;
+    }
+    const hrsAgo = Math.round(minsAgo / 60);
+    return `⚠️ ${who} last ran ${hrsAgo}h ago — the 5-minute cron may have stopped. Check the pg_cron job.`;
+  }
+
   async function refreshPushLiveness() {
     const el = document.getElementById('set-push-liveness');
     if (!el) return;
-    const info = await SocialOSPush.serverInfo();
-    let text;
-    if (info === null) {
-      text = 'Background service: couldn\'t check (offline, or the secret isn\'t saved).';
-    } else if (info.lastDispatchAt === undefined) {
-      text = 'Background service: this dispatcher build doesn\'t report liveness yet.';
-    } else if (info.lastDispatchAt === null) {
-      text = 'Background service: hasn\'t reported a run yet.';
-    } else {
-      const minsAgo = Math.max(0, Math.round((Date.now() - new Date(info.lastDispatchAt).getTime()) / 60000));
-      if (minsAgo < 20) {
-        text = `Background service last ran ${minsAgo} min ago ✓`;
-      } else if (minsAgo < 60) {
-        text = `Background service last ran ${minsAgo} min ago.`;
-      } else {
-        const hrsAgo = Math.round(minsAgo / 60);
-        text = `⚠️ Background service last ran ${hrsAgo}h ago — the 5-minute cron may have stopped. Check the pg_cron job.`;
-      }
-    }
+    const text = pushLivenessText(await SocialOSPush.serverInfo());
     // Re-check the element still exists — a background async check can
     // resolve after the user has navigated away from Settings.
     const live = document.getElementById('set-push-liveness');

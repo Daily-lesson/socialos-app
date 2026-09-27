@@ -1539,6 +1539,7 @@ button.dash-attn:hover { border-color: var(--warning); transform: translateY(-1p
 /* Compact rows — icon beside the text — so Home fits one phone screen
    with no scrolling (renderDashboard in js/ui.js). */
 .dash-tile {
+  position: relative; /* anchors .dash-tile-count */
   display: flex;
   align-items: center;
   gap: 10px;
@@ -1574,7 +1575,31 @@ button.dash-attn:hover { border-color: var(--warning); transform: translateY(-1p
 
 .dash-tile-icon svg { width: 20px; height: 20px; }
 .dash-tile-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
-.dash-tile-title { font-family: var(--font-display); font-weight: 600; font-size: 0.9375rem; }
+.dash-tile-title { font-family: var(--font-display); font-weight: 600; font-size: 0.9375rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* The count of things to handle behind a tile (renderDashboard `count`) —
+   a badge on the icon's corner, app-icon style, so it takes no text width
+   (in the title row it wrapped "Work orders" onto two lines) and adds no
+   height, so Home still fits one screen. */
+.dash-tile-count {
+  position: absolute;
+  top: 8px;      /* the icon's top-right corner: icon is 36px, centred in a 64px tile, 12px in */
+  left: 36px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 19px;
+  height: 19px;
+  padding: 0 5px;
+  border-radius: 10px;
+  border: 2px solid var(--bg-card);
+  background: var(--warning);
+  color: #1a1400;
+  font-family: var(--font-display);
+  font-size: 0.6875rem;
+  font-weight: 700;
+  line-height: 1;
+}
 
 .dash-tile-meta {
   max-width: 100%;
@@ -3550,3 +3575,41 @@ label.wo-opt input[type="radio"] { margin: 3px 0 0; accent-color: var(--accent);
   100% { background: transparent; }
 }
 @media (prefers-reduced-motion: reduce) { .lrn .card-focused { animation: none; } }
+
+/* ── SAFO — the Front Office at a glance (ui.js renderSafoDash) ──────── */
+.safo-dash {
+  margin: 0 0 var(--space-md);
+  padding: 12px;
+  background: var(--bg-card);
+  border: 1px solid var(--bg-border);
+  border-radius: var(--radius-md);
+}
+
+.safo-stats {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.safo-stat { display: flex; flex-direction: column; min-width: 0; }
+.safo-stat-value { font-family: var(--font-display); font-size: 1.25rem; font-weight: 700; line-height: 1.1; }
+.safo-stat-label { color: var(--text-secondary); font-size: 0.6875rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+.safo-agents { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+.safo-agent {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: rgba(110, 123, 255, 0.12);
+  color: var(--accent);
+  font-size: 0.75rem;
+}
+.safo-agent b { font-weight: 700; }
+
+.safo-liveness { margin: 10px 0 0; color: var(--text-secondary); font-size: 0.75rem; }

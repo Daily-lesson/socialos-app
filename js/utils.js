@@ -31,7 +31,11 @@ const SocialOSUtils = (() => {
    */
   function formatDate(iso, opts) {
     const defaults = { weekday: 'short', month: 'short', day: 'numeric' };
-    return new Intl.DateTimeFormat('en-US', opts || defaults).format(new Date(iso));
+    const d = new Date(iso);
+    // An unparseable value (a row written outside the broker) must not throw
+    // out of a whole screen's render.
+    if (isNaN(d.getTime())) return '—';
+    return new Intl.DateTimeFormat('en-US', opts || defaults).format(d);
   }
 
   /**

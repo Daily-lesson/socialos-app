@@ -841,6 +841,50 @@ const SocialOSUI = (() => {
   // ── Dashboard ─────────────────────────────────────────────────────────
 
   /**
+   * The Settings tile's meta line: the platforms whose sign-in expired, or
+   * the plain label. Shared by the first paint and the in-place patch.
+   * @param {string[]} reconnect platform keys from reconnectNeededPlatforms
+   * @returns {string}
+   */
+  function settingsTileMeta(reconnect) {
+    return reconnect.length
+      ? `Reconnect ${reconnect.map(p => PLATFORM_LABELS[p] || p).join(', ')}`
+      : 'Accounts & sync';
+  }
+
+  /**
+   * Patch one Home tile in place — meta line and count badge — for a lane
+   * that is read AFTER the first paint (the reconnect check may refresh a
+   * token over the network, so Home never waits on it). No-op when the tile
+   * isn't on screen.
+   * @param {string} action the tile's data-action
+   * @param {{meta?: string, count?: number|null}} patch
+   */
+  function updateDashTile(action, patch) {
+    const tile = document.querySelector(`.dash-tile[data-action="${action}"]`);
+    if (!tile) return;
+    if (patch.meta !== undefined) {
+      const meta = tile.querySelector('.dash-tile-meta');
+      if (meta) meta.textContent = patch.meta;
+    }
+    if (patch.count !== undefined) {
+      let badge = tile.querySelector('.dash-tile-count');
+      if (patch.count) {
+        if (!badge) {
+          badge = document.createElement('span');
+          badge.className = 'dash-tile-count';
+          const icon = tile.querySelector('.dash-tile-icon');
+          if (icon) icon.insertAdjacentElement('afterend', badge); else tile.prepend(badge);
+        }
+        badge.textContent = String(patch.count);
+        badge.setAttribute('aria-label', `${patch.count} to handle`);
+      } else if (badge) {
+        badge.remove();
+      }
+    }
+  }
+
+  /**
    * Render the dashboard screen — Home is also the hub for every screen
    * that has no tab of its own (the bar holds three: Home · Create · Inbox),
    * so the workspace tiles below are navigation, not decoration.
@@ -853,7 +897,14 @@ const SocialOSUI = (() => {
    * "Share an update" live on Create and the Library, not here. A new tile
    * costs a row of height; check the screen still fits at 375×667 before
    * adding one.
-   * @param {{profile?: any, pendingCount?: number, inbox?: {posts: number, engagement: number, handoffs: number, local: number, agents: number|null, configured: boolean, failed?: boolean, total: number}, nextPost?: any, contentCount?: number, pm?: any, account?: any, growth?: any, learningMeta?: string}} data
+   *
+   * Home is the daily dashboard (Scot, 2026-09-26): a tile whose screen
+   * holds things to handle carries that number as a count pill — SAFO
+   * drafts waiting, work orders in the Now lane, today's learning
+   * objectives left, projects due this week, platforms to reconnect. A
+   * count comes only from a lane that was actually read; an unread lane
+   * shows its plain label, never a 0 it can't stand behind.
+   * @param {{profile?: any, pendingCount?: number, inbox?: {posts: number, engagement: number, handoffs: number, local: number, agents: number|null, configured: boolean, failed?: boolean, total: number}, nextPost?: any, contentCount?: number, pm?: any, account?: any, growth?: any, learningMeta?: string, workorders?: {loaded: boolean, now: number, open: number}, learningToday?: {left: number|null}, reconnect?: string[]}} data
    */
   function renderDashboard(data) {
     const container = $('dashboard-content');
@@ -872,7 +923,7 @@ const SocialOSUI = (() => {
       ib.posts ? plural(ib.posts, 'post', 'posts') : '',
       ib.engagement ? plural(ib.engagement, 'reply or like', 'replies & likes') : '',
       ib.handoffs ? plural(ib.handoffs, 'handoff to confirm', 'handoffs to confirm') : '',
-      ib.agents ? plural(ib.agents, 'agent draft', 'agent drafts') : ''
+      ib.agents ? plural(ib.agents, 'SAFO draft', 'SAFO drafts') : ''
     ].filter(Boolean);
     // Only agent drafts waiting → land on them, not an empty Your posts.
     const inboxAction = ib.local === 0 && (ib.agents || 0) > 0 ? 'go-queue' : 'go-approvals';
@@ -881,8 +932,8 @@ const SocialOSUI = (() => {
     const clearSub = !(ib.configured && ib.agents === null)
       ? 'Nothing is waiting for your approval.'
       : ib.failed
-        ? 'Nothing of yours is waiting. Agent drafts couldn\'t be checked just now.'
-        : 'Nothing of yours is waiting. Checking agent drafts…';
+        ? 'Nothing of yours is waiting. SAFO drafts couldn\'t be checked just now.'
+        : 'Nothing of yours is waiting. Checking SAFO drafts…';
     const today = new Date().toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' });
     const signedIn = !!data.account?.signedIn;
     const activeProjects = data.pm?.activeProjects || 0;
@@ -898,16 +949,47 @@ const SocialOSUI = (() => {
       ? `${dueSoon.length} due this week`
       : `${activeProjects} active · ${openTasks} task${openTasks === 1 ? '' : 's'}`;
 
-    /** @type {{action: string, icon: string, title: string, meta: string}[]} */
+    // SAFO (the Social Agent for the Front Office) — the tile counts the
+    // drafts the agents have waiting for Scot, from the same cache as the
+    // Inbox badge. A count is only ever shown from a queue that was read:
+    // "not connected" and "couldn't check" are said, never shown as 0.
+    const safoMeta = !ib.configured
+      ? 'Not connected'
+      : ib.agents === null
+        ? (ib.failed ? 'Couldn\'t check drafts' : 'Checking drafts…')
+        : ib.agents
+          ? `${plural(ib.agents, 'draft', 'drafts')} waiting`
+          : 'No drafts waiting';
+
+    // Work orders — the Now lane (overdue, due today, or a P0 you can start)
+    // is the count; the meta names the whole open list beside it. A lane
+    // that hasn't been read shows its plain label, not an empty count.
+    /** @type {{loaded: boolean, now: number, open: number}} */
+    const wo = data.workorders || { loaded: false, now: 0, open: 0 };
+    const woMeta = wo.loaded
+      ? (wo.now ? `${wo.now} now · ${wo.open} open` : `${wo.open} open`)
+      : 'Dev & ops tasks';
+
+    // My learning — today's objectives still to tick are the count; the
+    // week line stays the meta. `left` is null until the plan was read.
+    /** @type {{left: number|null}} */
+    const lrn = data.learningToday || { left: null };
+
+    // Settings — a platform sign-in that expired is a thing to handle.
+    /** @type {string[]} */
+    const reconnect = data.reconnect || [];
+    const settingsMeta = settingsTileMeta(reconnect);
+
+    /** @type {{action: string, icon: string, title: string, meta: string, count?: number|null}[]} */
     const tiles = [
-      { action: 'go-calendar',   icon: ICONS.calendar,  title: 'Calendar',     meta: calendarMeta },
-      { action: 'go-library',    icon: ICONS.photos,    title: 'Library',      meta: `${contentCount} item${contentCount === 1 ? '' : 's'}` },
-      { action: 'go-projects',   icon: ICONS.star,      title: 'Projects',     meta: projectsMeta },
-      { action: 'go-queue',      icon: ICONS.inbox,     title: 'Agent drafts', meta: 'From the Front Office' },
-      { action: 'go-workorders', icon: ICONS.clipboard, title: 'Work orders',  meta: 'Dev & ops tasks' },
-      { action: 'go-learning',   icon: ICONS.book,      title: 'My learning',  meta: data.learningMeta || 'Your sprint, tickable' },
-      { action: 'growth-open',   icon: ICONS.growth,    title: 'Growth',       meta: growthMeta(data.growth || {}) },
-      { action: 'go-settings',   icon: ICONS.gear,      title: 'Settings',     meta: 'Accounts & sync' }
+      { action: 'go-calendar',   icon: ICONS.calendar,  title: 'Calendar',    meta: calendarMeta },
+      { action: 'go-library',    icon: ICONS.photos,    title: 'Library',     meta: `${contentCount} item${contentCount === 1 ? '' : 's'}` },
+      { action: 'go-projects',   icon: ICONS.star,      title: 'Projects',    meta: projectsMeta,  count: dueSoon.length },
+      { action: 'go-queue',      icon: ICONS.inbox,     title: 'SAFO',        meta: safoMeta,      count: ib.agents },
+      { action: 'go-workorders', icon: ICONS.clipboard, title: 'Work orders', meta: woMeta,        count: wo.loaded ? wo.now : null },
+      { action: 'go-learning',   icon: ICONS.book,      title: 'My learning', meta: data.learningMeta || 'Your sprint, tickable', count: lrn.left },
+      { action: 'growth-open',   icon: ICONS.growth,    title: 'Growth',      meta: growthMeta(data.growth || {}) },
+      { action: 'go-settings',   icon: ICONS.gear,      title: 'Settings',    meta: settingsMeta,  count: reconnect.length }
     ];
 
     container.innerHTML = `
@@ -948,6 +1030,7 @@ const SocialOSUI = (() => {
           ${tiles.map(t => `
             <button class="dash-tile" data-action="${t.action}">
               <span class="dash-tile-icon" aria-hidden="true">${t.icon}</span>
+              ${t.count ? `<span class="dash-tile-count" aria-label="${t.count} to handle">${t.count}</span>` : ''}
               <span class="dash-tile-text">
                 <span class="dash-tile-title">${t.title}</span>
                 <span class="dash-tile-meta">${escapeHtml(t.meta)}</span>
@@ -2232,12 +2315,13 @@ const SocialOSUI = (() => {
 
       ${group('frontoffice', ICONS.inbox, 'Front Office &amp; notifications', `Queue ${settings.front_office_secret ? 'connected' : 'not connected'} · push ${pushOn ? 'on' : 'off'}`, `
         <div class="settings-section">
-          <h3>Front Office Queue <span class="text-secondary" style="font-weight:400">(agent drafts)</span></h3>
+          <h3>Front Office Queue <span class="text-secondary" style="font-weight:400">(SAFO)</span></h3>
           <div class="connection-status ${settings.front_office_secret ? 'connected' : 'disconnected'}">
             ${settings.front_office_secret ? 'Connected' : 'Not connected'}
           </div>
           <p class="set-note">
-            Agent drafts in the Inbox are written by your Front Office agents.
+            SAFO — the Social Agent for the Front Office — is where your
+            agents' drafts wait for you, in the Inbox and on Home.
             Paste the shared secret from the mkt-queue Edge Function (Supabase
             project settings) — it's stored only on this device.
           </p>
@@ -2380,7 +2464,7 @@ const SocialOSUI = (() => {
         <div class="card-header">
           ${queueChannelBadge(draft.channel)}
           <span>${QUEUE_PRODUCT_LABELS[draft.product] || escapeHtml(draft.product)}</span>
-          <span class="tag">${escapeHtml(draft.agent)}</span>
+          <span class="tag" title="${woEsc(draft.agent || '')}">${escapeHtml(SocialOSQueue.agentLabel(draft.agent))}</span>
           <span class="text-secondary" style="margin-left:auto">${SocialOSUtils.formatDate(draft.created_at)}</span>
         </div>
         <h4 style="margin:4px 0 8px">${escapeHtml(draft.title)}</h4>
@@ -2409,8 +2493,55 @@ const SocialOSUI = (() => {
   }
 
   /**
-   * Render the Front Office approval queue screen.
-   * @param {{configured: boolean, drafts: import('./queue.js').MktDraft[], error: string|null, direct?: Object<string, boolean>, media?: Object<string,{dataUri:string,alt:string}>, week?: {direct:number, assisted:number}, reconnect?: string[], hiddenCount?: number, persona?: {kind:'personal'|'brand', queue_agents?:string[]}}} data
+   * SAFO's dashboard strip — the Front Office at a glance, computed from the
+   * drafts already on screen (never a second fetch): how many wait and from
+   * which agents, how long the oldest has waited, this week's honest
+   * direct/assisted line, and whether the push dispatcher is alive. Every
+   * number comes from something that was actually read — with the queue
+   * unreadable the strip carries only the lines that don't depend on it,
+   * and the screen's own error state says why the rest is missing.
+   * @param {{configured: boolean, drafts: import('./queue.js').MktDraft[], error: string|null, week?: {direct:number, assisted:number}, liveness?: string|null}} data
+   * @returns {string}
+   */
+  function renderSafoDash(data) {
+    if (!data.configured) return '';
+    const loaded = !data.error;
+    const drafts = loaded ? (data.drafts || []) : [];
+    /** @type {Map<string, number>} */
+    const byAgent = new Map();
+    let oldest = Infinity;
+    for (const d of drafts) {
+      const k = String(d.agent || '').toLowerCase();
+      byAgent.set(k, (byAgent.get(k) || 0) + 1);
+      const t = Date.parse(d.created_at || '');
+      if (!isNaN(t)) oldest = Math.min(oldest, t);
+    }
+    const oldestDays = oldest === Infinity ? null : Math.max(0, Math.floor((Date.now() - oldest) / 86400000));
+    const agents = [...byAgent.entries()].sort((a, b) => b[1] - a[1]);
+    const stat = (/** @type {string} */ label, /** @type {string} */ value) => `
+      <div class="safo-stat">
+        <span class="safo-stat-value">${value}</span>
+        <span class="safo-stat-label">${label}</span>
+      </div>`;
+    return `
+      <section class="safo-dash" aria-label="Front Office at a glance">
+        <div class="safo-stats">
+          ${loaded ? stat('waiting', String(drafts.length)) : ''}
+          ${loaded && oldestDays !== null ? stat('oldest', oldestDays === 0 ? 'today' : `${oldestDays}d`) : ''}
+          ${data.week ? stat('direct · wk', String(data.week.direct)) : ''}
+          ${data.week ? stat('assisted · wk', String(data.week.assisted)) : ''}
+        </div>
+        ${agents.length ? `
+          <div class="safo-agents" aria-label="Waiting, by agent">
+            ${agents.map(([slug, n]) => `<span class="safo-agent"><b>${n}</b> ${escapeHtml(SocialOSQueue.agentLabel(slug))}</span>`).join('')}
+          </div>` : ''}
+        ${data.liveness ? `<p class="safo-liveness">${escapeHtml(data.liveness)}</p>` : ''}
+      </section>`;
+  }
+
+  /**
+   * Render the SAFO screen — the Front Office approval queue.
+   * @param {{configured: boolean, drafts: import('./queue.js').MktDraft[], error: string|null, direct?: Object<string, boolean>, media?: Object<string,{dataUri:string,alt:string}>, week?: {direct:number, assisted:number}, reconnect?: string[], hiddenCount?: number, persona?: {kind:'personal'|'brand', queue_agents?:string[]}, liveness?: string|null}} data
    */
   function renderQueue(data) {
     const container = $('queue-content');
@@ -2439,12 +2570,12 @@ const SocialOSUI = (() => {
       : '';
 
     let html = `
-      ${screenHead('Agent drafts',
-        'Drafts your Front Office agents queued. One tap approves and posts as far as each platform allows — nothing is published without you.',
+      ${screenHead('SAFO',
+        'Social Agent for the Front Office. Drafts your agents queued: one tap approves and posts as far as each platform allows — nothing is published without you.',
         data.configured ? '<button class="btn btn-secondary btn-sm" data-action="queue-refresh">Refresh</button>' : '')}
+      ${renderSafoDash(data)}
       ${identityLine}
       ${hiddenLine}
-      ${data.week ? `<p class="text-secondary" style="margin:0 0 12px;font-weight:500">This week: ${data.week.direct} posted direct, ${data.week.assisted} assisted.</p>` : ''}
       ${reconnectBanner}`;
 
     if (!data.configured) {
@@ -2937,7 +3068,7 @@ const SocialOSUI = (() => {
         <div class="card-header" style="margin:8px 0">
           ${queueChannelBadge(draft.channel)}
           <span>${QUEUE_PRODUCT_LABELS[draft.product] || escapeHtml(draft.product)}</span>
-          <span class="tag">${escapeHtml(draft.agent)}</span>
+          <span class="tag" title="${woEsc(draft.agent || '')}">${escapeHtml(SocialOSQueue.agentLabel(draft.agent))}</span>
         </div>
         <h4>${escapeHtml(draft.title)}</h4>
         ${thumb ? `<div class="approval-thumb" style="margin:8px 0"><img src="${thumb.dataUri}" alt="${escapeHtml(thumb.alt || 'Attached image')}" loading="lazy"></div>` : ''}
@@ -3189,7 +3320,7 @@ const SocialOSUI = (() => {
 
   /**
    * Update the Inbox badge on the nav tab, and the per-half counts on the
-   * Your posts / Agent drafts switch (both static copies in index.html).
+   * Your posts / SAFO switch (both static copies in index.html).
    * @param {number} count - everything waiting in the Inbox
    * @param {{posts: number, agents: number|null}} [parts] - agents null = unknown, shown as nothing
    */
@@ -3982,6 +4113,8 @@ const SocialOSUI = (() => {
     renderLanding,
     renderOnboardingStep,
     renderDashboard,
+    settingsTileMeta,
+    updateDashTile,
     renderGrowthSheet,
     growthSheetOpen,
     settingsStatus,
